@@ -360,6 +360,7 @@
       row_key: trim(row.row_key) || `${kind}-${index + 1}`,
       day_date: trim(row.day_date) || '—',
       hours: trim(row.hours) || '—',
+      reference_number: trim(row.reference_number),
       break_text: trim(row.break_text) || '—',
       additional_units: normaliseAdditionalUnits(row.additional_units),
       state,
@@ -1229,6 +1230,27 @@
       </section>`;
   };
 
+  const renderFinalisedSourceRows = (title, rows) => {
+    const list = Array.isArray(rows) ? rows : [];
+    const includesProtected = list.some(row => row.state === 'PROTECTED');
+    return `<section class="weekly-source-v1__hours-card" aria-label="${escapeHtml(title)}">
+      <div class="weekly-source-v1__card-heading"><h3>${escapeHtml(title)}</h3>
+        <span class="weekly-source-v1__authority">${includesProtected ? 'Finalised source + Office-approved' : 'Finalised source'}</span></div>
+      <div class="weekly-source-v1__table-scroll"><table class="weekly-source-v1__table">
+        <thead><tr><th>Day and date</th><th>Reference</th><th>Start</th><th>End</th><th>Break</th><th>Status</th></tr></thead>
+        <tbody>${list.length ? list.map(row => {
+          const match = String(row.hours || '').match(/^(\d{2}:\d{2})\s*[-–]\s*(\d{2}:\d{2})$/);
+          const meta = stateMeta(row.state);
+          return `<tr class="${meta.class_name}" data-row-key="${escapeHtml(row.row_key)}">
+            <td data-weekly-source-label="Day and date">${escapeHtml(row.day_date)}</td><td data-weekly-source-label="Reference">${escapeHtml(row.reference_number || '—')}</td>
+            <td data-weekly-source-label="Start">${escapeHtml(match ? match[1] : row.hours)}</td><td data-weekly-source-label="End">${escapeHtml(match ? match[2] : '—')}</td>
+            <td data-weekly-source-label="Break">${escapeHtml(row.break_text)}</td>
+            <td data-weekly-source-label="Status"><span class="weekly-source-v1__status ${meta.class_name}">${escapeHtml(row.status_text || meta.label)}</span></td>
+          </tr>`;
+        }).join('') : '<tr><td colspan="6" class="weekly-source-v1__empty">No finalised source hours to show.</td></tr>'}</tbody>
+      </table></div></section>`;
+  };
+
   const renderUnavailable = (viewModel) => {
     const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
     return `
@@ -1519,6 +1541,14 @@
           <div class="weekly-source-v1__card-heading"><h3>${escapeHtml(heading)}</h3></div>
           ${renderRightPaneStatus(viewModel)}
         </section>`;
+    }
+    if (schedule.row_shape === 'COMPONENT' && viewModel.authority === 'CLIENT_SYSTEM') {
+      // The approved source shifts are clock-time rows from the final revision;
+      // the frozen entitlement's category components belong in Finance.
+      return `<div data-weekly-source-primary="${escapeHtml(scheduleKey)}" data-weekly-source-ui-state="${escapeHtml(lifecycle.ui_state || '')}" data-weekly-source-finalised-rows="1">
+        ${renderFinalisedSourceRows(heading, viewModel.approved_rows)}
+        ${renderRightPaneStatus(viewModel)}
+      </div>`;
     }
     return `
       <div data-weekly-source-primary="${escapeHtml(scheduleKey)}" data-weekly-source-ui-state="${escapeHtml(lifecycle.ui_state || '')}">

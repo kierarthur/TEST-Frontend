@@ -196,8 +196,13 @@ test('NHSP imports clearly select the exact pre-final or final file journey', as
   await expect(fileType).toBeVisible();
   await expect(fileType).toHaveValue('NHSP_PREFINAL_RELEASED_V1');
   await expect(fileType.locator('option')).toHaveText(['Previously released shifts', 'Final backing report']);
+  const uploadButton = page.getByRole('button', { name: 'Upload source file' });
+  const [prefinalChooser] = await Promise.all([page.waitForEvent('filechooser'), uploadButton.click()]);
+  expect(prefinalChooser.isMultiple()).toBe(false);
   await fileType.selectOption('NHSP_FINAL_BACKING_V1');
   await expect(fileType).toHaveValue('NHSP_FINAL_BACKING_V1');
+  const [finalChooser] = await Promise.all([page.waitForEvent('filechooser'), uploadButton.click()]);
+  expect(finalChooser.isMultiple()).toBe(true);
   await expect(page.getByLabel('Source', { exact: true })).toHaveText(/NHSP/);
   await page.screenshot({ path: testInfo.outputPath('nhsp-import-file-type.png'), fullPage: true });
 });
@@ -1064,6 +1069,7 @@ test('Stage 11: real Office import modal keeps mobile query controls compact and
   }));
   expect(size.scroll).toBeLessThanOrEqual(size.client);
   expect(size.modalScroll).toBeLessThanOrEqual(size.modalClient + 1);
+  expect(await page.locator('.ws-query-scroll').evaluate((region) => region.scrollWidth - region.clientWidth)).toBeLessThanOrEqual(1);
   await page.locator('#modal').screenshot({ path: testInfo.outputPath('UI-064-real-query-phone.png') });
 
   await page.locator('[data-ws-actions-summary]').click();
@@ -1071,6 +1077,14 @@ test('Stage 11: real Office import modal keeps mobile query controls compact and
   await expect(page.getByRole('button', { name: 'Send selected to manager now' })).toBeVisible();
   await expect(page.getByRole('button', { name: /select all|unselect all/i })).toHaveCount(0);
   await page.locator('#modal').screenshot({ path: testInfo.outputPath('UI-075-real-query-actions-phone.png') });
+
+  for (const width of [280, 768]) {
+    await page.setViewportSize({ width, height: width === 768 ? 1024 : 844 });
+    const queryOverflow = await page.locator('.ws-query-scroll')
+      .evaluate((region) => region.scrollWidth - region.clientWidth);
+    expect(queryOverflow, `${width}px query cards`).toBeLessThanOrEqual(1);
+    await expect(page.locator('[data-ws-bulk-action="ASK_CANDIDATES"]')).toBeEnabled();
+  }
 
   await page.setViewportSize({ width: 1180, height: 820 });
   await expect(page.locator('.ws-query-grid > tbody > tr[data-ws-group-key]')).toHaveCSS('display', 'grid');
@@ -1090,4 +1104,47 @@ test('Stage 11: real Office import modal keeps mobile query controls compact and
 
   expect(errors).toEqual([]);
   expect(externalRequests(page)).toEqual([]);
+});
+
+test('hosted TEST Office query modal fits phone and Fold widths without horizontal panning', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`https://testmode.arthur-rai.co.uk/?weekly-query-responsive-proof=${Date.now()}`, {
+    waitUntil: 'domcontentloaded'
+  });
+  if (await page.locator('#loginOverlay').isVisible()) {
+    const email = process.env.E2E_USER_EMAIL;
+    const password = process.env.E2E_USER_PASSWORD;
+    if (!email || !password) throw new Error('Hosted TEST credentials are required for this read-only check.');
+    await page.locator('#loginEmail').fill(email);
+    await page.locator('#loginPassword').fill(password);
+    await page.locator('#loginForm button[type="submit"]').click();
+  }
+  await expect(page.locator('#loginOverlay')).toBeHidden({ timeout: 30_000 });
+  await page.waitForFunction(
+    () => typeof (window as any).CloudTMSWeeklySourceImportWorkspaceV1?.open === 'function',
+    null, { timeout: 30_000 }
+  );
+  await page.evaluate(() => { void (window as any).CloudTMSWeeklySourceImportWorkspaceV1.open(); });
+  await expect(page.locator('#modal')).toBeVisible({ timeout: 30_000 });
+  await page.locator('#modalTabs').getByRole('button', { name: /^Queries(?:\s|$)/ }).click();
+  await expect(page.locator('.ws-query-scroll')).toBeVisible();
+  for (const width of [390, 280, 768]) {
+    await page.setViewportSize({ width, height: width === 768 ? 1024 : 844 });
+    const sizes = await page.evaluate(() => {
+      const root = document.documentElement;
+      const modal = document.querySelector('#modal')!;
+      const region = document.querySelector('.ws-query-scroll')!;
+      return {
+        pageOverflow: root.scrollWidth - root.clientWidth,
+        modalOverflow: modal.scrollWidth - modal.clientWidth,
+        queryOverflow: region.scrollWidth - region.clientWidth
+      };
+    });
+    expect(sizes.pageOverflow, `${width}px page`).toBe(0);
+    expect(sizes.modalOverflow, `${width}px modal`).toBe(0);
+    expect(sizes.queryOverflow, `${width}px query`).toBe(0);
+    await expect(page.locator('[data-ws-bulk-action="ASK_CANDIDATES"]')).toBeDisabled();
+    await expect(page.locator('[data-ws-bulk-action="SEND_MANAGER_NOW"]')).toBeDisabled();
+  }
 });

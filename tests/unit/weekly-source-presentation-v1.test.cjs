@@ -14,7 +14,8 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 test('the dormant foundation loads before the existing application owner', () => {
   const index = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8');
   const styleMarker = './css/weekly-source-presentation-v1.css?v=20260915-r1';
-  const scriptMarker = './js/weekly-source-presentation-v1.js?v=20260915-r1';
+  const scriptMarker = (index.match(/\.\/js\/weekly-source-presentation-v1\.js\?v=[^"']+/g) || [])[0];
+  assert.ok(scriptMarker, 'the versioned presentation script is present');
   const existingOwnerMarker = './js/main.js?';
   assert.equal((index.match(new RegExp(styleMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
   assert.equal((index.match(new RegExp(scriptMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);

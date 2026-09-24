@@ -523,6 +523,30 @@ test('the component schedule shape renders a non-hours component as a non-hours 
   assert.ok(markup.includes(hoursRow.total_hours));
 });
 
+test('finalised source Approved hours show frozen clock rows, not category components', () => {
+  // CHANGED PAYLOAD: supply one finalised source row beside a category schedule
+  // to prove the two independent server projections are not mixed in Lines.
+  const source = payload('UI-005');
+  source.lifecycle.schedules.approved = {
+    ...source.lifecycle.schedules.approved,
+    row_shape: 'COMPONENT',
+    rows: [{ row_key: 'category-only', component_kind: 'HOURS',
+      hours_day: '1.500000', hours_night: '1.000000', total_hours: '2.500000' }]
+  };
+  source.approved_rows = [{ row_key: 'final-physical-1',
+    day_date: 'Tue 15 Sep 2026', reference_number: 'A990000101',
+    hours: '01:00-04:00', break_text: '30 min', state: 'READY',
+    status_text: 'Ready' }];
+  const vm = presentation.buildViewModelFromPresentation(source);
+  const markup = presentation.renderSimpleLines(vm);
+  assert.match(markup, /Approved hours/);
+  assert.match(markup, /Finalised source/);
+  assert.match(markup, /A990000101/);
+  assert.match(markup, /<th>Start<\/th><th>End<\/th><th>Break<\/th>/);
+  assert.match(markup, /data-weekly-source-label="Start">01:00<\/td><td data-weekly-source-label="End">04:00<\/td>/);
+  assert.doesNotMatch(markup, /1\.500000|1\.000000|category-only/);
+});
+
 test('hours are rendered exactly as the server sent them and are never recomputed', () => {
   const vm = vmFor('UI-013');
   const rows = vm.proposal.members[0].currently_approved.rows;

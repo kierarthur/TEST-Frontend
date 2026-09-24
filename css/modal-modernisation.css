@@ -4441,7 +4441,7 @@
     display: none !important;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-wide-table {
+  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-wide-table:not(.ws-query-grid):not(.ws-query-shift-grid) {
     min-width: 760px;
   }
 

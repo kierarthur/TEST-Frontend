@@ -132,7 +132,7 @@ test.describe('Gate 10 — the Office source invoice line move', () => {
     expect(mounted.text).toContain('Source expense');
     expect(await page.locator('[data-action="inv-open-weekly-source-timesheet"]').count()).toBe(movable.length);
     const sourceExpenseBreaks = await page.locator('tr[data-presentation-line-id]')
-      .filter({ hasText: 'Source expense' }).locator('td:nth-child(4)').allTextContents();
+      .filter({ hasText: 'Source expense' }).locator('td:nth-child(5)').allTextContents();
     expect(sourceExpenseBreaks).toEqual(Array(sourceExpenseBreaks.length).fill('—'));
     // The superseded vocabulary is gone.
     expect(mounted.text).not.toContain('Finalised source shifts');
@@ -172,6 +172,99 @@ test.describe('Gate 10 — the Office source invoice line move', () => {
       id: 'affdf717-9e2d-454c-951f-39f3165a6f2f',
       timesheet_id: 'affdf717-9e2d-454c-951f-39f3165a6f2f'
     });
+  });
+
+  test('source invoice shows source reference, trust, ward and band from the server', async ({ page }) => {
+    await mountOfficeShell(page);
+    const source = structuredClone(fixture.source);
+    const line = source.movable_lines.find((row: any) => row.independently_movable === true);
+    line.source_reference = 'A990000101';
+    line.source_trust = 'Stage 8 NHS Trust';
+    line.source_ward = 'Assessment Ward';
+    line.source_band = 'CPN120';
+    line.timesheet_id = 'affdf717-9e2d-454c-951f-39f3165a6f2f';
+    const mounted = await mountInvoiceLines(page, source);
+    expect(mounted.text).toContain('Ref A990000101');
+    expect(mounted.text).toContain('Trust Stage 8 NHS Trust');
+    expect(mounted.text).toContain('Ward Assessment Ward');
+    expect(mounted.text).toContain('Band CPN120');
+    expect(mounted.html).toContain(`data-timesheet-id="${line.timesheet_id}"`);
+  });
+
+  test('source invoice details form readable cards on a phone without a wide table', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mountOfficeShell(page);
+    const source = structuredClone(fixture.source);
+    const line = source.movable_lines.find((row: any) => row.independently_movable === true);
+    line.source_reference = 'A990000101';
+    line.source_ward = 'Assessment Ward';
+    line.source_band = 'CPN120';
+    await mountInvoiceLines(page, source);
+    const layout = await page.locator('.ws-source-invoice-lines').evaluate((table: HTMLElement) => ({
+      width: table.getBoundingClientRect().width,
+      scrollWidth: table.scrollWidth,
+      cardDisplay: getComputedStyle(table.querySelector('tbody > tr')!).display,
+      labels: [...table.querySelectorAll('tbody > tr:first-child > td')]
+        .map((cell) => cell.getAttribute('data-label'))
+    }));
+    expect(layout.cardDisplay).toBe('grid');
+    expect(layout.scrollWidth - layout.width).toBeLessThanOrEqual(1);
+    expect(layout.labels).toEqual(['Date', 'Candidate', 'Source details', 'Hours', 'Break', 'Status', 'Move']);
+  });
+
+  test('invoice Evidence downloads only through the exact invoice and upload route', async ({ page }) => {
+    const invoiceId = fixture.source.invoice_id;
+    const uploadId = 'e0000000-0000-4000-8000-000000000001';
+    const requests: string[] = [];
+    await mountOfficeShell(page, { broker: (pathname, method, _body, route) => {
+      if (pathname.includes('/source-evidence/')) {
+        requests.push(`${method} ${pathname}`);
+        return route.fulfill({ status: 200, contentType: 'application/octet-stream',
+          headers: { 'content-disposition': 'attachment; filename="source.xlsx"' },
+          body: 'verified-file-bytes' }).then(() => null);
+      }
+      return undefined;
+    } });
+    const html = await page.evaluate(({ invoiceId, uploadId }) => {
+      const invoiceData = { invoice: { id: invoiceId }, evidence: [],
+        weekly_source_evidence: [{ upload_id: uploadId, filename: 'source.xlsx',
+          uploaded_at_utc: '2026-09-23T12:00:00Z' }] };
+      return eval('renderInvoiceModalEvidenceTab')({ entity: 'invoices', data: invoiceData }, invoiceData);
+    }, { invoiceId, uploadId });
+    expect(html).toContain('source.xlsx');
+    expect(html).toContain('Source backing report');
+    expect(html).toContain('Final source');
+    expect(html).toContain('Download');
+    expect(html).not.toContain('data-invoice-evidence-action="view"');
+    await page.evaluate(() => (window as any).__invoiceEvidenceOpen('inv-ev-0', 'download'));
+    expect(requests).toEqual([`GET /api/invoices/${invoiceId}/source-evidence/${uploadId}/download`]);
+    expect(externalRequests(page)).toEqual([]);
+  });
+
+  test('source invoice disables the ordinary References and ward editor', async ({ page }) => {
+    await mountOfficeShell(page);
+    await mountInvoiceLines(page);
+    const state = await page.evaluate(() => {
+      const ctx = (window as any).modalCtx;
+      ctx.data.reference_rows = [{ timesheet_id: 'affdf717-9e2d-454c-951f-39f3165a6f2f' }];
+      const content = eval('renderInvoiceModalContent')(ctx, ctx.data);
+      const host = document.createElement('div');
+      host.innerHTML = content;
+      const button = host.querySelector('[data-action="inv-open-reference-numbers"]') as HTMLButtonElement;
+      const ordinaryData = { ...ctx.data, weekly_source_invoice: { is_weekly_source_invoice: false } };
+      const ordinaryHost = document.createElement('div');
+      ordinaryHost.innerHTML = eval('renderInvoiceModalContent')(ctx, ordinaryData);
+      const ordinaryButton = ordinaryHost.querySelector('[data-action="inv-open-reference-numbers"]') as HTMLButtonElement;
+      return {
+        found: !!button,
+        disabled: button?.disabled,
+        title: button?.title,
+        ordinaryFound: !!ordinaryButton,
+        ordinaryDisabled: ordinaryButton?.disabled
+      };
+    });
+    expect(state).toMatchObject({ found: true, disabled: true, ordinaryFound: true, ordinaryDisabled: false });
+    expect(state.title).toContain('does not apply');
   });
 
   test('a move posts one presentation identity without a source-group or week restriction', async ({ page }) => {

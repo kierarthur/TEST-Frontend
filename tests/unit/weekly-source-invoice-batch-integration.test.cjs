@@ -110,3 +110,13 @@ test('generic add controls are not offered on final-source invoices and report i
   assert.match(source, /report_numbers/);
   assert.match(source, /Backing report/);
 });
+
+test('ordinary reference editor is disabled for a finalised-source invoice', () => {
+  const start = main.indexOf('function renderInvoiceModalContent(');
+  const end = main.indexOf('\nfunction ', start + 40);
+  assert.ok(start > 0 && end > start);
+  const source = main.slice(start, end);
+  assert.match(source, /const sourceInvoice = weekly_source_invoice\?\.is_weekly_source_invoice === true/);
+  assert.match(source, /hasRefOrLocationRows && !sourceInvoice/);
+  assert.match(source, /data-action="inv-open-reference-numbers" \$\{refDisabledAttr\}/);
+});

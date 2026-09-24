@@ -1112,7 +1112,14 @@
     };
     mobileSort?.addEventListener('change', applyMobileSort);
     mobileDirection?.addEventListener('change', applyMobileSort);
-    const uploadInput = host.querySelector('[data-ws-upload-input]'); host.querySelector('[data-ws-upload]')?.addEventListener('click', () => uploadInput?.click()); uploadInput?.addEventListener('change', async () => { const files = [...(uploadInput.files || [])]; uploadInput.value = ''; if (!files.length) return; try { if (files.length > 1) await uploadSources(files); else await uploadSource(files[0]); await loadWorkspace('imports'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
+    const uploadInput = host.querySelector('[data-ws-upload-input]'); host.querySelector('[data-ws-upload]')?.addEventListener('click', () => {
+      if (!uploadInput) return;
+      // The file chooser must reflect the currently visible selection even if
+      // a native select's change event is deferred until it loses focus.
+      session.uploadProfileId = asText(host.querySelector('[data-ws-upload-profile]')?.value) || selectedUploadProfileId();
+      uploadInput.multiple = session.uploadProfileId === 'NHSP_FINAL_BACKING_V1';
+      uploadInput.click();
+    }); uploadInput?.addEventListener('change', async () => { const files = [...(uploadInput.files || [])]; uploadInput.value = ''; if (!files.length) return; try { if (files.length > 1) await uploadSources(files); else await uploadSource(files[0]); await loadWorkspace('imports'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
     const dailyInput = host.querySelector('[data-ws-daily-input]'); host.querySelector('[data-ws-daily]')?.addEventListener('click', () => dailyInput?.click()); dailyInput?.addEventListener('change', async () => { const file = dailyInput.files?.[0]; dailyInput.value = ''; if (file && typeof root.handleHrRotaFileDrop === 'function') await root.handleHrRotaFileDrop(file); });
     const attentionHeader = host.querySelector('[data-ws-import-attention-header]');
     const attentionRows = [...host.querySelectorAll('[data-ws-import-attention]')];

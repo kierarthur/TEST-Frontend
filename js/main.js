@@ -308923,6 +308923,9 @@ function invoiceModalGetInvoiceData(modalCtx) {
     Array.isArray(d.evidence) ? d.evidence
     : (Array.isArray(manifest?.evidence) ? manifest.evidence : []);
 
+  const weekly_source_evidence = Array.isArray(d.weekly_source_evidence)
+    ? d.weekly_source_evidence : [];
+
   const timesheet_evidence =
     Array.isArray(d.timesheet_evidence) ? d.timesheet_evidence
     : (Array.isArray(manifest?.timesheet_evidence) ? manifest.timesheet_evidence : []);
@@ -309050,6 +309053,7 @@ function invoiceModalGetInvoiceData(modalCtx) {
     timesheet_evidence,
     evidence_other,
     evidence,
+    weekly_source_evidence,
     attach_policy,
     raw: d
   };
@@ -309506,7 +309510,7 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
     ).replace(/^\/+/, '').trim();
   };
 
-  const hasViewableEvidence = (ev) => !!(directUrl(ev) || storageKey(ev));
+  const hasViewableEvidence = (ev) => !!(ev?.source_report_upload_id || directUrl(ev) || storageKey(ev));
 
   const evidenceActionUrl = async (ev) => {
     const url = directUrl(ev);
@@ -309624,6 +309628,7 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
     if (!k) return 'Unknown';
 
     const map = {
+      SOURCE_BACKING_REPORT: 'Source backing report',
       TIMESHEET: 'Timesheet',
       MILEAGE: 'Mileage',
       TRAVEL: 'Travel',
@@ -309743,6 +309748,7 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
 
     const kindU = pickFirst(ev?.kind, ev?.type, meta.kind, meta.type).toUpperCase();
     if (kindU === 'AUTHORISATION' || kindU === 'AUTHORIZATION') return 'System';
+    if (kindU === 'SOURCE_BACKING_REPORT') return 'Final source';
     if (ev?.system === true || ev?.is_system === true || meta.system === true || meta.is_system === true) return 'System';
     if (ev?.is_staged_context === true || ev?.staged === true || meta.is_staged_context === true) return 'Staged';
     return 'Attached';
@@ -309778,6 +309784,8 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
   const rawTimesheetEvidence = Array.isArray(invData?.timesheet_evidence) ? invData.timesheet_evidence : [];
   const rawOtherEvidence = Array.isArray(invData?.evidence_other) ? invData.evidence_other : [];
   const rawLegacyEvidence = Array.isArray(invData?.evidence) ? invData.evidence : [];
+  const rawSourceEvidence = Array.isArray(invData?.weekly_source_evidence)
+    ? invData.weekly_source_evidence : [];
 
   const rawRows = (() => {
     const rows = [];
@@ -309785,10 +309793,18 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
     if (rawTimesheetEvidence.length || rawOtherEvidence.length) {
       rawTimesheetEvidence.forEach((ev) => rows.push({ ...(ev || {}), __invoice_evidence_default_kind: 'TIMESHEET' }));
       rawOtherEvidence.forEach((ev) => rows.push({ ...(ev || {}), __invoice_evidence_default_kind: 'OTHER' }));
+      rawSourceEvidence.forEach((ev) => rows.push({
+        source_report_upload_id: ev.upload_id, filename: ev.filename,
+        uploaded_at_utc: ev.uploaded_at_utc, kind: 'SOURCE_BACKING_REPORT'
+      }));
       return rows;
     }
 
     rawLegacyEvidence.forEach((ev) => rows.push({ ...(ev || {}), __invoice_evidence_default_kind: 'TIMESHEET' }));
+    rawSourceEvidence.forEach((ev) => rows.push({
+      source_report_upload_id: ev.upload_id, filename: ev.filename,
+      uploaded_at_utc: ev.uploaded_at_utc, kind: 'SOURCE_BACKING_REPORT'
+    }));
     return rows;
   })();
 
@@ -309801,6 +309817,7 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
 
       const keyParts = [
         safeStr(ev.id),
+        safeStr(ev.source_report_upload_id),
         storageKey(ev),
         directUrl(ev),
         filenameLabel(ev),
@@ -309834,6 +309851,22 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
       }
 
       try {
+        if (item.source_report_upload_id) {
+          const invoiceId = safeStr(invData?.invoice?.id);
+          const uploadId = safeStr(item.source_report_upload_id);
+          if (!invoiceId || !uploadId) throw new Error('The source report is not linked to this invoice.');
+          const response = await authFetch(API(`/api/invoices/${encodeURIComponent(invoiceId)}/source-evidence/${encodeURIComponent(uploadId)}/download`));
+          if (!response.ok) throw new Error('The verified source report is not available right now.');
+          const objectUrl = URL.createObjectURL(await response.blob());
+          const anchor = document.createElement('a');
+          anchor.href = objectUrl;
+          anchor.download = filenameLabel(item) || 'source-report';
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+          return;
+        }
         const url = await evidenceActionUrl(item);
         if (!url) {
           window.__toast && window.__toast('No downloadable file for this evidence item');
@@ -309903,7 +309936,7 @@ function renderInvoiceModalEvidenceTab(modalCtx, invoiceData) {
 
         const safeRowToken = escapeHtml(rowToken);
 
-        const viewBtn = canOpen
+        const viewBtn = canOpen && !ev.source_report_upload_id
           ? `
             <a href="#"
                role="button"
@@ -310406,8 +310439,11 @@ const hasRefEdits = (() => {
       && typeof timesheet_reference_sources_by_id === 'object'
       && Object.keys(timesheet_reference_sources_by_id).length > 0
     );
-  const refDisabledAttr = hasRefOrLocationRows ? '' : 'disabled';
-  const refTitle = hasRefOrLocationRows ? '' : 'title="No timesheet reference or ward rows on this invoice"';
+  const sourceInvoice = weekly_source_invoice?.is_weekly_source_invoice === true;
+  const refDisabledAttr = hasRefOrLocationRows && !sourceInvoice ? '' : 'disabled';
+  const refTitle = sourceInvoice
+    ? 'title="This ordinary reference editor does not apply to a finalised-source invoice"'
+    : (hasRefOrLocationRows ? '' : 'title="No timesheet reference or ward rows on this invoice"');
 
   const addDisabledAttr = canEditLines ? '' : 'disabled';
   const addDisabledTitle = canEditLines ? '' : 'title="Unissue and unpay the invoice first (staged), then you can edit lines."';
@@ -310672,7 +310708,11 @@ function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
     const canMoveSource = isEditing && weeklySource.editable === true && destinations.length > 0;
     const sourceBody = sourceRows.map((row) => {
       const presentationLineId = String(row?.presentation_line_id || '').trim();
-      const timesheetId = timesheetByInvoiceLine.get(String(row?.invoice_line_id || '').trim()) || '';
+      // The server certifies a single physical root for this presentation.
+      // An invoice-line shortcut is unsafe for a multi-movement net line.
+      const timesheetId = String(row?.timesheet_id || '').trim()
+        || (Number(row?.bound_movement_count) === 1
+          ? timesheetByInvoiceLine.get(String(row?.invoice_line_id || '').trim()) || '' : '');
       const presentationHash = String(row?.presentation_hash || '').trim().toLowerCase();
       const start = fmtSourceLocalTime(row?.start_at_local);
       const end = fmtSourceLocalTime(row?.end_at_local);
@@ -310710,13 +310750,21 @@ function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
         : (row?.work_date || row?.start_at_local)
         ? esc(`${start}–${end}`)
         : '<span class="text-muted small">Client-provided expense</span>';
+      const sourceDetail = [
+        row?.source_reference ? `Ref ${row.source_reference}` : '',
+        row?.source_trust ? `Trust ${row.source_trust}` : '',
+        row?.source_hospital ? `Hospital ${row.source_hospital}` : '',
+        row?.source_ward ? `Ward ${row.source_ward}` : '',
+        row?.source_band ? `Band ${row.source_band}` : ''
+      ].filter(Boolean).map(value => `<span>${esc(value)}</span>`).join('');
       return `<tr data-presentation-line-id="${esc(presentationLineId)}">
-        <td>${row?.work_date ? esc(fmtDowDmy(row?.work_date)) : '—'}</td>
-        <td>${esc(String(row?.candidate || '—'))}</td>
-        <td>${hoursCell}</td>
-        <td>${!isSourceExpense && row?.work_date ? `${breakMinutes.toLocaleString('en-GB')} min` : '—'}</td>
-        <td>${row?.released_after_dispute === true ? '<span class="pill pill-warn">Released after dispute</span>' : '<span class="pill pill-ok">Final source</span>'}${indivisible ? '<span class="pill pill-info">Moves as one line</span>' : ''}${timesheetId ? `<button type="button" class="btn btn-sm btn-outline-secondary ms-2" data-action="inv-open-weekly-source-timesheet" data-timesheet-id="${esc(timesheetId)}" aria-label="Open related Timesheet for ${esc(String(row?.candidate || 'candidate'))} on ${esc(fmtDowDmy(row?.work_date))}">View Timesheet</button>` : ''}</td>
-        ${isEditing ? `<td class="text-end">${move}</td>` : ''}
+        <td data-label="Date">${row?.work_date ? esc(fmtDowDmy(row?.work_date)) : '—'}</td>
+        <td data-label="Candidate">${esc(String(row?.candidate || '—'))}</td>
+        <td data-label="Source details"><div class="ws-invoice-source-details">${sourceDetail || '—'}</div></td>
+        <td data-label="Hours">${hoursCell}</td>
+        <td data-label="Break">${!isSourceExpense && row?.work_date ? `${breakMinutes.toLocaleString('en-GB')} min` : '—'}</td>
+        <td data-label="Status">${row?.released_after_dispute === true ? '<span class="pill pill-warn">Released after dispute</span>' : '<span class="pill pill-ok">Final source</span>'}${indivisible ? '<span class="pill pill-info">Moves as one line</span>' : ''}${timesheetId ? `<button type="button" class="btn btn-sm btn-outline-secondary ms-2" data-action="inv-open-weekly-source-timesheet" data-timesheet-id="${esc(timesheetId)}" aria-label="Open related Timesheet for ${esc(String(row?.candidate || 'candidate'))} on ${esc(fmtDowDmy(row?.work_date))}">View Timesheet</button>` : ''}</td>
+        ${isEditing ? `<td data-label="Move" class="text-end">${move}</td>` : ''}
       </tr>`;
     }).join('');
     const reportNumbers = Array.isArray(weeklySource.report_numbers) && weeklySource.report_numbers.length
@@ -310726,9 +310774,9 @@ function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
       <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
         <div><span class="fw-semibold">Finalised source lines</span>${reportNumbers ? `<span class="text-muted small"> · Backing report ${esc(reportNumbers)}</span>` : ''}</div>
       </div>
-      <table class="grid" style="width:100%">
-        <thead><tr><th>Date</th><th>Candidate</th><th>Hours</th><th>Break</th><th>Status</th>${isEditing ? '<th class="text-end">Move to another unissued invoice</th>' : ''}</tr></thead>
-        <tbody>${sourceBody || `<tr><td colspan="${isEditing ? 6 : 5}" class="text-muted">No source lines remain on this invoice.</td></tr>`}</tbody>
+      <table class="grid ws-source-invoice-lines" style="width:100%">
+        <thead><tr><th>Date</th><th>Candidate</th><th>Source details</th><th>Hours</th><th>Break</th><th>Status</th>${isEditing ? '<th class="text-end">Move to another unissued invoice</th>' : ''}</tr></thead>
+        <tbody>${sourceBody || `<tr><td colspan="${isEditing ? 7 : 6}" class="text-muted">No source lines remain on this invoice.</td></tr>`}</tbody>
       </table>
     </div>`;
   }
