@@ -117006,9 +117006,7 @@ function summaryUpdateRowDom(section, id, patchedRow) {
 
     if (section === 'timesheets' && colKey === 'candidate_submission') {
       td.classList.add('candidate-office-summary-cell');
-      if (row.timesheet_id && typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge) {
-        window.CloudTMSCandidateOfficeBridge.mountSummaryBadge(td, row);
-      }
+      mountTimesheetCandidateSummary(td, row);
       return td;
     }
 
@@ -117687,9 +117685,7 @@ function summaryInsertRowDom(section, patchedRow) {
 
     if (section === 'timesheets' && colKey === 'candidate_submission') {
       td.classList.add('candidate-office-summary-cell');
-      if (row.timesheet_id && typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge) {
-        window.CloudTMSCandidateOfficeBridge.mountSummaryBadge(td, row);
-      }
+      mountTimesheetCandidateSummary(td, row);
       return td;
     }
 
@@ -172250,12 +172246,23 @@ function isTimesheetAdjustmentReversal(row) {
 }
 
 function formatTimesheetSummaryRoute(row) {
+  if (!row?.timesheet_id && row?.candidate_expense_reservation) return 'Expense claim';
   if (row?.is_expense_only === true) {
     const label = String(row?.display_route_label || '').trim();
     return APPROVED_EXPENSE_ROUTE_LABELS.has(label) ? label : 'Expense';
   }
   if (isTimesheetAdjustmentReversal(row)) return 'Timesheet Adjustment';
   return String(formatDisplayValue('route_type', row?.route_type) ?? '');
+}
+
+function mountTimesheetCandidateSummary(cell, row) {
+  if (!row?.timesheet_id && row?.candidate_expense_reservation) {
+    cell.textContent = String(row.candidate_expense_reservation.label || 'Expense claim needs checking');
+  } else if (!row?.timesheet_id && row?.candidate_expense_reservation_error) {
+    cell.textContent = 'Claim status unavailable';
+  } else if (row?.timesheet_id && typeof window !== 'undefined') {
+    window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge?.(cell, row);
+  }
 }
 
 function formatDisplayValue(key, val){
@@ -317115,7 +317122,8 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
     'total_hours','total_pay_ex_vat','margin_ex_vat',
     'current_identity','backend_row_signature','row_signature','expected_row_signature',
     'candidate_office_projection_loaded','candidate_office_projection_not_applicable',
-    'candidate_office_projection','candidate_office_projection_error'
+    'candidate_office_projection','candidate_office_projection_error',
+    'candidate_expense_reservation','candidate_expense_reservation_error'
   ]);
   const sortableFields = new Set([
     'route_type','sheet_scope','submission_mode','processing_status','processing_status_display',
@@ -317147,6 +317155,7 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
   };
   const candidateLabel = (row) => {
     try {
+      if (row?.candidate_expense_reservation) return normaliseText(row.candidate_expense_reservation.label);
       if (row?.candidate_office_projection_not_applicable === true) return '';
       const presenter = window.CloudTMSCandidateOfficePresenter;
       const projection = row?.candidate_office_projection;
@@ -317319,7 +317328,7 @@ function ensureTimesheetSummaryTargetedRefreshManager() {
               const key = normaliseText(cell.dataset.colKey);
               if (key === 'candidate_submission') {
                 cell.replaceChildren();
-                window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge?.(cell,request.row);
+                mountTimesheetCandidateSummary(cell,request.row);
               } else if (key === 'processing_status' || key === 'processing_status_display') {
                 cell.replaceChildren();
                 const label = normaliseText(request.row.processing_status_display || request.row.processing_status);
@@ -320553,9 +320562,7 @@ const getSelectionUiState = () => {
 
       } else if (currentSection === 'timesheets' && c === 'candidate_submission') {
         td.classList.add('candidate-office-summary-cell');
-        if (r.timesheet_id && typeof window !== 'undefined' && window.CloudTMSCandidateOfficeBridge?.mountSummaryBadge) {
-          window.CloudTMSCandidateOfficeBridge.mountSummaryBadge(td, r);
-        }
+        mountTimesheetCandidateSummary(td, r);
 
       } else if (currentSection === 'timesheets' && c === 'candidate_name') {
         const txt = String(formatDisplayValue(c, v) ?? '');

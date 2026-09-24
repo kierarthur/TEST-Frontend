@@ -50,6 +50,17 @@ test('a worked NHSP adjustment keeps its worked-timesheet label', () => {
   }), 'Weekly NHSP Adjustment');
 });
 
+test('only a proved provisional expense reservation receives the claim label', () => {
+  assert.equal(routeLabel({ timesheet_id: null, candidate_expense_reservation: {
+    state: 'AWAITING_MANAGER_APPROVAL', label: 'Expenses awaiting manager approval'
+  }, route_type: 'WEEKLY_NHSP_ADJUSTMENT' }), 'Expense claim');
+  assert.equal(routeLabel({ timesheet_id: 'physical-timesheet', candidate_expense_reservation: {
+    state: 'WORKER_DRAFT', label: 'Expense claim not submitted'
+  }, route_type: 'WEEKLY_NHSP_ADJUSTMENT' }), 'Weekly NHSP Adjustment');
+  assert.equal(routeLabel({ candidate_expense_reservation_error: 'UNAVAILABLE',
+    route_type: 'WEEKLY_NHSP_ADJUSTMENT' }), 'Weekly NHSP Adjustment');
+});
+
 test('an authoritative changed-hours reversal is labelled Timesheet Adjustment', () => {
   assert.equal(routeLabel({
     correction_id: '00000000-0000-4000-8000-000000000001',

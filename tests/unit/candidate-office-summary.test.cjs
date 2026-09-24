@@ -352,8 +352,9 @@ test('Summary integration renders embedded projections immediately and delegates
 
   assert.doesNotMatch(main, /mountCandidateStatus\(\)/);
   assert.doesNotMatch(main, /CloudTMSCandidateOfficeBridge\.mountSummaryBadge\(wrap, rowObj\)/);
-  assert.equal((main.match(/CloudTMSCandidateOfficeBridge\.mountSummaryBadge\(td, (?:row|r)\)/g) || []).length, 3,
+  assert.equal((main.match(/mountTimesheetCandidateSummary\(td, (?:row|r)\)/g) || []).length, 3,
     'full render, patched rows and newly inserted rows must all mount the dedicated Candidate Submission cell');
+  assert.match(main, /CloudTMSCandidateOfficeBridge\?\.mountSummaryBadge\?\.\(cell, row\)/);
   assert.match(main, /candidate_submission:\s*\{ selectable: true \}/);
   assert.match(main, /placeDefault\('candidate_submission', processingKey\)/);
   assert.match(main, /typeof pref\.order === 'number'/);

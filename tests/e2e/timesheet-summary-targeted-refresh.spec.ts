@@ -6,6 +6,14 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const root = path.join(__dirname, '..', '..');
 
+function candidateSummaryMountSource() {
+  const source = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
+  const start = source.indexOf('function mountTimesheetCandidateSummary(');
+  const end = source.indexOf('\nfunction formatDisplayValue', start);
+  if (start < 0 || end <= start) throw new Error('Candidate Summary mount helper missing');
+  return source.slice(start, end);
+}
+
 function targetedRefreshManagerSource() {
   const source = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
   const start = source.indexOf('function ensureTimesheetSummaryTargetedRefreshManager()');
@@ -13,6 +21,28 @@ function targetedRefreshManagerSource() {
   if (start < 0 || end < 0) throw new Error('Targeted Summary refresh manager was not found.');
   return source.slice(start, end);
 }
+
+test('provisional expense status is readable and untrusted labels cannot create markup', async ({ page }) => {
+  await page.setContent('<table><tbody><tr><td id="claim"></td><td id="physical"></td></tr></tbody></table>');
+  await page.addScriptTag({ content: candidateSummaryMountSource() });
+  await page.evaluate(() => {
+    window.CloudTMSCandidateOfficeBridge = { mountSummaryBadge(cell) { cell.textContent = 'Existing physical badge'; } };
+    mountTimesheetCandidateSummary(document.querySelector('#claim'), {
+      candidate_expense_reservation: { state: 'AWAITING_MANAGER_APPROVAL', label: 'Expenses awaiting manager approval' }
+    });
+    mountTimesheetCandidateSummary(document.querySelector('#physical'), { timesheet_id: 'physical' });
+  });
+  await expect(page.locator('#claim')).toHaveText('Expenses awaiting manager approval');
+  await expect(page.locator('#physical')).toHaveText('Existing physical badge');
+  await page.evaluate(() => mountTimesheetCandidateSummary(document.querySelector('#claim'), {
+    candidate_expense_reservation: { label: '<img src=x onerror="window.bad=true">' }
+  }));
+  await expect(page.locator('#claim img')).toHaveCount(0);
+  await page.evaluate(() => mountTimesheetCandidateSummary(document.querySelector('#claim'), {
+    candidate_expense_reservation_error: 'EXPENSE_RESERVATION_STATUS_UNAVAILABLE'
+  }));
+  await expect(page.locator('#claim')).toHaveText('Claim status unavailable');
+});
 
 test('Candidate badge is immediate and heartbeat patches only the agreed Summary cells', async ({ page }) => {
   await page.setContent(`
@@ -58,10 +88,11 @@ test('Candidate badge is immediate and heartbeat patches only the agreed Summary
         cell.innerHTML = window.CloudTMSCandidateOfficeSurface.renderCandidateSummaryCell(view);
       }
     };
+    ${candidateSummaryMountSource()}
     ${targetedRefreshManagerSource()}
   ` });
 
-  const initialProjection = {
+const initialProjection = {
     current_identity: { row_key: 'row-1', route_family: 'ELECTRONIC' },
     candidate_status: { code: 'FINALISED', label: 'raw', tone: 'danger' },
     workflow: { state: 'FINALISED', historical: true },
