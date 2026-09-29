@@ -90,6 +90,33 @@ test('source-authority fixture stays compact, readable and uses the header check
   expect(pageWidth.scroll).toBe(pageWidth.client);
 });
 
+test('before source import, Lines shows signed candidate hours without approved hours', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await loadFoundation(page);
+  await page.evaluate((fixture) => {
+    const payload = JSON.parse(JSON.stringify(fixture));
+    const source = payload.weekly_source_presentation;
+    source.comparison.state = 'SOURCE_PENDING';
+    source.comparison.source_rows = [];
+    source.comparison.submitted_rows = [];
+    source.approved_rows = [];
+    source.totals = { complete: false };
+    source.action_state.authorise_allowed = false;
+    source.action_state.blocked_reason = 'Waiting for final source hours before authorising.';
+    source.lifecycle.schedules.hours_to_authorise = {
+      available: false, reason: 'NO_CURRENT_SOURCE_PUBLICATION',
+      source: null, row_count: 0, rows: []
+    };
+    const api = (window as any).CloudTMSWeeklySourcePresentationV1;
+    document.getElementById('fixture')!.innerHTML = api.renderSimpleLines(api.buildViewModel(payload));
+  }, fixtures.nhspMatch);
+  await expect(page.getByText('Final source hours not yet imported')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Candidate hours received' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Approved hours' })).toHaveCount(0);
+  await expect(page.getByText('30 min')).toBeVisible();
+  await expect(page.getByRole('button', { name: /authorise/i })).toHaveCount(0);
+});
+
 test('browser helper leaves ordinary Weekly and Daily rendering byte-for-byte with the legacy owner', async ({ page }) => {
   await loadFoundation(page);
 

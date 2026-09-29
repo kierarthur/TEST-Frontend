@@ -116636,8 +116636,9 @@ function paintTimesheetProcessingStatusCell(td, row, displayText) {
     ...(Array.isArray(row?.issue_codes) ? row.issue_codes : []),
     ...(Array.isArray(row?.business_issue_codes) ? row.business_issue_codes : [])
   ].map((value) => String(value || '').trim());
-  const weeklySourceDelayed = row?.weekly_source_pay_delayed === true
-    || issueCodes.includes(weeklyDelayReason);
+  const weeklySourceDelayed = row?.office_pre_source_candidate_hours !== true && (
+    row?.weekly_source_pay_delayed === true || issueCodes.includes(weeklyDelayReason)
+  );
   const invoicePaid = row && (
     row.invoice_is_paid === true || String(row.invoice_is_paid).toLowerCase() === 'true'
   );
@@ -117007,6 +117008,11 @@ function summaryUpdateRowDom(section, id, patchedRow) {
     if (section === 'timesheets' && colKey === 'candidate_submission') {
       td.classList.add('candidate-office-summary-cell');
       mountTimesheetCandidateSummary(td, row);
+      return td;
+    }
+
+    if (section === 'timesheets' && colKey === 'submission_mode' && row?.office_submission_mode_label === 'Import') {
+      td.textContent = 'Import';
       return td;
     }
 
@@ -117686,6 +117692,11 @@ function summaryInsertRowDom(section, patchedRow) {
     if (section === 'timesheets' && colKey === 'candidate_submission') {
       td.classList.add('candidate-office-summary-cell');
       mountTimesheetCandidateSummary(td, row);
+      return td;
+    }
+
+    if (section === 'timesheets' && colKey === 'submission_mode' && row?.office_submission_mode_label === 'Import') {
+      td.textContent = 'Import';
       return td;
     }
 
@@ -172256,7 +172267,12 @@ function formatTimesheetSummaryRoute(row) {
 }
 
 function mountTimesheetCandidateSummary(cell, row) {
-  if (!row?.timesheet_id && row?.candidate_expense_reservation) {
+  if (row?.office_submission_mode_label === 'Import' && row?.candidate_hours_received === true) {
+    const badge = document.createElement('span');
+    badge.className = 'pill pill-ok';
+    badge.textContent = 'Hours Submitted';
+    cell.replaceChildren(badge);
+  } else if (!row?.timesheet_id && row?.candidate_expense_reservation) {
     cell.textContent = String(row.candidate_expense_reservation.label || 'Expense claim needs checking');
   } else if (!row?.timesheet_id && row?.candidate_expense_reservation_error) {
     cell.textContent = 'Claim status unavailable';
@@ -320564,6 +320580,9 @@ const getSelectionUiState = () => {
         td.classList.add('candidate-office-summary-cell');
         mountTimesheetCandidateSummary(td, r);
 
+      } else if (currentSection === 'timesheets' && c === 'submission_mode' && r?.office_submission_mode_label === 'Import') {
+        td.textContent = 'Import';
+
       } else if (currentSection === 'timesheets' && c === 'candidate_name') {
         const txt = String(formatDisplayValue(c, v) ?? '');
         td.textContent = txt;
@@ -331047,14 +331066,14 @@ if (this.entity === 'timesheets' && k === 'evidence') {
           }
 
           if (!item) {
-            alert('Evidence item not found.');
+            window.__toast?.('Evidence item not found.');
             return;
           }
 
           const previewMode = String(item.preview_mode || item.preview_kind || '').trim().toUpperCase();
           if (previewMode === 'SIGNATURES') {
             if (typeof openTimesheetEvidenceViewerSignatures !== 'function') {
-              alert('Signatures viewer missing (openTimesheetEvidenceViewerSignatures).');
+              window.__toast?.('The signatures viewer is unavailable.');
               return;
             }
             await openTimesheetEvidenceViewerSignatures(item);
@@ -331063,7 +331082,7 @@ if (this.entity === 'timesheets' && k === 'evidence') {
 
           // IMPORT_TABLE and ordinary PDF/image evidence use the same unified viewer.
           if (typeof openTimesheetEvidenceViewerExisting !== 'function') {
-            alert('Evidence viewer missing (openTimesheetEvidenceViewerExisting).');
+            window.__toast?.('The evidence viewer is unavailable.');
             return;
           }
           await openTimesheetEvidenceViewerExisting(item);
@@ -341704,6 +341723,7 @@ function renderTimesheetAuditTab(ctx) {
   const genericActionLabel = (it) => {
     const a = upperTrim(it?.action || '');
     if (!a) return 'Event';
+    if (a === 'CANDIDATE_HOURS_RECEIVED') return 'Candidate Hours Received';
     if (a === 'TIMESHEET_CHANNEL_CHANGE_PORTION_SETTLED') return 'Changed-channel payment settled';
     if (a === 'TIMESHEET_CHANNEL_CHANGE_PORTION_UNWOUND') return 'Changed-channel payment unwound';
     if (a === 'TIMESHEET_ARCHIVED') return 'Timesheet archived';
@@ -360723,6 +360743,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
 
   const evidenceId = evidenceItem.id != null ? String(evidenceItem.id) : '';
   const previewMode = String(evidenceItem.preview_mode || evidenceItem.preview_kind || '').trim().toUpperCase();
+  const isCandidateHoursPack = previewMode === 'CANDIDATE_HOURS_SUBMISSION';
 
   const isSystem =
     (typeof evidenceItem.system === 'boolean') ? evidenceItem.system : String(evidenceId).startsWith('SYS:');
@@ -361389,7 +361410,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
                   : (evidenceItem.r2Key != null && String(evidenceItem.r2Key).trim())
                     ? String(evidenceItem.r2Key).trim()
                     : '';
-  if (!storageKeyRaw) {
+  if (!storageKeyRaw && !isCandidateHoursPack) {
     GE();
     throw new Error('Evidence item missing file key.');
   }
@@ -361425,6 +361446,7 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   // response, even when the presign request is slow.
   let signedUrl = null;
   let signedUrlPromise = null;
+  let previewResponsePromise = null;
 
   if (isSystemGeneratedTimesheetPdf) {
     try {
@@ -361443,6 +361465,16 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       GE();
       throw err;
     }
+  } else if (isCandidateHoursPack) {
+    const eventId = String(evidenceItem.candidate_hours_event_id || '').trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(eventId) || !tsIdForPdf) {
+      GE();
+      throw new Error('Signed candidate hours evidence identity is missing.');
+    }
+    previewResponsePromise = authFetch(API(
+      '/api/timesheets/' + encodeURIComponent(tsIdForPdf) +
+      '/candidate-hours-evidence/' + encodeURIComponent(eventId)
+    ));
   } else {
     signedUrlPromise = presignDownload(storageKey);
   }
@@ -362039,13 +362071,14 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   }
 
   try {
-    signedUrl = await signedUrlPromise;
-
-    const previewResponse = await fetch(signedUrl, {
-      method: 'GET',
-      credentials: 'omit',
-      cache: 'no-store'
-    });
+    signedUrl = signedUrlPromise ? await signedUrlPromise : null;
+    const previewResponse = previewResponsePromise
+      ? await previewResponsePromise
+      : await fetch(signedUrl, {
+          method: 'GET',
+          credentials: 'omit',
+          cache: 'no-store'
+        });
     if (!previewResponse.ok) throw new Error('EVIDENCE_PREVIEW_DOWNLOAD_FAILED');
     const previewBlob = await previewResponse.blob();
     if (!previewBlob.size) throw new Error('EVIDENCE_PREVIEW_EMPTY');
@@ -362067,7 +362100,8 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
       const status = document.getElementById(previewStatusId);
 
       if (link) {
-        link.href = signedUrl;
+        link.href = signedUrl || previewObjectUrl;
+        if (!signedUrl) link.download = String(evidenceItem.filename || 'candidate-submitted-hours.pdf');
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.removeAttribute('aria-disabled');
@@ -364153,6 +364187,10 @@ function renderTimesheetOverviewTab(ctx) {
     );
   }
 
+  if (importAuthoritative && (row.candidate_hours_received === true || baseSummary.candidate_hours_received === true)) {
+    addStage('Candidate Hours Received', 'pill-ok', 'The candidate signed and submitted hours for comparison. Final source hours remain authoritative.');
+  }
+
   // ─────────────────────────────────────────────────────────────
   // ✅ Invoice issuance overlay (server-authoritative from SUMMARY row)
   // Rules:
@@ -364274,7 +364312,7 @@ function renderTimesheetOverviewTab(ctx) {
     'UNASSIGNED'
   ]);
 
-  if (hasTsfin && stageRaw && !STAGES_WITH_FRIENDLY_BADGE.has(stageRaw)) {
+  if (hasTsfin && stageRaw && !STAGES_WITH_FRIENDLY_BADGE.has(stageRaw) && stageRaw !== 'UNPROCESSED') {
     if (stageRaw !== 'PENDING_AUTH') addStage(stageRaw, 'pill-info');
   }
 
@@ -365194,6 +365232,23 @@ function renderTimesheetFinanceTab(ctx) {
   const ts    = details.timesheet || {};
   const tsfin = details.tsfin     || {};
   const enc   = escapeHtml;
+
+  // Candidate-entered hours on a source-authoritative root are comparison
+  // evidence. Until a current financial snapshot exists, there is no payable
+  // bucket or monetary preview to show in this tab.
+  const financeRoute = String(details.route_type || details.contract_week?.route_type || row.route_type || '').toUpperCase();
+  const sourceAuthoritativeRoot = !(
+    details.is_adjustment === true || row.is_adjustment === true ||
+    Number(details.additional_seq ?? row.additional_seq ?? 0) > 0
+  ) && (
+    financeRoute === 'WEEKLY_NHSP' ||
+    (financeRoute === 'WEEKLY_HEALTHROSTER' &&
+      (details.no_timesheet_required === true || details.contract_week?.no_timesheet_required === true || row.client_no_timesheet_required === true))
+  );
+  if (sourceAuthoritativeRoot && !tsfin.id && !tsfin.timesheet_id) {
+    GE();
+    return '<div class="tabc"><div class="card"><strong>Final source hours not yet available</strong><p class="mini">The candidate\'s submitted hours are available in Lines as evidence. Pay, charge and margin will appear when final source hours have been imported and processed.</p></div></div>';
+  }
 
   const fmtMoney = (v) =>
     isNaN(Number(v)) ? '—' : `£${(Math.round(Number(v) * 100) / 100).toFixed(2)}`;
@@ -375379,6 +375434,7 @@ function renderTimesheetEvidenceTab(ctx) {
   };
   const approvalLabel = (ev) => {
     const meta = evidenceMeta(ev);
+    if (upper(ev?.preview_mode) === 'CANDIDATE_HOURS_SUBMISSION') return 'Manager approval not required';
     if (isExpenseSummaryEvidence(ev)) return 'Manager approval not required';
     if (isSignatureApprovalEvidence(ev)) return 'Approval evidence';
     if (
@@ -375589,7 +375645,8 @@ function renderTimesheetEvidenceTab(ctx) {
       ELECTRONIC_SIGNATURES: 'Electronic signatures',
       HEALTHROSTER: 'HealthRoster',
       NHSP: 'NHSP',
-      AUTHORISATION: 'Timesheet Authorisation'
+      AUTHORISATION: 'Timesheet Authorisation',
+      CANDIDATE_HOURS: 'Candidate hours'
     };
 
     return map[k] || (k.charAt(0) + k.slice(1).toLowerCase());
@@ -375805,7 +375862,7 @@ function renderTimesheetEvidenceTab(ctx) {
             <td data-ctms-label="Source">
               <span class="pill">${src}</span>
             </td>
-            <td data-ctms-label="Manager Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
+            <td data-ctms-label="Manager Approval"><span class="pill ${approval === 'Approved' ? 'pill-ok' : approval === 'Manager approval not required' ? 'pill-info' : 'pill-warn'}">${escapeHtml(approval)}</span></td>
             <td data-ctms-label="Uploaded"><strong class="ctms-evidence-uploaded">${uploadedDate}${uploadedTime === '—' ? '' : ` · ${uploadedTime}`}</strong><span class="ctms-evidence-meta">${uploadedBy}</span></td>
             <td data-ctms-label="Actions" style="text-align:right;">
               <div class="ctms-evidence-actions">

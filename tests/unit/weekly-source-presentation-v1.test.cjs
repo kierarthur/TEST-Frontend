@@ -167,6 +167,35 @@ test('a mismatch without server-identified affected dates fails closed', () => {
   assert.match(vm.unavailable_reason, /refresh/i);
 });
 
+test('candidate hours before first source import remain evidence, never approved hours', () => {
+  const payload = clone(fixtures.nhspMatch);
+  const source = payload.weekly_source_presentation;
+  source.comparison.state = 'SOURCE_PENDING';
+  source.comparison.source_rows = [];
+  source.comparison.submitted_rows = [];
+  source.approved_rows = [];
+  source.totals = { complete: false };
+  source.action_state.authorise_allowed = false;
+  source.action_state.blocked_reason = 'Waiting for final source hours before authorising.';
+  source.lifecycle.schedules.hours_to_authorise = {
+    available: false, reason: 'NO_CURRENT_SOURCE_PUBLICATION', source: null,
+    row_count: 0, rows: []
+  };
+  source.lifecycle.schedules.latest_source = {
+    available: false, reason: 'NO_CURRENT_SOURCE_PUBLICATION', source: null,
+    row_count: 0, rows: []
+  };
+  const vm = presentation.buildViewModel(payload);
+  assert.equal(vm.render_mode, 'WEEKLY_SOURCE');
+  assert.equal(vm.authorise_allowed, false);
+  const markup = presentation.renderSimpleLines(vm);
+  assert.match(markup, /Final source hours not yet imported/);
+  assert.match(markup, /Candidate hours received/);
+  assert.match(markup, /09:00-17:00/);
+  assert.match(markup, /30 min/);
+  assert.doesNotMatch(markup, /data-weekly-source-finalised-rows="1"/);
+});
+
 test('four totals are server-provided display strings and never calculated in the browser', () => {
   const payload = clone(fixtures.nhspMatch);
   const vm = presentation.buildViewModel(payload);

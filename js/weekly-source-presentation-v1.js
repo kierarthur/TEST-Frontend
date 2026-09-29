@@ -134,6 +134,7 @@
   const COMPARISON_STATES = new Set([
     'MATCH',
     'MISMATCH',
+    'SOURCE_PENDING',
     'NO_TIMESHEET',
     'WAITING_FOR_COMPLETE_TIMESHEET',
     'UNAVAILABLE'
@@ -1972,7 +1973,11 @@
     let supportingMarkup = '';
 
     if (vm.authority === 'CLIENT_SYSTEM') {
-      if (vm.comparison_state === 'NO_TIMESHEET') {
+      if (vm.comparison_state === 'SOURCE_PENDING') {
+        supportingMarkup = `
+          <div class="weekly-source-v1__notice is-waiting"><strong>Final source hours not yet imported</strong><span>Candidate hours below are signed evidence only. They are not approved or payable hours.</span></div>
+          ${renderHoursTable('Candidate hours received', vm.lifecycle?.schedules?.submitted?.rows || [], { tone_class: 'is-waiting', badge: 'Evidence' })}`;
+      } else if (vm.comparison_state === 'NO_TIMESHEET') {
         supportingMarkup = '<div class="weekly-source-v1__notice is-waiting"><strong>No submitted Timesheet available</strong><span>No candidate-submitted hours are available for comparison.</span></div>';
       } else if (vm.comparison_state === 'MISMATCH') {
         supportingMarkup = renderHoursTable(
