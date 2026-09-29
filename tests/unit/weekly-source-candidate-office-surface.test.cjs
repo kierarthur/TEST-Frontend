@@ -22,7 +22,7 @@ test('Import summary uses candidate submission evidence without changing payable
 
 test('source candidate hours are evidence in Lines and never a pre-source finance preview', () => {
   const finance = section('function renderTimesheetFinanceTab(', 'function ');
-  assert.match(finance, /sourceAuthoritativeRoot && !tsfin\.id && !tsfin\.timesheet_id/);
+  assert.match(finance, /isUnfundedSourceAuthoritativeRootFinance\(row, details\)/);
   assert.match(finance, /Final source hours not yet available/);
   const overview = section('function renderTimesheetOverviewTab(', 'function renderTimesheetFinanceTab(');
   assert.match(overview, /Candidate Hours Received/);

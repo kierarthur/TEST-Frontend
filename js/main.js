@@ -365224,6 +365224,27 @@ async function switchContractWeekToManual(weekId) {
 
 
 
+function isUnfundedSourceAuthoritativeRootFinance(rowLike, detailsLike) {
+  const row = rowLike && typeof rowLike === 'object' ? rowLike : {};
+  const details = detailsLike && typeof detailsLike === 'object' ? detailsLike : {};
+  const tsfin = details.tsfin && typeof details.tsfin === 'object' ? details.tsfin : {};
+  const upper = (value) => String(value == null ? '' : value).trim().toUpperCase();
+  const truthy = (value) => value === true || value === 1 || upper(value) === 'TRUE';
+  const route = upper(row.route_type || details.route_type || details.timesheet?.route_type);
+  const basis = upper(tsfin.basis || row.basis || details.timesheet?.basis);
+  const family = upper(row.route_family || details.route_family || details.timesheet?.route_family);
+  const noTimesheetRequired = truthy(details.effective?.client_no_timesheet_required ?? row.client_no_timesheet_required ?? details.client_no_timesheet_required ?? details.contract_week?.no_timesheet_required);
+  const adjustment = truthy(details.is_adjustment) || truthy(row.is_adjustment) || truthy(details.timesheet?.is_adjustment) || Number(details.additional_seq ?? row.additional_seq ?? 0) > 0 || route.includes('ADJUSTMENT');
+  const sourceRoot = !adjustment && (
+    truthy(row.is_import_authoritative) || truthy(details.is_import_authoritative) ||
+    family === 'IMPORT_AUTHORITATIVE' || route === 'WEEKLY_NHSP' || basis === 'NHSP' ||
+    basis === 'HEALTHROSTER_SELF_BILL' || (route === 'WEEKLY_HEALTHROSTER' && noTimesheetRequired)
+  );
+  // A candidate-submitted Timesheet can exist before its source-derived TSFIN row.
+  // The Timesheet ID alone is not financial authority.
+  return sourceRoot && !tsfin.id;
+}
+
 function renderTimesheetFinanceTab(ctx) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][FINANCE]');
   const { row, details, related, state } = normaliseTimesheetCtx(ctx);
@@ -365236,16 +365257,7 @@ function renderTimesheetFinanceTab(ctx) {
   // Candidate-entered hours on a source-authoritative root are comparison
   // evidence. Until a current financial snapshot exists, there is no payable
   // bucket or monetary preview to show in this tab.
-  const financeRoute = String(details.route_type || details.contract_week?.route_type || row.route_type || '').toUpperCase();
-  const sourceAuthoritativeRoot = !(
-    details.is_adjustment === true || row.is_adjustment === true ||
-    Number(details.additional_seq ?? row.additional_seq ?? 0) > 0
-  ) && (
-    financeRoute === 'WEEKLY_NHSP' ||
-    (financeRoute === 'WEEKLY_HEALTHROSTER' &&
-      (details.no_timesheet_required === true || details.contract_week?.no_timesheet_required === true || row.client_no_timesheet_required === true))
-  );
-  if (sourceAuthoritativeRoot && !tsfin.id && !tsfin.timesheet_id) {
+  if (isUnfundedSourceAuthoritativeRootFinance(row, details)) {
     GE();
     return '<div class="tabc"><div class="card"><strong>Final source hours not yet available</strong><p class="mini">The candidate\'s submitted hours are available in Lines as evidence. Pay, charge and margin will appear when final source hours have been imported and processed.</p></div></div>';
   }
