@@ -42,6 +42,13 @@
     .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
   const isoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(asText(value)) ? asText(value) : '';
+  const displayDate = (value) => {
+    const date = isoDate(value);
+    if (!date) return asText(value);
+    const [year, month, day] = date.split('-').map(Number);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${day} ${months[month - 1]} ${year}`;
+  };
   const titleCaseStatus = (value) => asText(value).replaceAll('_', ' ').toLowerCase().replace(/(^|\s)\S/g, (token) => token.toUpperCase());
   const workspaceApi = () => root.CloudTMSWeeklySourceImportWorkspaceV1;
 
@@ -128,11 +135,14 @@
       return `I confirm this is the complete final NHSP backing report for ${trust}${report} for the cutoff shown.`;
     }
     if (!model.rows.length) return 'I confirm there are no shifts in this date range.';
-    return `I confirm this is the complete source file from ${start || 'the start date shown'} to ${end || 'the end date shown'}.`;
+    if (model.profile_id === 'NHSP_PREFINAL_RELEASED_V1') {
+      return `I confirm this NHSP previously released export covers ${displayDate(start) || 'the start date shown'} to ${displayDate(end) || 'the end date shown'}.`;
+    }
+    return `I confirm this is the complete source file from ${displayDate(start) || 'the start date shown'} to ${displayDate(end) || 'the end date shown'}.`;
   }
 
   function previewRows(model) {
-    const rows = model.rows.slice(0, 100).map((row) => `<tr><td>${escapeHtml(rowCandidate(row) || '—')}</td><td>${escapeHtml(rowDate(row) || '—')}</td><td>${escapeHtml(rowHours(row))}</td><td>${escapeHtml(titleCaseStatus(row.rowKind || row.row_kind || row.sourcePosition || row.source_position) || 'Ready')}</td></tr>`).join('');
+    const rows = model.rows.slice(0, 100).map((row) => `<tr><td>${escapeHtml(rowCandidate(row) || '—')}</td><td>${escapeHtml(displayDate(rowDate(row)) || '—')}</td><td>${escapeHtml(rowHours(row))}</td><td>${escapeHtml(titleCaseStatus(row.rowKind || row.row_kind || row.sourcePosition || row.source_position) || 'Ready')}</td></tr>`).join('');
     return `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Candidate</th><th>Day/date</th><th>System hours</th><th>Status</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="ws-empty">No shift rows are shown in this file.</td></tr>'}</tbody></table></div>${model.rows.length > 100 ? `<p class="mini">Showing the first 100 of ${model.rows.length} rows. The complete file will be checked before it is accepted.</p>` : ''}`;
   }
 
@@ -149,12 +159,15 @@
       ['File', model.filename || 'Selected source file'], ['File type', model.profile_label],
       ...(model.final_report ? [['Trust', model.trust || '—'], ['Report number', model.report_number || '—'], ['Cutoff', model.cutoff || 'As selected']] : [])
     ].map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-    const coverage = model.final_report ? '' : `<fieldset class="ws-child-fieldset"><legend>Complete file period</legend><label>From<input type="date" data-wsa-coverage-start value="${escapeHtml(start)}" required></label><label>To<input type="date" data-wsa-coverage-end value="${escapeHtml(end)}" required></label></fieldset>`;
-    const shorter = !model.final_report && !!model.previous_coverage_start && !!model.previous_coverage_end
+    const nhspPrefinal = model.profile_id === 'NHSP_PREFINAL_RELEASED_V1';
+    const coverage = model.final_report ? '' : `<fieldset class="ws-child-fieldset"><legend>${nhspPrefinal ? 'Export period' : 'Complete file period'}</legend><label>From<input type="date" data-wsa-coverage-start value="${escapeHtml(start)}" required></label><label>To<input type="date" data-wsa-coverage-end value="${escapeHtml(end)}" required></label></fieldset>`;
+    const replacementNotice = nhspPrefinal && model.previous_coverage_start && model.previous_coverage_end
+      ? `<div class="ws-notice ws-notice--warning"><strong>This replaces the current provisional comparison</strong><span>The earlier NHSP export covered ${escapeHtml(displayDate(model.previous_coverage_start))} to ${escapeHtml(displayDate(model.previous_coverage_end))}. Only shifts in this new file will appear in the current provisional comparison. Missing shifts are not cancelled or deducted from final NHSP pay; the final backing report remains the authority.</span></div>` : '';
+    const shorter = !model.final_report && !nhspPrefinal && !!model.previous_coverage_start && !!model.previous_coverage_end
       && (!!start && start > model.previous_coverage_start || !!end && end < model.previous_coverage_end);
-    const shorterConfirmation = shorter ? `<div class="ws-notice ws-notice--warning"><span>This period is shorter than the previous complete file.</span></div><label class="ws-confirm"><input type="checkbox" data-wsa-shrink-confirm${state.shrink_acknowledged ? ' checked' : ''}><span>I confirm this shorter date range is complete.</span></label>` : '';
+    const shorterConfirmation = shorter ? `<div class="ws-notice ws-notice--warning"><span>This period is shorter than the previous complete file (${escapeHtml(displayDate(model.previous_coverage_start))} to ${escapeHtml(displayDate(model.previous_coverage_end))}).</span></div><label class="ws-confirm"><input type="checkbox" data-wsa-shrink-confirm${state.shrink_acknowledged ? ' checked' : ''}><span>I confirm this shorter date range is complete.</span></label>` : '';
     const confirmation = previewConfirmation(model, start, end);
-    return `<div class="ws-child" data-wsa-screen="preview"><div class="ws-child-context">${context}</div>${issueMarkup}${coverage}${shorterConfirmation}${previewRows(model)}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}${model.ok ? '' : ' disabled'}><span>${escapeHtml(confirmation)}</span></label>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>The source file was not accepted</strong><span>${escapeHtml(plainMessage(state.error, 'Recheck the file and try again.'))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button><button type="button" class="btn primary" data-wsa-accept${model.ok && state.confirmed && (!shorter || state.shrink_acknowledged) ? '' : ' disabled'}>${state.busy ? 'Checking…' : state.failed ? 'Try again' : 'Accept source file'}</button></div></div>`;
+    return `<div class="ws-child" data-wsa-screen="preview"><div class="ws-child-context">${context}</div>${issueMarkup}${coverage}${replacementNotice}${shorterConfirmation}${previewRows(model)}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}${model.ok ? '' : ' disabled'}><span>${escapeHtml(confirmation)}</span></label>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>The source file was not accepted</strong><span>${escapeHtml(plainMessage(state.error, 'Recheck the file and try again.'))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button><button type="button" class="btn primary" data-wsa-accept${model.ok && state.confirmed && (!shorter || state.shrink_acknowledged) ? '' : ' disabled'}>${state.busy ? 'Checking…' : state.failed ? 'Try again' : 'Accept source file'}</button></div></div>`;
   }
 
   function buildUploadAcceptancePayload(model, state = {}) {
@@ -450,7 +463,8 @@
         state.coverage_end = host.querySelector('[data-wsa-coverage-end]')?.value || state.coverage_end;
         state.confirmed = host.querySelector('[data-wsa-confirm]')?.checked === true;
         state.shrink_acknowledged = host.querySelector('[data-wsa-shrink-confirm]')?.checked === true;
-        const shorter = !model.final_report && !!model.previous_coverage_start && !!model.previous_coverage_end
+        const shorter = !model.final_report && model.profile_id !== 'NHSP_PREFINAL_RELEASED_V1'
+          && !!model.previous_coverage_start && !!model.previous_coverage_end
           && (!!state.coverage_start && state.coverage_start > model.previous_coverage_start || !!state.coverage_end && state.coverage_end < model.previous_coverage_end);
         const button = host.querySelector('[data-wsa-accept]');
         if (button) button.disabled = !model.ok || !state.confirmed || (shorter && !state.shrink_acknowledged) || state.busy || (!model.final_report && (!isoDate(state.coverage_start) || !isoDate(state.coverage_end) || state.coverage_start > state.coverage_end));

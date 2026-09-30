@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const workspace = require('../../js/weekly-source/import-workspace.js');
+const actions = require('../../js/weekly-source/workspace-actions.js');
 
 const GROUP_KEY = `qg_${'1'.repeat(64)}`;
 const ASK_PROOF = 'a'.repeat(64);
@@ -9,6 +10,69 @@ const MANAGER_PROOF = 'b'.repeat(64);
 const WORKSPACE_VERSION = 'c'.repeat(64);
 const ACCEPT_PROOF = 'd'.repeat(64);
 const INCIDENT_ONE = '66666666-6666-4666-8666-666666666666';
+
+test('NHSP one-day pre-final replacement explains its effect without a coverage-shrink dead end', () => {
+  const model = actions.normalisePreview({
+    ok: true,
+    file_key: 'source/released.xlsx',
+    preview: {
+      ok: true, profileId: 'NHSP_PREFINAL_RELEASED_V1',
+      rows: [{ physicalRow: 4, date: '2026-09-21', workerName: 'Kier', actual: { start: '09:00', end: '17:00', breakMinutes: 30 } }],
+    },
+    accept_context: {
+      file_key: 'source/released.xlsx', source_group_id: 'group-1', source_cycle_id: 'cycle-1',
+      profile_id: 'NHSP_PREFINAL_RELEASED_V1',
+      previous_coverage: { start_local_date: '2026-09-08', end_local_date: '2026-09-17' },
+    },
+  });
+  const html = actions.renderPreview(model, { confirmed: true });
+  assert.match(html, /8 Sep 2026 to 17 Sep 2026/);
+  assert.match(html, /21 Sep 2026/);
+  assert.match(html, /Only shifts in this new file will appear in the current provisional comparison/);
+  assert.doesNotMatch(html, /data-wsa-shrink-confirm/);
+  assert.match(html, /data-wsa-accept>/);
+  const payload = actions.buildUploadAcceptancePayload(model, { confirmed: true });
+  assert.equal(payload.coverage.shrink_acknowledged, false);
+});
+
+test('generic shorter complete source still requires the explicit shorter-period acknowledgement', () => {
+  const model = actions.normalisePreview({
+    ok: true,
+    file_key: 'source/roster.csv',
+    preview: { ok: true, profileId: 'ROSTER_WEEKLY_SUMMARY_ACTUAL_V1', rows: [{ workDate: '2026-09-21' }] },
+    accept_context: {
+      file_key: 'source/roster.csv', source_group_id: 'group-1', source_cycle_id: 'cycle-1', client_id: 'client-1',
+      profile_id: 'ROSTER_WEEKLY_SUMMARY_ACTUAL_V1',
+      previous_coverage: { start_local_date: '2026-09-08', end_local_date: '2026-09-17' },
+    },
+  });
+  const html = actions.renderPreview(model, { confirmed: true });
+  assert.match(html, /data-wsa-shrink-confirm/);
+  assert.match(html, /8 Sep 2026 to 17 Sep 2026/);
+  assert.match(html, /data-wsa-accept disabled/);
+});
+
+test('duplicate NHSP reference preview states the offending rows instead of a stale-source error', () => {
+  const model = actions.normalisePreview({
+    ok: true, file_key: 'source/duplicate.xlsx',
+    preview: {
+      ok: false, profileId: 'NHSP_PREFINAL_RELEASED_V1',
+      rows: [{ date: '2026-09-21', workerName: 'Kier' }],
+      fatalErrors: [{
+        code: 'WEEKLY_SOURCE_UPLOAD_DUPLICATE_EXTERNAL_KEY',
+        message: 'Rows 4 and 6 repeat the same NHSP Reference Number (155154202). Correct the source file and upload it again.',
+      }],
+    },
+    accept_context: {
+      file_key: 'source/duplicate.xlsx', source_group_id: 'group-1', source_cycle_id: 'cycle-1',
+      profile_id: 'NHSP_PREFINAL_RELEASED_V1',
+    },
+  });
+  const html = actions.renderPreview(model, { confirmed: false });
+  assert.match(html, /Rows 4 and 6 repeat the same NHSP Reference Number/);
+  assert.match(html, /data-wsa-accept disabled/);
+  assert.doesNotMatch(html, /source changed/i);
+});
 
 function acceptSystemHoursAction(incidentIds = [INCIDENT_ONE], groupKey = GROUP_KEY, proof = ACCEPT_PROOF) {
   return {

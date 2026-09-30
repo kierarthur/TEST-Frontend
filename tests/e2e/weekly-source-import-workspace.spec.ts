@@ -250,6 +250,30 @@ test('NHSP previously released review accepts the shared group scope without one
   expect(result.html).not.toContain('data-wsa-accept disabled');
 });
 
+test('one-day NHSP replacement remains actionable and displays the superseded comparison in readable dates', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cloudtms:weekly-source-preview', { detail: {
+    ok: true, file_key: 'mock/revised.xlsx',
+    preview: {
+      ok: true, profileId: 'NHSP_PREFINAL_RELEASED_V1',
+      rows: [{ date: '2026-09-21', workerName: 'Kier Arthur', actual: { start: '09:00', end: '17:00', breakMinutes: 30 } }],
+      fatalErrors: [], warnings: [],
+    },
+    accept_context: {
+      file_key: 'mock/revised.xlsx', original_filename: 'revised.xlsx',
+      source_group_id: '11111111-1111-4111-8111-111111111111',
+      source_cycle_id: '22222222-2222-4222-8222-222222222222',
+      profile_id: 'NHSP_PREFINAL_RELEASED_V1',
+      previous_coverage: { start_local_date: '2026-09-08', end_local_date: '2026-09-17' },
+    },
+  } })));
+  await expect(page.getByText('This replaces the current provisional comparison')).toBeVisible();
+  await expect(page.getByText(/8 Sep 2026 to 17 Sep 2026/)).toBeVisible();
+  await expect(page.locator('[data-wsa-shrink-confirm]')).toHaveCount(0);
+  await page.locator('[data-wsa-confirm]').check();
+  await expect(page.locator('[data-wsa-accept]')).toBeEnabled();
+});
+
 test('switching tabs fetches the selected tab rows instead of reusing a partial workspace', async ({ page }) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);
