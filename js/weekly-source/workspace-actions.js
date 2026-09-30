@@ -28,7 +28,8 @@
     ['manager_contact', 'Manager'], ['candidate_asked_at', 'Candidate asked'],
     ['manager_informed_at', 'Manager informed'], ['next_step', 'Next step'], ['problem', 'Problem'],
     ['guidance', 'What to do'], ['file', 'File'], ['uploaded', 'Uploaded'], ['rows', 'Rows'],
-    ['coverage', 'Coverage'], ['report_number', 'Report number'], ['cutoff', 'Cutoff'],
+    ['coverage', 'Coverage'], ['weeks', 'Weeks ending'], ['report_number', 'Report number'], ['cutoff', 'Cutoff'],
+    ['source_reference', 'Source worker reference'], ['booking_reference', 'Booking reference'],
     ['final_source', 'Final source']
   ]);
   const CHARGE_DETAIL_LABELS = Object.freeze([
@@ -54,6 +55,16 @@
 
   function plainMessage(value, fallback = 'This item needs attention before you can continue.') {
     const text = asText(value);
+    const guidance = {
+      WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING: 'That candidate is inactive or unavailable. Choose an active candidate, or review their record before linking this shift.',
+      WEEKLY_SOURCE_CLIENT_NOT_ELIGIBLE: 'That client does not belong to this source report. Choose the matching client.',
+      WEEKLY_SOURCE_CONTRACT_NOT_ELIGIBLE: 'That contract does not cover this candidate, client and shift date. Review the contract or choose another.',
+      WEEKLY_SOURCE_RECHECK_NOT_CURRENT: 'A newer file or comparison has replaced this one. Close this window and refresh Queries before continuing.',
+      WEEKLY_SOURCE_RECHECK_REPLAY_CONFLICT: 'This check was already started with a different choice. Close this window and refresh Queries before making another choice.',
+      WEEKLY_SOURCE_PREVIEW_STALE: 'The source information has changed. Close this window and refresh Queries before continuing.'
+    };
+    const code = text.match(/WEEKLY_SOURCE_[A-Z0-9_]+/)?.[0];
+    if (guidance[code]) return guidance[code];
     if (!text || /\b(uuid|hash|fingerprint|rpc|tsfin|manifest|stack|sql|exception|workbench|idempotency|generation|authority pointer|work event|rate class)\b/i.test(text)) return fallback;
     return text.replace(/\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b/g, '').replace(/\s{2,}/g, ' ').trim() || fallback;
   }
@@ -167,6 +178,8 @@
     ].map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
     const nhspPrefinal = model.profile_id === 'NHSP_PREFINAL_RELEASED_V1';
     const coverage = model.final_report ? '' : `<fieldset class="ws-child-fieldset"><legend>${nhspPrefinal ? 'Export period' : 'Complete file period'}</legend><label>From<input type="date" data-wsa-coverage-start value="${escapeHtml(start)}" required></label><label>To<input type="date" data-wsa-coverage-end value="${escapeHtml(end)}" required></label></fieldset>`;
+    const importUse = !model.profile_id.startsWith('NHSP_')
+      ? `<label class="ws-confirm">Use this file for<select data-wsa-import-use><option value="CHECKING"${state.import_use !== 'PREPARE_FINALISATION' ? ' selected' : ''}>Check hours and resolve queries</option><option value="PREPARE_FINALISATION"${state.import_use === 'PREPARE_FINALISATION' ? ' selected' : ''}>Prepare for finalisation</option></select></label>` : '';
     const replacementNotice = nhspPrefinal && model.previous_coverage_start && model.previous_coverage_end
       ? `<div class="ws-notice ws-notice--warning"><strong>This replaces the current provisional comparison</strong><span>The earlier NHSP export covered ${escapeHtml(displayDate(model.previous_coverage_start))} to ${escapeHtml(displayDate(model.previous_coverage_end))}. Only shifts in this new file will appear in the current provisional comparison. Missing shifts are not cancelled or deducted from final NHSP pay; the final backing report remains the authority.</span></div>` : '';
     const shorter = !model.final_report && !nhspPrefinal && !!model.previous_coverage_start && !!model.previous_coverage_end
@@ -176,7 +189,7 @@
     const acceptanceError = state.ambiguous
       ? '<div class="ws-notice ws-notice--danger" role="alert"><strong>File saved; comparison paused</strong><span>An earlier candidate shift has more than one possible source match. The file is saved, but its comparison has not finished. Do not upload it again; contact support to resolve the match.</span></div>'
       : state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>The source file was not accepted</strong><span>${escapeHtml(plainMessage(state.error, 'Recheck the file and try again.'))}</span></div>` : '';
-    return `<div class="ws-child" data-wsa-screen="preview"><div class="ws-child-context">${context}</div>${issueMarkup}${coverage}${replacementNotice}${shorterConfirmation}${previewRows(model)}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}${model.ok ? '' : ' disabled'}><span>${escapeHtml(confirmation)}</span></label>${acceptanceError}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>${state.ambiguous ? 'Close' : 'Cancel'}</button><button type="button" class="btn primary" data-wsa-accept${model.ok && state.confirmed && (!shorter || state.shrink_acknowledged) && !state.ambiguous ? '' : ' disabled'}>${state.busy ? 'Checking…' : state.ambiguous ? 'Comparison paused' : state.failed ? 'Try again' : 'Accept source file'}</button></div></div>`;
+    return `<div class="ws-child" data-wsa-screen="preview"><div class="ws-child-context">${context}</div>${issueMarkup}${importUse}${coverage}${replacementNotice}${shorterConfirmation}${previewRows(model)}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}${model.ok ? '' : ' disabled'}><span>${escapeHtml(confirmation)}</span></label>${acceptanceError}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>${state.ambiguous ? 'Close' : 'Cancel'}</button><button type="button" class="btn primary" data-wsa-accept${model.ok && state.confirmed && (!shorter || state.shrink_acknowledged) && !state.ambiguous ? '' : ' disabled'}>${state.busy ? 'Checking…' : state.ambiguous ? 'Comparison paused' : state.failed ? 'Try again' : 'Accept source file'}</button></div></div>`;
   }
 
   function buildUploadAcceptancePayload(model, state = {}) {
@@ -189,6 +202,8 @@
       client_id: asText(context.client_id) || undefined,
       report_scope_id: asText(context.report_scope_id) || undefined,
       profile_id: asText(context.profile_id || model.profile_id),
+      import_use: model.final_report ? 'PREPARE_FINALISATION'
+        : !model.profile_id.startsWith('NHSP_') && state.import_use === 'PREPARE_FINALISATION' ? 'PREPARE_FINALISATION' : 'CHECKING',
       parser_options: { ...asObject(context.parser_options), profileId: asText(context.profile_id || model.profile_id) }
     };
     if (!model.final_report) {
@@ -212,6 +227,7 @@
     return {
       title: label === 'Open charge details' ? 'Charge details' : label === 'View final source' ? 'Final source' : 'Weekly source details',
       heading: asText(raw.heading || raw.title),
+      contract_id: asText(raw.contract_id),
       body: plainMessage(raw.body || raw.message || raw.guidance, ''),
       fields: [...fields, ...chargeFields],
       shifts: asArray(raw.shifts).map((row) => ({
@@ -224,7 +240,7 @@
   function renderDetail(model) {
     const fields = model.fields.map((field) => `<div><span>${escapeHtml(field.label)}</span><strong>${escapeHtml(field.value)}</strong></div>`).join('');
     const shifts = model.shifts.length ? `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Day/date</th><th>Candidate says they worked</th><th>System hours</th><th>Issue and status</th></tr></thead><tbody>${model.shifts.map((row) => `<tr><td>${escapeHtml(row.day_date || '—')}</td><td>${escapeHtml(row.candidate_hours || '—')}</td><td>${escapeHtml(row.system_hours || '—')}</td><td>${escapeHtml([row.issue, row.status].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
-    return `<div class="ws-child" data-wsa-screen="details">${model.heading ? `<h3>${escapeHtml(model.heading)}</h3>` : ''}${model.body ? `<p>${escapeHtml(model.body)}</p>` : ''}${fields ? `<div class="ws-child-context">${fields}</div>` : ''}${shifts}<div class="ws-child-actions"><button type="button" class="btn primary" data-wsa-close>Close</button></div></div>`;
+    return `<div class="ws-child" data-wsa-screen="details">${model.heading ? `<h3>${escapeHtml(model.heading)}</h3>` : ''}${model.body ? `<p>${escapeHtml(model.body)}</p>` : ''}${fields ? `<div class="ws-child-context">${fields}</div>` : ''}${shifts}<div class="ws-child-actions">${model.contract_id ? '<button type="button" class="btn btn-outline" data-wsa-review-contract>Review contract</button>' : ''}<button type="button" class="btn primary" data-wsa-close>Close</button></div></div>`;
   }
 
   function normaliseContractChooser(payload) {
@@ -240,14 +256,16 @@
     return {
       choices, candidate: asText(raw.candidate), client: asText(raw.client), shift: asText(raw.shift),
       source_role_band: asText(raw.source_role_band), source_row_ordinal: asText(raw.source_row_ordinal),
-      accept_payload: asObject(raw.accept_payload), existing_selections: asObject(raw.contract_selections)
+      accept_payload: asObject(raw.accept_payload), existing_selections: asObject(raw.contract_selections),
+      recheck_payload: asObject(raw.recheck_payload), contract_seed: asObject(raw.contract_seed)
     };
   }
 
   function renderContractChooser(model, state = {}) {
     const context = [['Candidate',model.candidate],['Client',model.client],['Shift',model.shift],['Source role / band',model.source_role_band]].filter(([,value]) => value).map(([label,value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
     const rows = model.choices.map((choice) => `<tr><td><input type="radio" name="wsa-contract" value="${escapeHtml(choice.id)}" aria-label="Choose ${escapeHtml(choice.role_band || 'contract')}"${state.selected === choice.id ? ' checked' : ''}></td><td>${escapeHtml(choice.role_band || '—')}</td><td>${escapeHtml(choice.site || '—')}</td><td>${escapeHtml(choice.dates || '—')}</td><td>${escapeHtml(choice.pay_type || '—')}</td><td><button type="button" class="btn btn-outline" data-wsa-view-contract="${escapeHtml(choice.id)}">${escapeHtml(choice.details_label)}</button></td></tr>`).join('');
-    return `<div class="ws-child" data-wsa-screen="contract"><div class="ws-child-context">${context}</div><p>More than one contract matches this shift. Choose the one that applies.</p><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Choose</th><th>Role / band</th><th>Contract site</th><th>Contract dates</th><th>Pay type</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button><button type="button" class="btn primary" data-wsa-use-contract${state.selected && !state.busy ? '' : ' disabled'}>${state.failed ? 'Try again' : 'Use selected contract'}</button></div></div>`;
+    const explanation = model.choices.length ? 'Review the contracts for this shift and choose the one that applies. Its eligibility will be checked again.' : 'No contract covers this shift. Create or correct the contract, then return to Imports and use Recheck.';
+    return `<div class="ws-child" data-wsa-screen="contract"><div class="ws-child-context">${context}</div><p>${explanation}</p><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Choose</th><th>Role / band</th><th>Contract site</th><th>Contract dates</th><th>Pay type</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button>${model.contract_seed.candidate_id && model.contract_seed.client_id ? '<button type="button" class="btn btn-outline" data-wsa-create-contract>Create contract</button>' : ''}<button type="button" class="btn primary" data-wsa-use-contract${state.selected && !state.busy ? '' : ' disabled'}>${state.failed ? 'Try again' : 'Use selected contract'}</button></div></div>`;
   }
 
   function normaliseCorrectFinal(payload) {
@@ -468,6 +486,7 @@
       host.dataset.wsaWired = '1';
       host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
       const sync = () => {
+        state.import_use = host.querySelector('[data-wsa-import-use]')?.value || 'CHECKING';
         state.coverage_start = host.querySelector('[data-wsa-coverage-start]')?.value || state.coverage_start;
         state.coverage_end = host.querySelector('[data-wsa-coverage-end]')?.value || state.coverage_end;
         state.confirmed = host.querySelector('[data-wsa-confirm]')?.checked === true;
@@ -478,7 +497,7 @@
         const button = host.querySelector('[data-wsa-accept]');
         if (button) button.disabled = !model.ok || !state.confirmed || (shorter && !state.shrink_acknowledged) || state.busy || state.ambiguous || (!model.final_report && (!isoDate(state.coverage_start) || !isoDate(state.coverage_end) || state.coverage_start > state.coverage_end));
       };
-      host.querySelectorAll('[data-wsa-coverage-start],[data-wsa-coverage-end]').forEach((input) => input.addEventListener('change', () => { sync(); rerender(kind); }));
+      host.querySelectorAll('[data-wsa-coverage-start],[data-wsa-coverage-end],[data-wsa-import-use]').forEach((input) => input.addEventListener('change', () => { sync(); rerender(kind); }));
       host.querySelectorAll('[data-wsa-confirm],[data-wsa-shrink-confirm]').forEach((input) => input.addEventListener('change', sync));
       sync();
       host.querySelector('[data-wsa-accept]')?.addEventListener('click', async () => {
@@ -490,6 +509,29 @@
     return openChild({ title: 'Review source file', kind, render, wire });
   }
 
+  async function reviewContract(id, button) {
+    if (!id || button?.disabled) return;
+    if (button) button.disabled = true;
+    const host = button?.closest('.ws-child');
+    host?.querySelector('[data-wsa-contract-error]')?.remove();
+    try {
+      const fresh = typeof root.getContract === 'function' ? await root.getContract(id) : null;
+      if (!fresh || typeof root.openContract !== 'function') throw new Error('Contract details could not be loaded. Please try again.');
+      root.openContract(fresh, { noParentGate: true });
+    } catch (_) {
+      const notice = root.document?.createElement('div');
+      if (notice && host) {
+        notice.dataset.wsaContractError = '1';
+        notice.className = 'ws-notice ws-notice--danger';
+        notice.setAttribute('role', 'alert');
+        notice.textContent = 'Contract details could not be loaded. Please try again.';
+        host.appendChild(notice);
+      }
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   function openDetail(payload, label) {
     const model = normaliseDetail(payload, label);
     const kind = 'weekly-source-details-v1';
@@ -497,12 +539,19 @@
       const host = root.document?.querySelector('[data-wsa-screen="details"]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1'; host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
+      host.querySelector('[data-wsa-review-contract]')?.addEventListener('click', (event) => {
+        void reviewContract(model.contract_id, event.currentTarget);
+      });
     } });
   }
 
   function openContractChooser(payload) {
     const model = normaliseContractChooser(payload);
-    if (model.choices.length < 2) return false;
+    if (model.choices.length < 2 && !model.recheck_payload.request_id) {
+      return openDetail({ detail: { candidate: model.candidate, client: model.client,
+        problem: 'No contract choices are available for this source row.',
+        guidance: 'Create or correct the candidate’s contract, then use Recheck in Imports.' } }, 'Choose contract');
+    }
     const state = { selected: '', busy: false, failed: false, error: '' };
     const kind = 'weekly-source-contract-chooser-v1';
     const render = () => renderContractChooser(model, state);
@@ -510,16 +559,24 @@
       const host = root.document?.querySelector('[data-wsa-screen="contract"]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1'; host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
+      host.querySelector('[data-wsa-create-contract]')?.addEventListener('click', () => {
+        if (typeof root.openContract === 'function') root.openContract(model.contract_seed, { noParentGate: true });
+      });
       host.querySelectorAll('input[name="wsa-contract"]').forEach((input) => input.addEventListener('change', () => { state.selected = input.checked ? input.value : state.selected; host.querySelector('[data-wsa-use-contract]').disabled = !state.selected; }));
       host.querySelectorAll('[data-wsa-view-contract]').forEach((button) => button.addEventListener('click', () => {
         const choice = model.choices.find((entry) => entry.id === button.dataset.wsaViewContract);
-        if (choice && typeof root.openContract === 'function') root.openContract({ id: choice.id });
+        if (choice) void reviewContract(choice.id, button);
       }));
       host.querySelector('[data-wsa-use-contract]')?.addEventListener('click', async () => {
-        if (!state.selected || !model.source_row_ordinal || !asText(model.accept_payload.file_key)) return;
+        if (!state.selected || (!model.recheck_payload.request_id
+          && (!model.source_row_ordinal || !asText(model.accept_payload.file_key)))) return;
         state.busy = true; state.error = ''; rerender(kind);
         try {
-          await workspaceApi()?.acceptUpload?.({ ...model.accept_payload, contract_selections: { ...model.existing_selections, [model.source_row_ordinal]: state.selected } });
+          if (model.recheck_payload.request_id) {
+            await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...model.recheck_payload, contract_id: state.selected });
+          } else {
+            await workspaceApi()?.acceptUpload?.({ ...model.accept_payload, contract_selections: { ...model.existing_selections, [model.source_row_ordinal]: state.selected } });
+          }
           await finishAction();
         } catch (error) { state.busy = false; state.failed = true; state.error = error?.message; rerender(kind); }
       });
@@ -633,8 +690,8 @@
       title: 'Accept system hours', message: 'This resolves the selected hours queries using the system hours shown.',
       confirmation: 'I confirm the system hours are correct for the selected shifts.', action_label: 'Accept system hours', context
     };
-    if (label === 'Remind candidate') return {
-      title: 'Remind candidate', message: 'The candidate will receive another reminder for the existing request. The original deadline will not change.',
+    if (label === 'Remind candidate' || label === 'Remind missing timesheet') return {
+      title: label, message: 'The candidate will receive another reminder for the existing request. The original deadline will not change.',
       confirmation: 'Send this reminder now.', action_label: 'Send reminder', context
     };
     return {
@@ -646,7 +703,7 @@
   function commandFor(detail) {
     const explicit = asText(detail.command).toUpperCase();
     if (explicit) return explicit;
-    if (detail.label === 'Remind candidate') return 'REMIND_CANDIDATE';
+    if (detail.label === 'Remind candidate' || detail.label === 'Remind missing timesheet') return 'REMIND_CANDIDATE';
     if (detail.label === 'Accept system hours') return 'ACCEPT_SYSTEM_HOURS';
     return '';
   }
@@ -713,6 +770,16 @@
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
+    if (['Link candidate','Link client'].includes(label) && detail.payload?.recheck_payload?.request_id) {
+      const picker = label === 'Link candidate' ? root.openCandidatePicker : root.openClientPicker;
+      if (typeof picker !== 'function') return openDetail({ detail: { problem: 'The matching picker is unavailable. Refresh the page and try again.' } }, label);
+      const field = label === 'Link candidate' ? 'candidate_id' : 'client_id';
+      return picker(async ({ id }) => {
+        await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...detail.payload.recheck_payload, [field]: asText(id) });
+        await workspaceApi()?.refresh?.();
+      }, { title: label, seed_hint: { display_name: detail.payload.candidate },
+        context: { staffName: detail.payload.candidate, unit: detail.payload.client, dateYmd: detail.payload.shift } });
+    }
     if (label === 'View Timesheet' && typeof root.openTimesheet === 'function') {
       return root.openTimesheet({ timesheet_id: asText(detail.payload?.timesheet_id) });
     }
@@ -730,7 +797,7 @@
       if (Object.keys(seed).length) return root.openContract(seed, { noParentGate: true });
     }
     if (['View','View final source','View details','Open','Open charge details','Review source details','View query'].includes(label)) return openDetail(detail.payload, label);
-    if (detail.command || ['Remind candidate','Accept system hours','No shifts to import','Protect pay'].includes(label)) return openCommand(detail);
+    if (detail.command || ['Remind candidate','Remind missing timesheet','Accept system hours','No shifts to import','Protect pay'].includes(label)) return openCommand(detail);
     return openDetail({ detail: { problem: 'This action is not available yet.', guidance: 'Recheck the Weekly source screen and try again.' } }, 'View details');
   }
 

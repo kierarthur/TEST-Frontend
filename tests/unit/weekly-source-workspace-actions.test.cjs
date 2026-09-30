@@ -6,6 +6,46 @@ const test = require('node:test');
 const actions = require('../../js/weekly-source/workspace-actions.js');
 const fixtures = JSON.parse(readFileSync(resolve(__dirname, '../fixtures/weekly-source-workspace-actions-v1.json'), 'utf8'));
 
+test('missing-week reminder confirmation identifies the week and source-link errors give usable guidance', () => {
+  const html = actions.renderCommandConfirmation({ message: 'Remind missing timesheet',
+    context: { candidate: 'Kier Arthur', weeks: '20 Sep 2026' }, confirmation: 'Send reminder', action_label: 'Send reminder' }, {});
+  assert.match(html, /Weeks ending/);
+  assert.match(html, /20 Sep 2026/);
+  assert.match(actions._plainMessage('WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING'), /inactive/);
+  assert.match(actions._plainMessage('WEEKLY_SOURCE_RECHECK_REPLAY_CONFLICT'), /refresh Queries/);
+});
+
+test('source linking opens the existing picker and rechecks the exact saved row', async () => {
+  const calls = [];
+  const saved = { picker: globalThis.openCandidatePicker, workspace: globalThis.CloudTMSWeeklySourceImportWorkspaceV1 };
+  let choose;
+  try {
+    globalThis.openCandidatePicker = (callback, options) => { choose = callback; calls.push(['picker', options]); };
+    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = {
+      issueCommand: async (...args) => calls.push(args), refresh: async () => calls.push(['refresh'])
+    };
+    actions.handleAction({ label: 'Link candidate', payload: { candidate: 'Source Worker', client: 'Trust',
+      recheck_payload: { request_id: 'request', upload_id: 'upload', upload_row_id: 'row' } } });
+    assert.equal(typeof choose, 'function');
+    await choose({ id: 'chosen-candidate' });
+    assert.equal(calls[0][1].context.staffName, 'Source Worker');
+    assert.deepEqual(calls[1], ['RECHECK_SOURCE', { request_id: 'request', upload_id: 'upload', upload_row_id: 'row', candidate_id: 'chosen-candidate' }]);
+    assert.deepEqual(calls[2], ['refresh']);
+  } finally {
+    globalThis.openCandidatePicker = saved.picker;
+    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = saved.workspace;
+  }
+});
+
+test('an unmatched contract provides a create path without pretending it is a tie', () => {
+  const model = actions.normaliseContractChooser({ choices: [], recheck_payload: { request_id: 'request' },
+    contract_seed: { candidate_id: 'candidate', client_id: 'client' } });
+  const html = actions.renderContractChooser(model);
+  assert.match(html, /data-wsa-create-contract/);
+  assert.match(html, /No contract covers this shift/);
+  assert.doesNotMatch(html, /More than one contract/);
+});
+
 test('NHSP preview shows the confirmed Trust, report and cutoff without technical details', () => {
   const model = actions.normalisePreview(fixtures.nhspPreview);
   assert.equal(model.ok, true);

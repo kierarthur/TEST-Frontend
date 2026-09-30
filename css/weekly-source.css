@@ -613,6 +613,31 @@
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
+
+/* Policy WEEKLY_SOURCE_IMPORT_QUERY_POLICY_20260930_V2. Restrict shell
+   sizing to this workspace; child modals keep their own existing dimensions. */
+#modal:has(.ws-workspace) {
+  width: min(1800px, calc(100vw - 48px)) !important;
+  max-width: calc(100vw - 48px) !important;
+}
+@media (min-width: 1501px) {
+  #modal .ws-query-grid { table-layout: fixed; min-width: 0; width: 100%; }
+  #modal .ws-query-grid > thead > tr > th,
+  #modal .ws-query-grid > tbody > tr[data-ws-group-key] > td {
+    min-width: 0; width: auto; overflow-wrap: anywhere;
+  }
+  #modal .ws-query-grid > thead > tr > th:nth-child(-n+2) { width: 48px; }
+  #modal .ws-query-grid > thead > tr > th:nth-child(5) { width: 65px; }
+  #modal .ws-query-grid > thead > tr > th:nth-child(8) { width: 155px; }
+  #modal .ws-query-grid > thead > tr > th:last-child { width: 160px; }
+  #modal .ws-query-grid > tbody > tr[data-ws-group-key] > .ws-actions { white-space: normal; }
+  #modal .ws-query-grid > tbody > tr[data-ws-group-key] > .ws-actions > .btn,
+  #modal .ws-query-grid > tbody > tr[data-ws-group-key] > .ws-actions > .ws-action-hint {
+    display: flex; width: 100%; margin: 4px 0; justify-content: center;
+  }
+  #modal .ws-query-grid .ws-actions .ws-action-hint .btn { width: 100%; margin: 0; }
+  #modal .ws-query-grid .ws-status { white-space: nowrap; overflow-wrap: normal; }
+}
 @media (max-width: 720px) {
   .ws-source-invoice-lines,
   .ws-source-invoice-lines > tbody,

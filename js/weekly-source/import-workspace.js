@@ -31,7 +31,7 @@
   });
   const ACTIONS = Object.freeze({
     imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager']),
-    queries: new Set(['Open', 'View details', 'Remind candidate']),
+    queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet']),
     shifts: new Set(['Accept system hours', 'View details']),
     finalise: new Set(['Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details']),
     tracker: new Set(['No shifts to import', 'View'])
@@ -268,6 +268,7 @@
     return {
       contract: asText(source.contract) || CONTRACT,
       workspace_version: asText(source.workspace_version || source.record_version),
+      recheck_payload: asObject(source.recheck_payload),
       profile: {
         id: profileId, label: asText(profile.label || source.source_label) || 'Weekly source',
         finalise_label: asText(profile.finalise_label) || FINALISE_LABELS[profileId] || 'Finalise week'
@@ -295,8 +296,12 @@
           attention_rows: asArray(journey.attention_rows)
         }
       },
-      queries: { ...normalisePage(queries), bulk_actions: normaliseBulkActions(queries.bulk_actions) },
+      queries: { ...normalisePage(queries), bulk_actions: normaliseBulkActions(queries.bulk_actions), office_checks: normalisePage(queries.office_checks) },
       finalise: {
+        prepared: finalise.prepared !== false,
+        prepare_action: asObject(finalise.prepare_action),
+        exclusion_confirmation: asText(finalise.exclusion_confirmation),
+        excluded_rows: asArray(finalise.excluded_rows),
         ...normalisePage(finalise), ready: normalisePage(finalise.ready), blocked: normalisePage(finalise.blocked),
         active_list: asText(finalise.active_list).toLowerCase() === 'ready' ? 'ready' : 'blocked',
         confirmation_text: asText(finalise.confirmation_text), confirmation_required: finalise.confirmation_required !== false,
@@ -323,7 +328,7 @@
     return [
       { key: 'imports', label: 'Imports' },
       { key: 'queries', label: `Queries${ws.counts.queries ? ` (${ws.counts.queries})` : ''}` },
-      { key: 'finalise', label: `${ws.profile.finalise_label}${ws.counts.blockers ? ` (${ws.counts.blockers} blocker${ws.counts.blockers === 1 ? '' : 's'})` : ''}` },
+      { key: 'finalise', label: `${ws.profile.finalise_label}${ws.finalise.prepared && ws.counts.blockers ? ` (${ws.counts.blockers} blocker${ws.counts.blockers === 1 ? '' : 's'})` : ''}` },
       { key: 'history', label: 'History' }
     ];
   }
@@ -382,11 +387,14 @@
 
   function renderContext(workspace) {
     const fields = workspace.context.controls.map((control) => {
-      const placeholder = !control.value && control.options.length
+      const optionalClient = control.key === 'client';
+      const placeholder = optionalClient
+        ? `<option value=""${!control.value ? ' selected' : ''}>${workspace.profile.id.startsWith('NHSP_') ? 'All trusts' : 'All clients'}</option>`
+        : !control.value && control.options.length
         ? `<option value="" selected disabled>${escapeHtml(control.key === 'client' ? `Choose a ${workspace.profile.id.startsWith('NHSP_') ? 'trust' : 'client'}` : `Choose ${control.label.toLowerCase()}`)}</option>`
         : '';
       const value = control.options.length
-        ? `<select data-ws-context="${escapeHtml(control.key)}" aria-label="${escapeHtml(control.label)}">${placeholder}${control.options.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === control.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`
+        ? `<select data-ws-context="${escapeHtml(control.key)}" aria-label="${escapeHtml(control.label)}" title="${escapeHtml(control.options.find((option) => option.value === control.value)?.label || control.label)}">${placeholder}${control.options.filter((option) => !optionalClient || option.value !== '').map((option) => `<option value="${escapeHtml(option.value)}"${option.value === control.value ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`
         : `<span class="ws-context-value">${escapeHtml(control.value || '—')}</span>`;
       return `<div class="ws-context-item"><span class="ws-context-label">${escapeHtml(control.label)}</span>${value}</div>`;
     }).join('');
@@ -612,7 +620,14 @@
       <button type="button" class="btn primary" data-ws-bulk-action="ASK_CANDIDATES" disabled>Ask selected candidates</button>
       <button type="button" class="btn btn-outline" data-ws-bulk-action="SEND_MANAGER_NOW" disabled>Send selected to manager now</button>
       <button type="button" class="btn btn-outline" data-ws-accept-selected hidden${stale ? ' disabled' : ''}>Accept system hours for selected shifts</button>`;
-    return `${staleNotice}${paid}
+    const checks = workspace.queries.office_checks;
+    const officeChecks = checks.rows.length ? `<section class="ws-office-checks"><h3>Office checks (${checks.total_count})</h3><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th>Candidate in source</th><th>Source reference</th><th>Client / Trust</th><th>Booking reference</th><th>Day/date</th><th>System hours</th><th>Problem</th><th>Action</th></tr></thead><tbody>${checks.rows.map((row) => {
+      const detail = { candidate: row.candidate, client: row.client, day_date: row.day_date, system_hours: row.system_hours,
+        source_reference: row.source_reference, booking_reference: row.booking_reference, problem: row.problem };
+      const actions = withFallbackDetail(normaliseActions(row.actions, ACTIONS.finalise), detail);
+      return `<tr>${['candidate','source_reference','client','booking_reference','day_date','system_hours','problem'].map(key => `<td>${escapeHtml(row[key] || '—')}</td>`).join('')}<td class="ws-actions">${renderActions(actions, checks.stale, row.row_key)}</td></tr>`;
+    }).join('')}</tbody></table></div></section>` : '';
+    return `${staleNotice}${paid}${officeChecks}<h3>Hours questions</h3>
       <div class="ws-query-controls">
         <details class="ws-query-filter-menu" open>
           <summary class="btn btn-outline">Filters and sorting</summary>
@@ -754,6 +769,10 @@
 
   function renderFinalise(workspace, viewState) {
     const finalise = workspace.finalise;
+    if (!finalise.prepared) {
+      const prepare = finalise.prepare_action;
+      return `${renderFinalisationTracker(workspace)}<div class="ws-notice"><strong>No finalisation report has been prepared</strong><span>Checking files remain available in Imports and Queries.</span>${prepare.command === 'PREPARE_FINALISATION' ? '<button type="button" class="btn primary" data-ws-prepare>Prepare current file for finalisation</button>' : ''}</div>`;
+    }
     const active = finalise.active_list;
     const ready = finalise.ready.total_count;
     const blocked = finalise.blocked.total_count;
@@ -769,7 +788,8 @@
     const intentionalConfirmationLock = finaliseReady ? '' : ' disabled data-ctms-intentional-lock="1"';
     const intentionalActionLock = finaliseReady && confirmationChecked ? '' : ' disabled data-ctms-intentional-lock="1"';
     const staleNotice = stale ? '<div class="ws-notice ws-notice--warning" role="status"><span>This information has changed. Recheck before continuing.</span></div>' : '';
-    return `${renderFinalisationTracker(workspace)}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current source')}</div>${renderRateWarnings(finalise.rate_warnings, viewState)}<div class="ws-inner-tabs" role="tablist"><button type="button" role="tab" data-ws-finalise-list="ready" aria-selected="${active === 'ready'}">Ready (${ready})</button><button type="button" role="tab" data-ws-finalise-list="blocked" aria-selected="${active === 'blocked'}">Blocked (${blocked})</button></div>${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div><label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${confirmationChecked ? ' checked' : ''}${intentionalConfirmationLock}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.phase === 'READY' ? `${finalise.rate_warnings.accepted_count} rate warnings accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise${intentionalActionLock}>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
+    const excluded = finalise.exclusion_confirmation ? `<section><h3>Not included as finalised shifts</h3>${renderFinaliseTable(workspace, { rows: finalise.excluded_rows, stale }, true, viewState)}<label class="ws-confirm"><input type="checkbox" data-ws-exclusion-confirm><span>${escapeHtml(finalise.exclusion_confirmation)}</span></label></section>` : '';
+    return `${renderFinalisationTracker(workspace)}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current source')}</div>${renderRateWarnings(finalise.rate_warnings, viewState)}${excluded}<div class="ws-inner-tabs" role="tablist"><button type="button" role="tab" data-ws-finalise-list="ready" aria-selected="${active === 'ready'}">Ready (${ready})</button><button type="button" role="tab" data-ws-finalise-list="blocked" aria-selected="${active === 'blocked'}">Blocked (${blocked})</button></div>${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div><label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${confirmationChecked ? ' checked' : ''}${intentionalConfirmationLock}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.phase === 'READY' ? `${finalise.rate_warnings.accepted_count} rate warnings accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise${intentionalActionLock}>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
   }
 
   function renderHistory(workspace, state) {
@@ -841,7 +861,12 @@
   }
 
   function pageFor(tab) { return tab === 'finalise' ? session.workspace?.finalise?.[session.workspace.finalise.active_list] : session.workspace?.[tab]; }
-  function repaint() { const frame = currentFrame(); if (frame?.setTab) { frame.tabs = tabDescriptors(session.workspace); Promise.resolve(frame.setTab(session.activeTab)).catch(() => {}); } }
+  function repaint() {
+    const frame = currentFrame();
+    if (!frame?.setTab) return Promise.resolve();
+    frame.tabs = tabDescriptors(session.workspace);
+    return Promise.resolve(frame.setTab(session.activeTab)).catch(() => {});
+  }
 
   function defaultUploadProfileId(workspace) {
     if (!workspace?.profile?.id?.startsWith('NHSP_')) return asText(workspace?.profile?.id);
@@ -859,7 +884,8 @@
 
   async function loadWorkspace(tab = session.activeTab, append = false) {
     const sequence = ++session.requestSequence;
-    session.loading = !append; session.error = ''; if (session.workspace && !append) repaint();
+    session.loading = !append; session.error = ''; if (session.workspace && !append) await repaint();
+    if (sequence !== session.requestSequence) return;
     const current = pageFor(tab);
     const params = new URLSearchParams(queryFor(tab, append ? { cursor: current?.next_cursor || '' } : {}));
     try {
@@ -871,8 +897,15 @@
         nextPage.rows = [...current.rows, ...nextPage.rows.filter((row) => { const key = asText(row.row_key || row.group_key || row.id); if (!key || keys.has(key)) return false; keys.add(key); return true; })];
       }
       session.workspace = next; syncUploadProfile(next); session.loadedTab = tab; session.loading = false;
+      session.reloadOnReturn = !currentFrame();
     } catch (error) { if (sequence !== session.requestSequence) return; session.loadedTab = tab; session.loading = false; session.error = friendlyWorkspaceError(error); }
-    repaint();
+    await repaint();
+    const focus = session.contextFocus;
+    if (sequence === session.requestSequence && focus?.tab === session.activeTab) {
+      const replacement = [...(root.document?.querySelectorAll('[data-ws-context]') || [])]
+        .find((element) => element.dataset.wsContext === focus.key && element.value === focus.value);
+      if (replacement) { replacement.focus(); session.contextFocus = null; }
+    }
   }
 
   function selectionSpec() {
@@ -1061,7 +1094,11 @@
       const input = host.querySelector('[data-ws-upload-input]');
       if (input) input.multiple = session.uploadProfileId === 'NHSP_FINAL_BACKING_V1';
     });
-    host.querySelectorAll('[data-ws-context]').forEach((control) => control.addEventListener('change', () => {
+    host.querySelectorAll('[data-ws-context]').forEach((control) => control.addEventListener('change', async () => {
+      const contextKey = control.dataset.wsContext;
+      const chosenValue = control.value;
+      session.contextFocus = { key: contextKey, value: chosenValue, tab: session.activeTab };
+      session.pendingRecheck = null; // The server retains resumable work for its exact scope.
       const keyMap = { source_group: 'source_group_id', cycle: 'source_cycle_id', client: 'client_id' };
       const key = keyMap[control.dataset.wsContext] || control.dataset.wsContext;
       if (Object.prototype.hasOwnProperty.call(session.workspace.selected, key)) session.workspace.selected[key] = control.value;
@@ -1082,9 +1119,20 @@
       }
       session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() };
       session.shiftSelections.clear();
-      loadWorkspace(session.activeTab);
+      await loadWorkspace(session.activeTab);
     }));
-    host.querySelectorAll('[data-ws-recheck]').forEach((button) => button.addEventListener('click', () => loadWorkspace(session.activeTab)));
+    host.querySelectorAll('[data-ws-recheck]').forEach((button) => button.addEventListener('click', async () => {
+      if (session.recheckBusy) return;
+      const payload = session.pendingRecheck || session.workspace.recheck_payload;
+      if (!payload?.request_id) return loadWorkspace(session.activeTab);
+      session.recheckBusy = true; session.pendingRecheck = payload; button.disabled = true;
+      try {
+        await issueCommand('RECHECK_SOURCE', payload);
+        session.pendingRecheck = null;
+        await loadWorkspace(session.activeTab);
+      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      finally { session.recheckBusy = false; }
+    }));
     host.querySelectorAll('.ws-row-action').forEach((button) => button.addEventListener('click', () => {
       let payload = {}; let context = {};
       try { payload = JSON.parse(button.dataset.wsPayload || '{}'); } catch {}
@@ -1148,6 +1196,11 @@
   }
 
   function bindFinalise(host) {
+    host.querySelector('[data-ws-prepare]')?.addEventListener('click', async (event) => {
+      event.currentTarget.disabled = true;
+      try { await issueCommand('PREPARE_FINALISATION', session.workspace.finalise.prepare_action.payload); await loadWorkspace('finalise'); }
+      catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+    });
     host.querySelectorAll('[data-ws-finalise-list]').forEach((button) => button.addEventListener('click', () => { session.workspace.finalise.active_list = button.dataset.wsFinaliseList === 'ready' ? 'ready' : 'blocked'; repaint(); }));
     const confirmation = host.querySelector('[data-ws-finalise-confirm]'); const action = host.querySelector('[data-ws-finalise]');
     const canFinalise = () => session.workspace.finalise.finalise_enabled
@@ -1156,7 +1209,8 @@
       && !session.workspace.finalise[session.workspace.finalise.active_list]?.stale
       && Object.keys(session.workspace.finalise.finalise_payload).length > 0
       && session.workspace.finalise.blocked.total_count === 0
-      && (!session.workspace.finalise.confirmation_required || confirmation?.checked);
+      && (!session.workspace.finalise.confirmation_required || confirmation?.checked)
+      && (!session.workspace.finalise.exclusion_confirmation || host.querySelector('[data-ws-exclusion-confirm]')?.checked);
     const sync = () => {
       if (!action) return;
       const allowed = canFinalise();
@@ -1165,11 +1219,13 @@
       else action.dataset.ctmsIntentionalLock = '1';
     };
     confirmation?.addEventListener('change', sync); sync();
+    host.querySelector('[data-ws-exclusion-confirm]')?.addEventListener('change', sync);
     action?.addEventListener('click', async () => {
       if (!canFinalise()) { sync(); return; }
       action.disabled = true;
       action.dataset.ctmsIntentionalLock = '1';
-      try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', session.workspace.finalise.finalise_payload); await loadWorkspace('finalise'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', { ...session.workspace.finalise.finalise_payload,
+        ...(session.workspace.finalise.exclusion_confirmation ? { exclude_unfinalised_acknowledged: true } : {}) }); await loadWorkspace('finalise'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
     });
     host.querySelector('[data-ws-approved-follow-up]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
@@ -1298,7 +1354,10 @@
     }
     session.loading = false; root.modalCtx = { entity: 'weekly-source-imports', data: {}, weeklySourceState: session };
     if (typeof root.showModal !== 'function') throw new Error('The Imports screen is unavailable.');
-    root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => wire(session.activeTab), { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
+    root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => {
+      if (session.reloadOnReturn && currentFrame()) { session.reloadOnReturn = false; repaint(); }
+      else wire(session.activeTab);
+    }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
     if (tab !== 'imports') await currentFrame()?.setTab?.(tab);
   }
 

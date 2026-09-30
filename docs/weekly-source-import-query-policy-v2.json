@@ -1,0 +1,35 @@
+{
+  "version": "WEEKLY_SOURCE_IMPORT_QUERY_POLICY_20260930_V2",
+  "authority": "WEEKLY_SOURCE_IMPORT_QUERY_POLICY_AMENDMENT_20260930.md",
+  "scope": "Weekly Source import-authoritative Office workspace only",
+  "layout": {
+    "desktopViewport": { "width": 1600, "height": 1000 },
+    "maximumModalWidth": 1800,
+    "viewportMargin": 24,
+    "desktopHorizontalScroll": false,
+    "actionColumnWidth": 160,
+    "actionOrder": ["Open", "Remind candidate"],
+    "actionDirection": "vertical",
+    "statusWrap": false,
+    "preserveExistingMobileCards": true
+  },
+  "copy": {
+    "allTrusts": "All trusts",
+    "allClients": "All clients",
+    "checkingUse": "Check hours and resolve queries",
+    "preparationUse": "Prepare for finalisation",
+    "officeChecks": "Office checks",
+    "hoursQuestions": "Hours questions",
+    "noFinalisationFile": "No finalisation report has been prepared. Checking files remain available in Imports and Queries."
+  },
+  "boundaries": {
+    "optionalFiltersDoNotGrantCommandAuthority": true,
+    "checkingFilesNeverFinalise": true,
+    "healthRosterEarlyFinalisationAllowed": true,
+    "healthRosterUnfinalisedExclusionNeedsAcknowledgement": true,
+    "nhspEarlyFinalisationAllowed": false,
+    "preserveExplicitOfficeManagerDirect": true,
+    "requestedTimesheetExceptionIsScopeBound": true,
+    "reminderMustMatchDisplayedRequest": true
+  }
+}

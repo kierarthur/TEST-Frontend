@@ -80,6 +80,69 @@ async function loadFoundation(page: import('@playwright/test').Page) {
   }, { workspaceFixture: fixtures.workspace, correctionPreview: fixtures.correctFinalPreview });
 }
 
+test('contract review loads the complete current contract and fails safely without opening an empty record', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__contractOpens = [];
+    win.__contractReads = [];
+    win.getContract = async (id: string) => {
+      win.__contractReads.push(id);
+      return win.__contractReadFails ? null : { contract: { id, client_id: 'client', candidate_id: 'candidate' }, counts: { weeks: 2 } };
+    };
+    win.openContract = (data: unknown, options: unknown) => win.__contractOpens.push({ data, options });
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Open charge details', payload: {
+      detail: { candidate: 'Example worker', contract_id: 'contract-1', problem: 'Charge does not match' }
+    } });
+  });
+  await page.getByRole('button', { name: 'Review contract', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__contractOpens)).toEqual([{
+    data: { contract: { id: 'contract-1', client_id: 'client', candidate_id: 'candidate' }, counts: { weeks: 2 } },
+    options: { noParentGate: true }
+  }]);
+  await page.evaluate(() => { (window as any).__contractReadFails = true; });
+  await page.getByRole('button', { name: 'Review contract', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Contract details could not be loaded. Please try again.');
+  expect(await page.evaluate(() => (window as any).__contractOpens.length)).toBe(1);
+});
+
+test('prepared HealthRoster before cutoff requires the explicit mixed-shift exclusion acknowledgement', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(async (fixture) => {
+    const win = window as any;
+    const workspace = structuredClone(fixture);
+    workspace.profile = { id: 'HEALTHROSTER_V1', label: 'HealthRoster', finalise_label: 'Finalise report' };
+    workspace.context.cycle_state = 'Before cutoff';
+    Object.assign(workspace.finalise, {
+      prepared: true, active_list: 'ready', finalise_enabled: true,
+      ready: { total_count: 1, rows: [] }, blocked: { total_count: 0, rows: [] },
+      confirmation_text: 'I confirm the prepared HealthRoster report.',
+      exclusion_confirmation: 'I understand that the non-finalised shifts are excluded and previous finalised positions may be reversed.',
+      excluded_rows: [{ candidate: 'Example worker', day_date: 'Mon 21 Sep 2026', problem: 'Not finalised in HealthRoster', actions: [] }],
+      finalise_payload: { source_cycle_id: '22222222-2222-4222-8222-222222222222' }
+    });
+    win.authFetch = async (url: string, options: any = {}) => {
+      if (url.includes('/commands')) {
+        win.__requests.push(JSON.parse(options.body));
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return { ok: true, json: async () => workspace };
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open();
+    await win.__modalStack.at(-1).setTab('finalise');
+  }, fixtures.workspace);
+  const finalise = page.locator('[data-ws-finalise]');
+  await expect(finalise).toBeDisabled();
+  await page.locator('[data-ws-finalise-confirm]').check();
+  await expect(finalise).toBeDisabled();
+  await page.locator('[data-ws-exclusion-confirm]').check();
+  await expect(finalise).toBeEnabled();
+  await finalise.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__requests)).toEqual([
+    { action: 'FINALISE_WEEK', payload: { source_cycle_id: '22222222-2222-4222-8222-222222222222', exclude_unfinalised_acknowledged: true } }
+  ]);
+});
+
 test('Queries keeps the two selection planes separate and uses only sticky header checkboxes', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1700, height: 900 });
   await loadFoundation(page);
@@ -1127,6 +1190,118 @@ test('Stage 11: real Office import modal keeps mobile query controls compact and
   await page.locator('#modal').screenshot({ path: testInfo.outputPath('UI-075-real-query-actions-intermediate.png') });
 
   expect(errors).toEqual([]);
+  expect(externalRequests(page)).toEqual([]);
+});
+
+test('policy v2: real Office desktop queries fit the modal with stacked actions', async ({ page }, testInfo) => {
+  const policy = JSON.parse(readFileSync(resolve(__dirname, '../../docs/weekly-source-import-query-policy-v2.json'), 'utf8'));
+  const workspace = structuredClone(fixtures.workspace);
+  const row = workspace.queries.rows[0];
+  row.expanded = false;
+  row.client = 'CloudTMS Stage 8 NHSP Test Trust';
+  row.status = { text: 'Needs action', tone: 'warning' };
+  row.actions = policy.layout.actionOrder.map((label: string) => ({ label, enabled: true,
+    payload: { detail: { candidate: row.candidate, client: row.client } } }));
+  await page.setViewportSize(policy.layout.desktopViewport);
+  await mountOfficeShell(page, { broker(pathname) {
+    if (pathname.startsWith('/api/weekly-source/v1/workspace')) return workspace;
+    return undefined;
+  } });
+  await page.waitForFunction(() => typeof (window as any).CloudTMSWeeklySourceImportWorkspaceV1?.open === 'function');
+  await page.evaluate(() => { void (window as any).CloudTMSWeeklySourceImportWorkspaceV1.open(); });
+  await page.locator('#modalTabs').getByRole('button', { name: /^Queries(?:\s|$)/ }).click();
+  await expect(page.getByText('Jane Smith', { exact: true })).toBeVisible();
+  const metrics = await page.locator('.ws-query-grid').evaluate((table) => {
+    const row = table.querySelector('tbody > tr[data-ws-group-key]')!;
+    const actions = row.querySelector('td.ws-actions')!;
+    const buttons = [...actions.querySelectorAll('button')].map(el => el.getBoundingClientRect().toJSON());
+    const header = table.querySelector('thead th:last-child')!.getBoundingClientRect();
+    const status = [...row.querySelectorAll('td')].find(el => el.textContent?.trim() === 'Needs action')!;
+    const badge = status.querySelector('.badge') || status.firstElementChild!;
+    const region = table.closest('.ws-query-scroll')!;
+    return { overflow: region.scrollWidth - region.clientWidth, buttons,
+      headerRight: header.right, actionsRight: actions.getBoundingClientRect().right,
+      statusWrap: getComputedStyle(badge).whiteSpace,
+      modalWidth: document.querySelector('#modal')!.getBoundingClientRect().width };
+  });
+  expect(metrics.overflow).toBeLessThanOrEqual(1);
+  expect(metrics.modalWidth).toBeGreaterThan(1400);
+  expect(metrics.buttons).toHaveLength(2);
+  expect(metrics.buttons[1].top).toBeGreaterThanOrEqual(metrics.buttons[0].bottom);
+  expect(Math.abs(metrics.headerRight - metrics.actionsRight)).toBeLessThanOrEqual(1);
+  expect(metrics.statusWrap).toBe('nowrap');
+  await page.locator('#modal').screenshot({ path: testInfo.outputPath('weekly-source-policy-v2-desktop.png') });
+  expect(externalRequests(page)).toEqual([]);
+});
+
+test('policy v2: Trust filter can be cleared and keyboard focus survives refresh in every tab', async ({ page }) => {
+  const trustId = '33333333-3333-4333-8333-333333333333';
+  await mountOfficeShell(page, { broker(pathname, _method, _body, route) {
+    if (!pathname.startsWith('/api/weekly-source/v1/workspace')) return undefined;
+    const workspace = structuredClone(fixtures.workspace);
+    const selected = new URL(route.request().url()).searchParams.get('client_id') || '';
+    workspace.context.client_id = selected;
+    workspace.context.controls.find((control: any) => control.key === 'client').value = selected;
+    return workspace;
+  } });
+  await page.waitForFunction(() => typeof (window as any).CloudTMSWeeklySourceImportWorkspaceV1?.open === 'function');
+  await page.evaluate(() => { void (window as any).CloudTMSWeeklySourceImportWorkspaceV1.open(); });
+  for (const tab of [/^Imports(?:\s|$)/, /^Queries(?:\s|$)/, /^Finalise report(?:\s|$)/, /^History(?:\s|$)/]) {
+    await page.locator('#modalTabs').getByRole('button', { name: tab }).click();
+    const select = page.getByRole('combobox', { name: 'Trust', exact: true });
+    await expect(select).toHaveValue('');
+    await select.selectOption(trustId);
+    await expect(select).toHaveValue(trustId);
+    try { await expect(select).toBeFocused(); } catch (error) {
+      console.log('focus diagnostic', await page.evaluate(() => ({
+        active: document.activeElement?.outerHTML?.slice(0, 250),
+        controls: [...document.querySelectorAll('[data-ws-context="client"]')].map(el => ({ connected: el.isConnected, visible: !!(el as HTMLElement).offsetParent, html: el.outerHTML.slice(0, 200) })),
+        tab: (window as any).modalCtx?.weeklySourceState?.activeTab,
+        sequence: (window as any).modalCtx?.weeklySourceState?.requestSequence,
+        loading: (window as any).modalCtx?.weeklySourceState?.loading
+      })));
+      throw error;
+    }
+    await select.press('Home');
+    await select.press('Enter');
+    await expect(select).toHaveValue('');
+    await expect(select).toBeFocused();
+    await expect(select.locator('option:checked')).toHaveText('All trusts');
+  }
+  expect(externalRequests(page)).toEqual([]);
+});
+
+test('policy v2: unmatched source work is visible in Queries but never in checking-only Finalise', async ({ page }, testInfo) => {
+  const workspace = structuredClone(fixtures.workspace);
+  workspace.profile.id = 'NHSP_PREFINAL_RELEASED_V1';
+  workspace.profile.label = 'NHSP previously released shifts';
+  workspace.finalise.prepared = false;
+  workspace.queries.office_checks = { total_count: 1, rows: [{
+    row_key: 'source-row', candidate: 'Rai-Baptiste Baljit', source_reference: 'CCR-02611',
+    client: 'Berkshire Healthcare NHS Foundation Trust', booking_reference: '155154209',
+    day_date: 'Mon 21 Sep 2026', system_hours: '09:00–17:00 (30 min break)',
+    problem: 'No active candidate matches this source row',
+    status: { text: 'Needs correction', tone: 'danger' },
+    actions: [{ label: 'Link candidate', enabled: true, payload: { recheck_payload: { request_id: 'test' } } }]
+  }] };
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await mountOfficeShell(page, { broker(pathname) {
+    if (pathname.startsWith('/api/weekly-source/v1/workspace')) return workspace;
+    return undefined;
+  } });
+  await page.waitForFunction(() => typeof (window as any).CloudTMSWeeklySourceImportWorkspaceV1?.open === 'function');
+  await page.evaluate(() => { void (window as any).CloudTMSWeeklySourceImportWorkspaceV1.open(); });
+  await page.locator('#modalTabs').getByRole('button', { name: /^Queries(?:\s|$)/ }).click();
+  await expect(page.locator('#modalTabs').getByRole('button', { name: 'Finalise report', exact: true })).toBeVisible();
+  await expect(page.getByText('Rai-Baptiste Baljit', { exact: true })).toBeVisible();
+  await expect(page.getByText('CCR-02611', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Link candidate', exact: true })).toBeVisible();
+  const overflow = await page.locator('.ws-office-checks .ws-inner-scroll').evaluate(el => el.scrollWidth - el.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await page.locator('#modal').screenshot({ path: testInfo.outputPath('weekly-source-office-checks.png') });
+  await page.locator('#modalTabs').getByRole('button', { name: /^Finalise report(?:\s|$)/ }).click();
+  await expect(page.getByText('No finalisation report has been prepared', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Ready \(/ })).toHaveCount(0);
   expect(externalRequests(page)).toEqual([]);
 });
 

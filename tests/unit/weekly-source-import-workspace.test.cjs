@@ -11,6 +11,43 @@ const WORKSPACE_VERSION = 'c'.repeat(64);
 const ACCEPT_PROOF = 'd'.repeat(64);
 const INCIDENT_ONE = '66666666-6666-4666-8666-666666666666';
 
+test('checking files show no Ready or Blocked lists and retain Office checks in Queries', () => {
+  const model = workspace.normaliseWorkspace({ profile: { id: 'NHSP_PREFINAL_RELEASED_V1' },
+    counts: { blockers: 1 },
+    finalise: { prepared: false, ready: { rows: [{ candidate: 'Kier' }], total_count: 1 } },
+    queries: { office_checks: { rows: [{ row_key: 'unmatched', candidate: 'Rai-Baptiste Baljit', source_reference: 'CCR-02611',
+      client: 'Berkshire', booking_reference: '155154209', day_date: '21 Sep 2026', system_hours: '09:00–17:00 (30 min break)',
+      problem: 'No active candidate matches this source row' }], total_count: 1 } } });
+  const finalise = workspace.renderWorkspace(model, 'finalise', {});
+  assert.match(finalise, /No finalisation report has been prepared/);
+  assert.doesNotMatch(finalise, /Ready \(|Blocked \(|Kier/);
+  assert.doesNotMatch(workspace.tabDescriptors(model).find(tab => tab.key === 'finalise').label, /blocker/);
+  const queries = workspace.renderWorkspace(model, 'queries', {});
+  for (const text of ['Office checks', 'Hours questions', 'Rai-Baptiste Baljit', 'CCR-02611', '155154209', 'Berkshire']) assert.ok(queries.includes(text));
+});
+
+test('same-format preview keeps preparation explicit and defaults to checking', () => {
+  const fixture = require('../fixtures/weekly-source-workspace-actions-v1.json');
+  const model = actions.normalisePreview(fixture.healthRosterPreview);
+  assert.match(actions.renderPreview(model), /value="CHECKING" selected/);
+  assert.equal(actions.buildUploadAcceptancePayload(model).import_use, 'CHECKING');
+  assert.equal(actions.buildUploadAcceptancePayload(model, { import_use: 'PREPARE_FINALISATION' }).import_use, 'PREPARE_FINALISATION');
+});
+
+test('Trust context remains clearable after selection and exposes the complete selected label', () => {
+  const model = workspace.normaliseWorkspace({
+    profile: { id: 'NHSP_PREFINAL_RELEASED_V1' },
+    context: { controls: [{ key: 'client', label: 'Trust', value: 'trust-1', options: [
+      { value: 'trust-1', label: 'CloudTMS Stage 8 NHSP Test Trust' }
+    ] }] }
+  });
+  const html = workspace.renderWorkspace(model, 'imports', {});
+  assert.match(html, /<option value="">All trusts<\/option>/);
+  assert.match(html, /title="CloudTMS Stage 8 NHSP Test Trust"/);
+  assert.match(html, /value="trust-1" selected/);
+  assert.doesNotMatch(html, /value=""[^>]*disabled/);
+});
+
 test('NHSP one-day pre-final replacement explains its effect without a coverage-shrink dead end', () => {
   const model = actions.normalisePreview({
     ok: true,
@@ -342,7 +379,7 @@ test('an unresolved NHSP Trust is shown as a choice rather than a false selectio
     },
   });
   const html = workspace.renderWorkspace(unresolved, 'finalise');
-  assert.match(html, /<option value="" selected disabled>Choose a trust<\/option>/);
+  assert.match(html, /<option value="" selected>All trusts<\/option>/);
   assert.doesNotMatch(html, /value="client-1" selected/);
 });
 
