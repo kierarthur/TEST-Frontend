@@ -58,6 +58,12 @@
     return text.replace(/\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b/g, '').replace(/\s{2,}/g, ' ').trim() || fallback;
   }
 
+  function isCandidateComparisonAmbiguity(error) {
+    return /WEEKLY_SOURCE_CANDIDATE_COMPARISON_AMBIGUOUS/i.test(
+      `${asText(error?.code)} ${asText(error?.message)}`
+    );
+  }
+
   function rowDate(row) {
     return isoDate(row.workDate || row.work_date || row.date || row.date_local);
   }
@@ -167,7 +173,10 @@
       && (!!start && start > model.previous_coverage_start || !!end && end < model.previous_coverage_end);
     const shorterConfirmation = shorter ? `<div class="ws-notice ws-notice--warning"><span>This period is shorter than the previous complete file (${escapeHtml(displayDate(model.previous_coverage_start))} to ${escapeHtml(displayDate(model.previous_coverage_end))}).</span></div><label class="ws-confirm"><input type="checkbox" data-wsa-shrink-confirm${state.shrink_acknowledged ? ' checked' : ''}><span>I confirm this shorter date range is complete.</span></label>` : '';
     const confirmation = previewConfirmation(model, start, end);
-    return `<div class="ws-child" data-wsa-screen="preview"><div class="ws-child-context">${context}</div>${issueMarkup}${coverage}${replacementNotice}${shorterConfirmation}${previewRows(model)}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}${model.ok ? '' : ' disabled'}><span>${escapeHtml(confirmation)}</span></label>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>The source file was not accepted</strong><span>${escapeHtml(plainMessage(state.error, 'Recheck the file and try again.'))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button><button type="button" class="btn primary" data-wsa-accept${model.ok && state.confirmed && (!shorter || state.shrink_acknowledged) ? '' : ' disabled'}>${state.busy ? 'Checking…' : state.failed ? 'Try again' : 'Accept source file'}</button></div></div>`;
+    const acceptanceError = state.ambiguous
+      ? '<div class="ws-notice ws-notice--danger" role="alert"><strong>File saved; comparison paused</strong><span>An earlier candidate shift has more than one possible source match. The file is saved, but its comparison has not finished. Do not upload it again; contact support to resolve the match.</span></div>'
+      : state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>The source file was not accepted</strong><span>${escapeHtml(plainMessage(state.error, 'Recheck the file and try again.'))}</span></div>` : '';
+    return `<div class="ws-child" data-wsa-screen="preview"><div class="ws-child-context">${context}</div>${issueMarkup}${coverage}${replacementNotice}${shorterConfirmation}${previewRows(model)}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}${model.ok ? '' : ' disabled'}><span>${escapeHtml(confirmation)}</span></label>${acceptanceError}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>${state.ambiguous ? 'Close' : 'Cancel'}</button><button type="button" class="btn primary" data-wsa-accept${model.ok && state.confirmed && (!shorter || state.shrink_acknowledged) && !state.ambiguous ? '' : ' disabled'}>${state.busy ? 'Checking…' : state.ambiguous ? 'Comparison paused' : state.failed ? 'Try again' : 'Accept source file'}</button></div></div>`;
   }
 
   function buildUploadAcceptancePayload(model, state = {}) {
@@ -450,7 +459,7 @@
 
   function openPreview(detail) {
     const model = normalisePreview(detail);
-    const state = { coverage_start: model.coverage_start, coverage_end: model.coverage_end, confirmed: false, busy: false, failed: false, error: '' };
+    const state = { coverage_start: model.coverage_start, coverage_end: model.coverage_end, confirmed: false, busy: false, failed: false, ambiguous: false, error: '' };
     const kind = 'weekly-source-preview-v1';
     const render = () => renderPreview(model, state);
     const wire = () => {
@@ -467,7 +476,7 @@
           && !!model.previous_coverage_start && !!model.previous_coverage_end
           && (!!state.coverage_start && state.coverage_start > model.previous_coverage_start || !!state.coverage_end && state.coverage_end < model.previous_coverage_end);
         const button = host.querySelector('[data-wsa-accept]');
-        if (button) button.disabled = !model.ok || !state.confirmed || (shorter && !state.shrink_acknowledged) || state.busy || (!model.final_report && (!isoDate(state.coverage_start) || !isoDate(state.coverage_end) || state.coverage_start > state.coverage_end));
+        if (button) button.disabled = !model.ok || !state.confirmed || (shorter && !state.shrink_acknowledged) || state.busy || state.ambiguous || (!model.final_report && (!isoDate(state.coverage_start) || !isoDate(state.coverage_end) || state.coverage_start > state.coverage_end));
       };
       host.querySelectorAll('[data-wsa-coverage-start],[data-wsa-coverage-end]').forEach((input) => input.addEventListener('change', () => { sync(); rerender(kind); }));
       host.querySelectorAll('[data-wsa-confirm],[data-wsa-shrink-confirm]').forEach((input) => input.addEventListener('change', sync));
@@ -475,7 +484,7 @@
       host.querySelector('[data-wsa-accept]')?.addEventListener('click', async () => {
         sync(); state.busy = true; state.error = ''; rerender(kind);
         try { await workspaceApi()?.acceptUpload?.(buildUploadAcceptancePayload(model, state)); await finishAction(); }
-        catch (error) { state.busy = false; state.failed = true; state.error = error?.message; rerender(kind); }
+        catch (error) { state.busy = false; state.failed = true; state.ambiguous = isCandidateComparisonAmbiguity(error); state.error = error?.message; rerender(kind); }
       });
     };
     return openChild({ title: 'Review source file', kind, render, wire });
@@ -730,6 +739,6 @@
     normaliseDetail, renderDetail, normaliseContractChooser, renderContractChooser,
     normaliseCorrectFinal, normaliseCorrectFinalPreview, renderCorrectFinal, renderCommandConfirmation,
     openPreview, openBatchPreview, handleAction, _plainMessage: plainMessage,
-    _test: Object.freeze({ commandAuthorityAvailable })
+    _test: Object.freeze({ commandAuthorityAvailable, isCandidateComparisonAmbiguity })
   });
 });

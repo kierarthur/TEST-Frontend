@@ -51,6 +51,20 @@ test('NHSP previously released shifts can be accepted for the shared group witho
   assert.equal(payload.profile_id, 'NHSP_PREFINAL_RELEASED_V1');
 });
 
+test('a saved source with an ambiguous earlier shift is not described as a rejected file or blindly retried', () => {
+  const model = actions.normalisePreview(fixtures.nhspPreview);
+  assert.equal(actions._test.isCandidateComparisonAmbiguity({ message: 'WEEKLY_SOURCE_CANDIDATE_COMPARISON_AMBIGUOUS' }), true);
+  assert.equal(actions._test.isCandidateComparisonAmbiguity({ message: 'WEEKLY_SOURCE_UPLOAD_DUPLICATE_EXTERNAL_KEY' }), false);
+  const html = actions.renderPreview(model, {
+    confirmed: true, failed: true, ambiguous: true,
+    error: 'WEEKLY_SOURCE_CANDIDATE_COMPARISON_AMBIGUOUS'
+  });
+  assert.match(html, /File saved; comparison paused/);
+  assert.match(html, /Do not upload it again/);
+  assert.match(html, /data-wsa-accept disabled/);
+  assert.doesNotMatch(html, /The source file was not accepted|>Try again<|WEEKLY_SOURCE_CANDIDATE_COMPARISON_AMBIGUOUS/);
+});
+
 test('Trust-specific and roster files remain fail-closed without their required scope', () => {
   const finalModel = actions.normalisePreview({
     ok: true,
