@@ -642,13 +642,24 @@
   text-transform: uppercase; font-size: 11px; letter-spacing: .025em;
 }
 :is([data-wsr-table], [data-wsc-table]) > table { width: 100%; min-width: 0; table-layout: fixed; }
+#modal :is([data-wsr-table], [data-wsc-table]) table.grid { min-width: 0; }
 :is([data-wsr-table], [data-wsc-table]) :is(th, td) { min-width: 0; overflow-wrap: anywhere; vertical-align: top; }
 :is([data-wsr-table], [data-wsc-table]) td.ws-actions { white-space: normal; }
 :is([data-wsr-table], [data-wsc-table]) td.ws-actions > .btn { display: block; width: 100%; margin: 0 0 6px; white-space: normal; }
+#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table]) > table > tbody > tr > td { padding-top: 7px; padding-bottom: 7px; vertical-align: middle; }
+#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table]) td.ws-actions > .btn { min-height: 30px; padding: 5px 9px; margin-bottom: 4px; font-size: 12px; }
+#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table]) td.ws-actions > .btn:last-child { margin-bottom: 0; }
+[data-wsr-table] .ws-query-expansion > td { padding-top: 4px; padding-bottom: 4px; }
+[data-wsr-table] .ws-query-expansion summary { cursor: pointer; padding: 4px 0; }
+[data-wsr-table] .ws-query-shifts { width: 100%; table-layout: fixed; margin-top: 8px; }
+[data-wsr-table] .ws-query-shifts :is(th, td) { padding: 8px 10px; vertical-align: middle; }
+[data-wsr-table] .ws-query-contact-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+[data-wsr-table] .ws-query-contact-actions:empty { display: none; }
 :is([data-wsr-table], [data-wsc-table]) .ws-status { border-radius: 6px; padding: 4px 7px; max-width: 100%; }
 :is([data-wsr-table], [data-wsc-table]) .ws-status-sub { color: var(--ws-muted-text, #94a3b8); font-weight: 400; }
 [data-wsr-table] th:has([data-wsr-sort="client"]), [data-wsc-table] th:has([data-wsc-sort="client"]) { width: 19%; }
 [data-wsr-table] th:first-child:has(+ th [data-wsr-sort="client"]):not(:has(button)) { width: 64px; white-space: nowrap; }
+[data-wsc-table] th:first-child { width: 64px; white-space: nowrap; }
 :is([data-wsr-table], [data-wsc-table]) th:last-child { width: 170px; }
 [data-wsc-table] th:has([data-wsc-sort="system_hours"]) { width: 20%; }
 [data-wsc-table] td[data-label="Hours / break"] { overflow-wrap: normal; }
@@ -674,6 +685,7 @@
 .ws-workspace:has([data-wsc-table]) > details > ul > li > p { flex-basis: 100%; }
 .ws-workspace:has([data-wsc-table]) > details > .btn { margin: 0 8px 8px 0; }
 @media (max-width: 900px) {
+  #modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table]) td.ws-actions > .btn { min-height: 44px; }
   .ws-workspace:has([data-wsc-table]) > .ws-notice { display: flex; }
   .ws-workspace:has([data-wsc-table]) > .ws-notice > .btn { align-self: flex-start; }
   [data-protected-editor] .ws-child-fields { grid-template-columns: 1fr; }

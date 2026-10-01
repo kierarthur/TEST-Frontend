@@ -13,6 +13,50 @@ const fixtures = JSON.parse(readFileSync(
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
+test('History opens a completed report and loads its immutable detail pages without a mutation',async({page},testInfo)=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any,workspace={...fixture,combined_source_workspace:true};
+    const report={report_key:'FINAL:proof',client:'Example Trust',source:'NHSP',period:'27 Sep 2026',
+      report:'1234',finalised_at:'30 Sep 2026, 15:00',finalised_by:'Office user'};
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>workspace};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action!=='COMBINED_REVIEW_WORKSPACE')throw new Error('Unexpected mutation');
+      if(request.payload.tab!=='history')return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',
+        tab:request.payload.tab,section:'questions',rows:[],counts:{questions:0},owners:[],scope_options:[],has_more:false})};
+      if(request.payload.report_key)return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_COMPLETED_REPORT_V1',report,
+        shifts:[{candidate:request.payload.cursor?'Second Worker':'First Worker',day_date:'21 Sep 2026',
+          start:'09:00',end:'17:00',break_minutes:30,net_minutes:450,booking_reference:'123'}],
+        movements:[],shift_count:2,movement_count:0,invoice_charge_pence:0,
+        has_more:!request.payload.cursor,next_cursor:request.payload.cursor?'':'second-page'})};
+      return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_REPORT_HISTORY_V1',rows:[report],
+        scope_options:[{week_ending:'2026-09-20',period:'20 Sep 2026'},{week_ending:'2026-09-27',period:'27 Sep 2026'}],has_more:false})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('history');
+  },fixtures.workspace);
+  await expect(page.locator('[data-wsr-filter="week_ending"]')).toHaveValue('2026-09-27');
+  await page.getByRole('button',{name:'View report',exact:true}).click();
+  await expect(page.getByText('First Worker',{exact:true})).toBeVisible();
+  await expect(page.getByText('30 min',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Load more report details',exact:true}).click();
+  await expect(page.getByText('Second Worker',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Load more report details',exact:true})).toHaveCount(0);
+  for(const width of [390,768,1700]){
+    await page.setViewportSize({width,height:900});
+    for(const region of await page.locator('[data-wsr-table]').all())
+      expect(await region.evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
+  }
+  await page.screenshot({path:testInfo.outputPath('completed-report-detail.png'),fullPage:true});
+  await page.getByRole('button',{name:'Back to completed reports',exact:true}).click();
+  await expect(page.getByRole('button',{name:'View report',exact:true})).toBeVisible();
+  await page.locator('[data-wsr-filter="week_ending"]').selectOption('2026-09-20');
+  await expect(page.locator('[data-wsr-filter="week_ending"]')).toBeFocused();
+  await page.locator('#modalTabs').getByRole('button',{name:/^Queries/}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__requests.at(-1)?.payload.week_ending)).toBe('2026-09-20');
+  expect(await page.evaluate(()=>(window as any).__requests.every((request:any)=>request.action==='COMBINED_REVIEW_WORKSPACE'))).toBe(true);
+});
+
 test('combined finalise reviews eligible clients only and retains their individual completion results',async({page},testInfo)=>{
   await loadOfficeFoundation(page);
   await page.evaluate(async(workspace:any)=>{
@@ -37,7 +81,10 @@ test('combined finalise reviews eligible clients only and retains their individu
     };
     await win.CloudTMSWeeklySourceImportWorkspaceV1.open('finalise');
   },fixtures.workspace);
+  await expect(page.locator('[data-wsc-select="3"]')).toHaveCount(0);
+  await page.locator('[data-wsc-list="blocked"]').click();
   await expect(page.locator('[data-wsc-select="3"]')).toBeDisabled();
+  await page.locator('[data-wsc-list="ready"]').click();
   await expect(page.locator('#modalTabs button.active')).toHaveText(/Finalise report/);
   await expect(page.locator('[data-wsc-table] tbody tr')).toHaveCount(2);
   expect(await page.locator('[data-wsc-sort="client"]').evaluate(el=>getComputedStyle(el).borderTopWidth)).toBe('0px');
@@ -59,6 +106,42 @@ test('combined finalise reviews eligible clients only and retains their individu
     '00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002']);
 });
 
+test('combined query Open accepts only selected eligible shifts after explicit confirmation',async({page})=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any, workspace={...fixture,combined_source_workspace:true};
+    const group={...fixture.queries.rows[0],combined_key:'accept-row',scope_key:'accept-cycle'};
+    group.actions=[{label:'Open',enabled:true,payload:{detail:{candidate:group.candidate,
+      client:group.client,shifts:group.children}}}];
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>workspace};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action==='COMBINED_REVIEW_WORKSPACE')return {ok:true,json:async()=>({
+        contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'questions',
+        rows:[group],owners:[],scope_options:[],counts:{questions:1},has_more:false})};
+      if(request.action!=='ACCEPT_SYSTEM_HOURS')throw new Error('Unexpected command');
+      return {ok:true,json:async()=>({ok:true,status:'COMPLETE'})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  await page.getByRole('button',{name:'Open',exact:true}).click();
+  await expect(page.locator('[data-wsa-accept-selected]')).toBeDisabled();
+  await page.locator('[data-wsa-accept-incident]').first().check();
+  await page.locator('[data-wsa-accept-selected]').click();
+  await expect(page.getByRole('dialog',{name:'Accept system hours',exact:true})).toBeVisible();
+  await expect(page.locator('[data-wsa-run-command]')).toBeDisabled();
+  await expect(page.getByText('Mon 14 Sep 2026: 09:00-18:00 (30 min break)',{exact:true})).toBeVisible();
+  await expect(page.getByText('Mon 14 Sep 2026: 09:00-17:00 (30 min break)',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__requests.filter((r:any)=>r.action==='ACCEPT_SYSTEM_HOURS'))).toHaveLength(0);
+  await page.getByLabel('I confirm the system hours are correct for the selected shifts.').check();
+  await page.locator('#modalBody').getByRole('button',{name:'Accept system hours',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__requests.filter((r:any)=>r.action==='ACCEPT_SYSTEM_HOURS').length)).toBe(1);
+  const actual=await page.evaluate(()=>(window as any).__requests.find((r:any)=>r.action==='ACCEPT_SYSTEM_HOURS').payload);
+  const expected=structuredClone(fixtures.workspace.queries.rows[0].accept_system_hours_action.payload);
+  expected.selection.incident_ids=expected.selection.incident_ids.slice(0,1);
+  expect(actual).toEqual(expected);
+});
+
 test('combined queries retain independent cycle actions and full-result seek',async({page},testInfo)=>{
   await loadOfficeFoundation(page);
   await page.evaluate(async fixture=>{
@@ -66,7 +149,7 @@ test('combined queries retain independent cycle actions and full-result seek',as
     const workspace={...fixture,combined_source_workspace:true};
     const rows=[1,2].map(n=>({combined_key:'row'+n,scope_key:'cycle'+n,row_key:'qg_'+String(n).repeat(64),
       group_key:'qg_'+String(n).repeat(64),candidate:'Worker '+n,candidate_sort:'Worker '+n,client:'Trust '+n,
-      source:'NHSP',period:'27 Sep 2026',issues:1,status:{text:'Needs action'},actions:[],
+      source:'NHSP',period:'27 Sep 2026',issues:1,status:{text:'Needs action'},actions:[{label:'Open',enabled:true}],
       children:[{day_date:'21 Sep 2026',candidate_hours:'7 hours',system_hours:'7.5 hours',issue:'Hours differ',
         actions:[{label:'Protect pay',enabled:true,payload:{work_date:'2026-09-21',candidate_id:'candidate'+n}}]}]}));
     const owners=[1,2].map(n=>({key:'cycle'+n,protected_pay_enabled:true,bulk_actions:{
@@ -89,7 +172,8 @@ test('combined queries retain independent cycle actions and full-result seek',as
     await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
   },fixtures.workspace);
   await expect(page.locator('[data-wsr-select]')).toHaveCount(2);
-  for (const width of [390,1700]) {
+  await page.evaluate(()=>document.body.classList.add('ctms-summary-proposal'));
+  for (const width of [280,390,768,1700]) {
     await page.setViewportSize({width,height:900});
     expect(await page.locator('[data-wsr-table]').evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
     const buttons=page.locator('[data-wsr-table] tbody tr').first().locator('td.ws-actions > button');
@@ -106,6 +190,10 @@ test('combined queries retain independent cycle actions and full-result seek',as
   expect(sent[0].payload.selection.group_keys).toEqual(['qg_'+'1'.repeat(64)]);
   expect(sent[1].payload.selection.group_keys).toEqual(['qg_'+'2'.repeat(64)]);
   await page.getByText('Shifts for Worker 1',{exact:true}).click();
+  for (const width of [280,390,768,1700]) {
+    await page.setViewportSize({width,height:900});
+    expect(await page.locator('[data-wsr-table]').evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
+  }
   await page.locator('[data-wsr-row="row1"][data-wsr-child="0"]').click();
   await expect.poll(()=>page.evaluate(()=>(window as any).__actions.at(-1)?.payload?.candidate_id)).toBe('candidate1');
   await expect(page.locator('#modalTitle')).toHaveText('Protect shift pay');
@@ -851,7 +939,10 @@ test('Imports keeps signed-Timesheet checks inside the same weekly workspace', a
       attention_rows: [
         { row_key: 'authority-1', candidate: 'Abigail Jones', day_date: 'Mon 14 Sep 2026', attention: 'Hours are different', reference: 'Not added', status: { text: 'Manager correction needed', tone: 'warning' }, actions: [{ label: 'View Timesheet', enabled: true, payload: { timesheet_id: 'timesheet-1' } }, { label: 'Email manager', enabled: true, payload: { comparison_id: 'comparison-1' } }] },
         { row_key: 'authority-2', candidate: 'Jane Smith', day_date: 'Tue 15 Sep 2026', attention: 'Reference is missing', reference: 'Not added', status: { text: 'Reference needed', tone: 'warning' }, actions: [{ label: 'View Timesheet', enabled: true, payload: { timesheet_id: 'timesheet-2' } }] }
-      ]
+      ],
+      waiting_count: 1,
+      waiting_rows: [{ row_key: 'authority-waiting-4', candidate: 'Mary Brown', day_date: 'Week ending 20 Sep 2026', attention: 'Timesheet not yet completed', reference: 'Not added', status: { text: 'Waiting for completed Timesheet', tone: 'neutral' }, actions: [] }],
+      ready_rows: [{ row_key: 'authority-ready-3', candidate: 'John Jones', day_date: 'Wed 16 Sep 2026', attention: 'Source reference added', reference: 'REF-3', status: { text: 'Ready for Office authorisation', tone: 'positive' }, actions: [{ label: 'View Timesheet', enabled: true, payload: { timesheet_id: 'timesheet-3' } }] }]
     };
     const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
     await api.open();
@@ -862,8 +953,19 @@ test('Imports keeps signed-Timesheet checks inside the same weekly workspace', a
   await expect(page.getByText('Timesheet hours are used. The client system is checked so matching references can be added.')).toBeVisible();
   await expect(page.getByText('Hours are different')).toBeVisible();
   await expect(page.getByText('Reference is missing')).toBeVisible();
-  await expect(page.getByRole('button', { name: /select all|unselect all/i })).toHaveCount(0);
-  await expect(page.getByRole('checkbox', { name: 'Select all visible rows' })).toHaveCount(1);
+  await expect(page.getByRole('tab', { name: 'Checks (2)' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: 'Ready (1)' })).toBeEnabled();
+  await expect(page.getByRole('tab', { name: 'Waiting (1)' })).toBeEnabled();
+  await expect(page.getByRole('checkbox', { name: 'Select all visible rows' })).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Ready (1)' }).click();
+  await expect(page.getByText('John Jones')).toBeVisible();
+  await expect(page.getByText('Abigail Jones')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Checks (2)' }).click();
+  await expect(page.getByText('Hours are different')).toBeVisible();
+  await page.getByRole('tab', { name: 'Waiting (1)' }).click();
+  await expect(page.getByText('Mary Brown')).toBeVisible();
+  await expect(page.getByText('Waiting for completed Timesheet')).toBeVisible();
+  await page.getByRole('tab', { name: 'Checks (2)' }).click();
   await page.screenshot({ path: testInfo.outputPath('weekly-imports-two-journeys.png'), fullPage: true });
 });
 
@@ -938,8 +1040,8 @@ test('NHSP earlier-week filter changes the selected server cycle without changin
   await expect(page.getByRole('combobox', { name: 'Finalisation week' })).toHaveValue('52222222-2222-4222-8222-222222222222');
   await expect(page.getByRole('combobox', { name: 'Trust' })).toHaveCount(1);
   await expect(page.locator('.ws-context-bar [data-ws-context="cycle"]')).toHaveCount(0);
-  expect(last.client_id).toBe('');
-  expect(last.report_scope_id).toBe('');
+  expect(last.client_id).toBeUndefined();
+  expect(last.report_scope_id).toBeUndefined();
 });
 
 for (const width of [360, 720, 1120]) {
@@ -1510,13 +1612,13 @@ test('hosted TEST Office query modal fits phone and Fold widths without horizont
   await page.evaluate(() => { void (window as any).CloudTMSWeeklySourceImportWorkspaceV1.open(); });
   await expect(page.locator('#modal')).toBeVisible({ timeout: 30_000 });
   await page.locator('#modalTabs').getByRole('button', { name: /^Queries(?:\s|$)/ }).click();
-  await expect(page.locator('.ws-query-scroll')).toBeVisible();
+  await expect(page.locator('[data-wsr-table], .ws-query-scroll').first()).toBeVisible();
   for (const width of [390, 280, 768]) {
     await page.setViewportSize({ width, height: width === 768 ? 1024 : 844 });
     const sizes = await page.evaluate(() => {
       const root = document.documentElement;
       const modal = document.querySelector('#modal')!;
-      const region = document.querySelector('.ws-query-scroll')!;
+      const region = document.querySelector('[data-wsr-table], .ws-query-scroll')!;
       return {
         pageOverflow: root.scrollWidth - root.clientWidth,
         modalOverflow: modal.scrollWidth - modal.clientWidth,
@@ -1526,7 +1628,7 @@ test('hosted TEST Office query modal fits phone and Fold widths without horizont
     expect(sizes.pageOverflow, `${width}px page`).toBe(0);
     expect(sizes.modalOverflow, `${width}px modal`).toBe(0);
     expect(sizes.queryOverflow, `${width}px query`).toBe(0);
-    await expect(page.locator('[data-ws-bulk-action="ASK_CANDIDATES"]')).toBeDisabled();
-    await expect(page.locator('[data-ws-bulk-action="SEND_MANAGER_NOW"]')).toBeDisabled();
+    await expect(page.locator('[data-wsr-outreach="ASK_CANDIDATES"], [data-ws-bulk-action="ASK_CANDIDATES"]').first()).toBeDisabled();
+    await expect(page.locator('[data-wsr-outreach="SEND_MANAGER_NOW"], [data-ws-bulk-action="SEND_MANAGER_NOW"]').first()).toBeDisabled();
   }
 });

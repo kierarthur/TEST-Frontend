@@ -251,17 +251,26 @@
       contract_id: asText(raw.contract_id),
       body: plainMessage(raw.body || raw.message || raw.guidance, ''),
       fields: [...fields, ...chargeFields],
+      accept_group: asObject(payload.accept_group),
       shifts: asArray(raw.shifts).map((row) => ({
+        incident_id: asText(row.incident_id),
         day_date: asText(row.day_date), candidate_hours: asText(row.candidate_hours),
+        candidate_response: asText(row.candidate_response), candidate_responded_at: asText(row.candidate_responded_at),
+        manager_response: asText(row.manager_response), manager_responded_at: asText(row.manager_responded_at),
+        manager_intended_hours: asText(row.manager_intended_hours),
         system_hours: asText(row.system_hours), issue: plainMessage(row.issue, ''), status: asText(row.status?.text || (typeof row.status === 'string' ? row.status : ''))
       }))
     };
   }
 
   function renderDetail(model) {
+    const eligible = model.accept_group?.accept_system_hours_action?.enabled === true
+      ? new Set(asArray(model.accept_group.accept_system_hours_action.payload?.selection?.incident_ids)) : new Set();
     const fields = model.fields.map((field) => `<div><span>${escapeHtml(field.label)}</span><strong>${escapeHtml(field.value)}</strong></div>`).join('');
-    const shifts = model.shifts.length ? `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Day/date</th><th>Candidate says they worked</th><th>System hours</th><th>Issue and status</th></tr></thead><tbody>${model.shifts.map((row) => `<tr><td>${escapeHtml(row.day_date || '—')}</td><td>${escapeHtml(row.candidate_hours || '—')}</td><td>${escapeHtml(row.system_hours || '—')}</td><td>${escapeHtml([row.issue, row.status].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
-    return `<div class="ws-child" data-wsa-screen="details">${model.heading ? `<h3>${escapeHtml(model.heading)}</h3>` : ''}${model.body ? `<p>${escapeHtml(model.body)}</p>` : ''}${fields ? `<div class="ws-child-context">${fields}</div>` : ''}${shifts}<div class="ws-child-actions">${model.contract_id ? '<button type="button" class="btn btn-outline" data-wsa-review-contract>Review contract</button>' : ''}<button type="button" class="btn primary" data-wsa-close>Close</button></div></div>`;
+    const replyRows=model.shifts.filter(row=>row.candidate_response||row.manager_response).map(row=>`<tr><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.candidate_response||'No reply recorded')}<span class="ws-status-sub">${escapeHtml(row.candidate_responded_at)}</span></td><td>${escapeHtml(row.manager_response||'No reply recorded')}<span class="ws-status-sub">${escapeHtml(row.manager_responded_at)}</span>${row.manager_intended_hours?`<p>${escapeHtml(row.manager_intended_hours)}</p>`:''}</td></tr>`).join('');
+    const replies=replyRows?`<h3>Recorded replies</h3><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Day/date</th><th>Candidate reply</th><th>Manager reply</th></tr></thead><tbody>${replyRows}</tbody></table></div>`:'';
+    const shifts = model.shifts.length ? `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr>${eligible.size?'<th>Select</th>':''}<th>Day/date</th><th>Candidate says they worked</th><th>System hours</th><th>Issue and status</th></tr></thead><tbody>${model.shifts.map((row) => `<tr>${eligible.size?`<td>${eligible.has(row.incident_id)?`<input type="checkbox" data-wsa-accept-incident="${escapeHtml(row.incident_id)}" aria-label="Select system hours for ${escapeHtml(row.day_date)}">`:''}</td>`:''}<td>${escapeHtml(row.day_date || '—')}</td><td>${escapeHtml(row.candidate_hours || '—')}</td><td>${escapeHtml(row.system_hours || '—')}</td><td>${escapeHtml([row.issue, row.status].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
+    return `<div class="ws-child" data-wsa-screen="details">${model.heading ? `<h3>${escapeHtml(model.heading)}</h3>` : ''}${model.body ? `<p>${escapeHtml(model.body)}</p>` : ''}${fields ? `<div class="ws-child-context">${fields}</div>` : ''}${shifts}${replies}<div class="ws-child-actions">${eligible.size?'<button type="button" class="btn btn-outline" data-wsa-accept-selected disabled>Accept selected system hours</button>':''}${model.contract_id ? '<button type="button" class="btn btn-outline" data-wsa-review-contract>Review contract</button>' : ''}<button type="button" class="btn primary" data-wsa-close>Close</button></div></div>`;
   }
 
   function normaliseContractChooser(payload) {
@@ -560,6 +569,22 @@
       const host = root.document?.querySelector('[data-wsa-screen="details"]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1'; host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
+      const accept = host.querySelector('[data-wsa-accept-selected]');
+      const selectedIds = () => [...host.querySelectorAll('[data-wsa-accept-incident]:checked')].map(input=>input.dataset.wsaAcceptIncident);
+      host.querySelectorAll('[data-wsa-accept-incident]').forEach(input=>input.addEventListener('change',()=>{
+        if(accept)accept.disabled=!workspaceApi()?.acceptSystemShiftSelectionPayload?.(model.accept_group,selectedIds());
+      }));
+      accept?.addEventListener('click',()=>{
+        const ids=selectedIds();
+        const request=workspaceApi()?.acceptSystemShiftSelectionPayload?.(model.accept_group,ids);
+        if(!request)return;
+        const shifts=model.shifts.filter(row=>ids.includes(row.incident_id));
+        markCompletedChildClean();closeChild();
+        openCommand({label:'Accept system hours',command:'ACCEPT_SYSTEM_HOURS',payload:request,
+          context:{candidate:model.accept_group.candidate,client:model.accept_group.client,
+            candidate_hours:shifts.map(row=>`${row.day_date}: ${row.candidate_hours}`).join('; '),
+            system_hours:shifts.map(row=>`${row.day_date}: ${row.system_hours}`).join('; ')}});
+      });
       host.querySelector('[data-wsa-review-contract]')?.addEventListener('click', (event) => {
         void reviewContract(model.contract_id, event.currentTarget);
       });
@@ -1048,8 +1073,13 @@
     if (label === 'View Timesheet' && typeof root.openTimesheet === 'function') {
       return root.openTimesheet({ timesheet_id: asText(detail.payload?.timesheet_id) });
     }
-    if (label === 'Email manager' && root.CloudTmsImportReviewV1?.openImportsModal) {
-      return root.CloudTmsImportReviewV1.openImportsModal();
+    if (label === 'Email manager') {
+      const importId = asText(detail.payload?.import_id);
+      if (importId && typeof root.CloudTmsImportReviewV1?.openReview === 'function') {
+        return root.CloudTmsImportReviewV1.openReview(importId);
+      }
+      return openDetail({ detail: { problem: 'The manager correction review is unavailable.',
+        guidance: 'Refresh the source checks before opening this action.' } }, 'View details');
     }
     if (label === 'Correct final source') return openCorrectFinal(detail.payload);
     if (label === 'Choose contract') return openContractChooser(detail.payload);

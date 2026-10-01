@@ -326716,7 +326716,9 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
   // The Weekly Source workspace owns its own server-bound action and selection
   // gates. The parent record modal must not turn initially disabled actions on
   // before the workspace has a valid selection (or override its later state).
-  if (!ro && el.closest?.('.ws-workspace[data-ws-contract="WEEKLY_SOURCE_IMPORT_WORKSPACE_V1"]')) return;
+  // Its child confirmations/detail screens own the same gates. In particular,
+  // opening a child must not enable an unconfirmed action or empty selection.
+  if (!ro && el.closest?.('.ws-workspace[data-ws-contract="WEEKLY_SOURCE_IMPORT_WORKSPACE_V1"], .ws-child[data-wsa-screen]')) return;
   const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
 
 

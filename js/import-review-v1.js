@@ -2257,6 +2257,7 @@
     contract: CONTRACT,
     pageSizes: PAGE_SIZES,
     openImportsModal: openImportsModalV1,
+    openReview,
     ensureContract,
     invalidateClientEligibility,
     formatDate,

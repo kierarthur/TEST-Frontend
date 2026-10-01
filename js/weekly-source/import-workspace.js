@@ -295,8 +295,12 @@
         journey: {
           authority_mode: asText(journey.authority_mode).toUpperCase(),
           title: asText(journey.title), body: asText(journey.body),
+          waiting_count: integer(journey.waiting_count),
+          waiting_rows: asArray(journey.waiting_rows),
           attention_count: integer(journey.attention_count),
-          attention_rows: asArray(journey.attention_rows)
+          attention_rows: asArray(journey.attention_rows),
+          ready_count: integer(journey.ready_count),
+          ready_rows: asArray(journey.ready_rows)
         }
       },
       queries: { ...normalisePage(queries), protected_pay_enabled: queries.protected_pay_enabled === true, protected_shifts: normalisePage(queries.protected_shifts), bulk_actions: normaliseBulkActions(queries.bulk_actions), office_checks: normalisePage(queries.office_checks) },
@@ -406,12 +410,26 @@
 
   function renderImports(workspace, state) {
     const journey = workspace.imports.journey || {};
-    const attentionRows = asArray(journey.attention_rows).map((rowValue) => {
+    const signedChecks = asArray(journey.attention_rows);
+    const signedReady = asArray(journey.ready_rows);
+    const signedWaiting = asArray(journey.waiting_rows);
+    const signedGroups = { checks: signedChecks, ready: signedReady, waiting: signedWaiting };
+    const signedTab = signedGroups[state.signedTab]?.length ? state.signedTab
+      : signedChecks.length ? 'checks' : signedReady.length ? 'ready'
+      : signedWaiting.length ? 'waiting' : 'checks';
+    const signedRows = signedGroups[signedTab].map((rowValue) => {
       const row = asObject(rowValue);
       const actions = normaliseActions(row.actions, ACTIONS.imports);
-      return `<tr><td><input type="checkbox" data-ws-import-attention value="${escapeHtml(asText(row.row_key))}" aria-label="Select ${escapeHtml(asText(row.candidate) || 'row')}"></td><td data-label="Candidate">${escapeHtml(asText(row.candidate) || '—')}</td><td data-label="Day/date">${escapeHtml(asText(row.day_date) || '—')}</td><td data-label="What needs attention">${escapeHtml(asText(row.attention) || '—')}</td><td data-label="Reference">${escapeHtml(asText(row.reference) || '—')}</td><td data-label="Status">${renderStatus(row.status)}</td><td data-label="Action" class="ws-actions">${renderActions(actions, false, asText(row.row_key))}</td></tr>`;
+      return `<tr><td data-label="Candidate">${escapeHtml(asText(row.candidate) || '—')}</td><td data-label="Day/date">${escapeHtml(asText(row.day_date) || '—')}</td><td data-label="Check">${escapeHtml(asText(row.attention) || '—')}</td><td data-label="Reference">${escapeHtml(asText(row.reference) || '—')}</td><td data-label="Status">${renderStatus(row.status)}</td><td data-label="Action" class="ws-actions">${renderActions(actions, false, asText(row.row_key))}</td></tr>`;
     }).join('');
-    const journeyPanel = journey.title ? `<section class="ws-import-journey" data-ws-import-journey="${escapeHtml(journey.authority_mode)}"><div class="ws-import-journey__heading"><div><span>Journey</span><strong>${escapeHtml(journey.title)}</strong></div>${journey.attention_count ? `<span class="ws-status ws-status--warning">${journey.attention_count} need attention</span>` : '<span class="ws-status ws-status--positive">Up to date</span>'}</div>${journey.body ? `<p>${escapeHtml(journey.body)}</p>` : ''}${journey.authority_mode === 'TIMESHEET_AUTHORITY' ? `<div class="ws-inner-tabs" role="tablist"><button type="button" role="tab" aria-selected="true">Needs attention (${journey.attention_count})</button><button type="button" role="tab" aria-selected="false">Ready</button><button type="button" role="tab" aria-selected="false">History</button></div><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th><input type="checkbox" data-ws-import-attention-header aria-label="Select all visible rows"></th><th>Candidate</th><th>Day/date</th><th>What needs attention</th><th>Reference</th><th>Status</th><th>Action</th></tr></thead><tbody>${attentionRows || '<tr><td colspan="7" class="ws-empty">No Timesheet checks need attention.</td></tr>'}</tbody></table></div><div class="ws-import-journey__actions"><span data-ws-import-attention-count>0 selected</span><button type="button" class="btn primary" data-ws-import-email-manager disabled>Email manager</button></div>` : ''}</section>` : '';
+    const signedJourneyPanel = journey.authority_mode === 'TIMESHEET_AUTHORITY'
+      ? `<div class="ws-inner-tabs" role="tablist" aria-label="Signed Timesheet checks"><button type="button" role="tab" data-ws-signed-tab="checks" aria-selected="${signedTab === 'checks'}"${!signedChecks.length ? ' disabled' : ''}>Checks (${signedChecks.length})</button><button type="button" role="tab" data-ws-signed-tab="ready" aria-selected="${signedTab === 'ready'}"${!signedReady.length ? ' disabled' : ''}>Ready (${signedReady.length})</button><button type="button" role="tab" data-ws-signed-tab="waiting" aria-selected="${signedTab === 'waiting'}"${!signedWaiting.length ? ' disabled' : ''}>Waiting (${signedWaiting.length})</button></div><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th>Candidate</th><th>Day/date</th><th>Check</th><th>Reference</th><th>Status</th><th>Action</th></tr></thead><tbody>${signedRows || `<tr><td colspan="6" class="ws-empty">${signedTab === 'ready' ? 'No Timesheets are ready for Office authorisation.' : signedTab === 'waiting' ? 'No Timesheets are waiting for completion.' : 'No signed Timesheet checks need attention.'}</td></tr>`}</tbody></table></div>`
+      : '';
+    const journeyStatus = journey.attention_count
+      ? `<span class="ws-status ws-status--warning">${journey.attention_count} need attention</span>`
+      : journey.waiting_count ? `<span class="ws-status ws-status--neutral">${journey.waiting_count} waiting</span>`
+      : '<span class="ws-status ws-status--positive">Up to date</span>';
+    const journeyPanel = journey.title ? `<section class="ws-import-journey" data-ws-import-journey="${escapeHtml(journey.authority_mode)}"><div class="ws-import-journey__heading"><div><span>Journey</span><strong>${escapeHtml(journey.title)}</strong></div>${journeyStatus}</div>${journey.body ? `<p>${escapeHtml(journey.body)}</p>` : ''}${signedJourneyPanel}</section>` : '';
     const isNhsp = workspace.profile.id.startsWith('NHSP_');
     const uploadProfileId = isNhsp
       ? (NHSP_UPLOAD_PROFILES.some((profile) => profile.id === state.uploadProfileId)
@@ -502,6 +520,21 @@
 
   function exactAcceptSystemHoursAction(group) {
     return exactAcceptSystemHoursPayload(group?.accept_system_hours_action);
+  }
+
+  function acceptSingleSystemShiftPayload(group, incidentId) {
+    return acceptSystemShiftSelectionPayload(group, [incidentId]);
+  }
+
+  function acceptSystemShiftSelectionPayload(group, incidentIds) {
+    if (group?.accept_system_hours_action?.enabled !== true) return null;
+    const payload = exactAcceptSystemHoursAction(group);
+    if (!payload || payload.selection.group_keys.length !== 1
+      || payload.selection.group_keys[0] !== group.group_key
+      || !Array.isArray(incidentIds) || !incidentIds.length
+      || new Set(incidentIds).size !== incidentIds.length
+      || incidentIds.some(id => !payload.selection.incident_ids.includes(id))) return null;
+    return { ...payload, selection: { ...payload.selection, incident_ids: [...incidentIds].sort() } };
   }
 
   function combinedAcceptSystemHoursPayload() {
@@ -820,14 +853,14 @@
     const notices = workspace.notices.map((notice) => `<div class="ws-notice ws-notice--${escapeHtml(notice.tone)}"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');
     const error = asText(state.error) ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>Weekly source information could not be loaded</strong><span>${escapeHtml(state.error)}</span></div>` : '';
     const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;
-    const review = ['imports','queries'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;
+    const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;
     if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
     const body = state.loading === true ? '<div class="ws-loading" role="status">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);
     return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${notices}${error}${body}</div>`;
   }
 
   const session = {
-    reviews: {}, reviewSingleScope: false,
+    reviews: {}, reviewSingleScope: false, sourceFilters: {},
     combined: { model: null, filters: {}, list: 'ready', sort: '', direction: 'asc', seek: '', selected: new Set(), exclusions: new Set(), batch: null, error: '' },
     workspace: null, activeTab: 'imports', loading: false, error: '', requestSequence: 0,
     query: { filters: {} },
@@ -838,7 +871,7 @@
       history: { key: 'when', direction: 'desc' }
     },
     scrollByTab: Object.create(null), finaliseRetry: null, loadedTab: '',
-    rateWarningSelection: new Set(), expandedRateWarning: '', uploadProfileId: '',
+    rateWarningSelection: new Set(), expandedRateWarning: '', uploadProfileId: '', signedTab: 'checks',
     groupSelection: { mode: 'NONE', ids: new Set(), exclusions: new Set() }, shiftSelections: new Map(), observer: null
   };
 
@@ -863,7 +896,7 @@
   function queryFor(tab, extra = {}) {
     const selected = session.workspace?.selected || {};
     const sort = session.sort[tab] || {};
-    return {
+    return Object.fromEntries(Object.entries({
       tab,
       source_group_id: selected.source_group_id,
       source_cycle_id: selected.source_cycle_id,
@@ -876,7 +909,7 @@
       } : {}),
       ...(tab === 'history' ? { cycle_filter: session.workspace?.history?.cycle_filter } : {}),
       ...extra
-    };
+    }).filter(([, value]) => value !== null && value !== undefined && value !== ''));
   }
 
   function pageFor(tab) { return tab === 'finalise' ? session.workspace?.finalise?.[session.workspace.finalise.active_list] : session.workspace?.[tab]; }
@@ -916,7 +949,7 @@
   }
 
   async function loadWorkspace(tab = session.activeTab, append = false) {
-    if(append&&['imports','queries'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope)return loadCombinedReview(tab,true);
+    if(append&&['imports','queries','history'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope)return loadCombinedReview(tab,true);
     if (tab === 'finalise' && session.workspace?.combined_source_workspace) return loadCombinedFinalise(append);
     const sequence = ++session.requestSequence;
     session.loading = !append; session.error = ''; if (session.workspace && !append) await repaint();
@@ -934,7 +967,7 @@
       }
       session.workspace = next; syncUploadProfile(next); session.loadedTab = tab; session.loading = false;
       session.reloadOnReturn = !currentFrame();
-      if(['imports','queries'].includes(tab)&&next.combined_source_workspace&&!session.reviewSingleScope) return loadCombinedReview(tab);
+      if(['imports','queries','history'].includes(tab)&&next.combined_source_workspace&&!session.reviewSingleScope) return loadCombinedReview(tab);
     } catch (error) { if (sequence !== session.requestSequence) return; session.loadedTab = tab; session.loading = false; session.error = friendlyWorkspaceError(error); }
     await repaint();
     const focus = session.contextFocus;
@@ -946,7 +979,13 @@
   }
 
   async function loadCombinedReview(tab,append=false) {
-    const state=session.reviews[tab] ||= {filters:{},section:tab==='imports'?'current':'questions',sort:tab==='imports'?'uploaded':'',direction:tab==='imports'?'desc':'asc',seek:''};
+    const state=session.reviews[tab] ||= {filters:{},section:tab==='imports'?'current':'questions',sort:tab==='history'?'finalised_at':tab==='imports'?'uploaded':'',direction:tab==='queries'?'asc':'desc',seek:''};
+    state.filters=session.sourceFilters;
+    const filterIdentity=JSON.stringify(state.filters);
+    if(state.filterIdentity!==filterIdentity){
+      state.selected?.clear();state.reportDetail=null;state.seek='';state.filterIdentity=filterIdentity;
+      append=false;
+    }
     if(append&&state.loadingMore)return;
     state.loadingMore=append;
     const sequence=++session.requestSequence; session.loading=!append; session.error=''; await repaint();
@@ -955,19 +994,56 @@
         sort_key:state.sort||(state.filters.client_id?'candidate':'client'),sort_direction:state.direction,
         seek:state.seek,limit:50,...(append?{cursor:state.model?.next_cursor||''}:{})});
       if(sequence!==session.requestSequence)return;
-      if(model?.contract!=='WEEKLY_SOURCE_COMBINED_REVIEW_V1')throw new Error('The source work could not be verified.');
+      if(model?.contract!==(tab==='history'?'WEEKLY_SOURCE_REPORT_HISTORY_V1':'WEEKLY_SOURCE_COMBINED_REVIEW_V1'))throw new Error('The source work could not be verified.');
       if(!Object.values(state.filters).some(Boolean))state.options=model.scope_options;
+      if(tab==='history'&&!append&&!Object.prototype.hasOwnProperty.call(state.filters,'week_ending')){
+        const recent=asArray(model.scope_options).map(option=>option.week_ending).filter(Boolean).sort().at(-1);
+        if(recent){state.options=model.scope_options;state.filters.week_ending=recent;return loadCombinedReview(tab);}
+      }
       if(append&&state.model)model.rows=[...state.model.rows,...model.rows];
       state.model=model; session.loadedTab=tab;
       if(tab==='queries')session.workspace.counts.queries=Number(model.counts.questions||0)+Number(model.counts.checks||0);
     } catch(error){if(sequence===session.requestSequence)session.error=friendlyWorkspaceError(error);}
-    finally {if(sequence===session.requestSequence){state.loadingMore=false;session.loading=false;await repaint();}}
+    finally {if(sequence===session.requestSequence){state.loadingMore=false;session.loading=false;await repaint();restoreCombinedFilterFocus(state,'data-wsr-filter');}}
+  }
+
+  function restoreCombinedFilterFocus(state,attribute){
+    if(!state.filterFocus)return;
+    const input=[...(root.document?.querySelectorAll(`[${attribute}]`)||[])].find(element=>element.getAttribute(attribute)===state.filterFocus);
+    input?.focus();state.filterFocus=null;
   }
 
   function bindCombinedReview(host,tab) {
     const state=session.reviews[tab],model=state?.model; if(!model)return;
     state.selected ||= new Set();
     const reload=()=>{state.seek='';state.selected.clear();session.scrollByTab[tab]=0;loadCombinedReview(tab);};
+    const loadReport=async(key,append=false)=>{
+      if(state.reportBusy)return;
+      state.reportBusy=true;
+      try {
+        const detail=await issueCommand('COMBINED_REVIEW_WORKSPACE',{tab:'history',report_key:key,limit:50,
+          ...(append?{cursor:state.reportDetail?.next_cursor}:{} )});
+        if(detail?.contract!=='WEEKLY_SOURCE_COMPLETED_REPORT_V1')throw new Error('The completed report could not be verified.');
+        if(append&&state.reportDetail){detail.shifts=[...state.reportDetail.shifts,...detail.shifts];detail.movements=[...state.reportDetail.movements,...detail.movements];}
+        state.reportDetail=detail;
+      }catch(error){session.error=friendlyWorkspaceError(error);}
+      finally{state.reportBusy=false;await repaint();}
+    };
+    host.querySelectorAll('[data-wsr-report]').forEach(button=>button.addEventListener('click',()=>loadReport(button.dataset.wsrReport)));
+    host.querySelectorAll('[data-wsr-report-action]').forEach(button=>button.addEventListener('click',()=>{
+      const action=normaliseActions([state.reportDetail?.actions?.[Number(button.dataset.wsrReportAction)]],ACTIONS.imports)[0];
+      if(action&&action.enabled!==false)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:action}));
+    }));
+    host.querySelectorAll('[data-wsr-follow-up]').forEach(button=>button.addEventListener('click',async()=>{
+      const row=model.rows.find(item=>item.combined_key===button.dataset.wsrFollowUp);
+      if(!row?.follow_up_scope)return;
+      session.combined.singleScope=true;session.workspace.combined_source_workspace=false;
+      session.workspace.selected={...row.follow_up_scope};
+      await currentFrame()?.setTab?.('finalise');
+      await loadWorkspace('finalise');
+    }));
+    host.querySelector('[data-wsr-close-report]')?.addEventListener('click',()=>{state.reportDetail=null;repaint();});
+    host.querySelector('[data-wsr-report-more]')?.addEventListener('click',()=>loadReport(state.reportDetail.report.report_key,true));
     host.querySelectorAll('[data-wsr-select]').forEach(input=>input.addEventListener('change',()=>{input.checked?state.selected.add(input.dataset.wsrSelect):state.selected.delete(input.dataset.wsrSelect);repaint();}));
     host.querySelectorAll('[data-wsr-outreach]').forEach(button=>button.addEventListener('click',async()=>{
       if(state.busy)return;
@@ -992,20 +1068,28 @@
       finally{state.busy=false;await repaint();}
     }));
     host.querySelector('[data-wsr-refresh]')?.addEventListener('click',reload);
-    host.querySelectorAll('[data-wsr-filter]').forEach(input=>input.addEventListener('change',()=>{state.filters[input.dataset.wsrFilter]=input.value;state.sort=tab==='imports'?'uploaded':'';reload();}));
+    host.querySelectorAll('[data-wsr-filter]').forEach(input=>input.addEventListener('change',()=>{state.filterFocus=input.dataset.wsrFilter;state.filters[input.dataset.wsrFilter]=input.value;state.sort=tab==='history'?'finalised_at':tab==='imports'?'uploaded':'';reload();}));
     host.querySelectorAll('[data-wsr-section]').forEach(button=>button.addEventListener('click',()=>{state.section=button.dataset.wsrSection;reload();}));
     host.querySelectorAll('[data-wsr-sort]').forEach(button=>button.addEventListener('click',()=>{const key=button.dataset.wsrSort;state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc';state.sort=key;reload();}));
     host.querySelectorAll('[data-wsr-action]').forEach(button=>button.addEventListener('click',()=>{
       const row=model.rows.find(item=>item.combined_key===button.dataset.wsrRow);
       const actions=button.hasAttribute('data-wsr-child')?row?.children?.[Number(button.dataset.wsrChild)]?.actions:row?.actions;
       const action=normaliseActions([actions?.[Number(button.dataset.wsrAction)]],new Set([...ACTIONS.imports,...ACTIONS.queries,...ACTIONS.finalise,...ACTIONS.shifts]))[0];
+      if(action?.label==='Open'&&model.section==='questions')action.payload={...action.payload,accept_group:row};
       if(action&&action.enabled!==false)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:action}));
     }));
-    host.querySelector('[data-wsr-add-protected]')?.addEventListener('click',()=>root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:{label:'Add protected shift',payload:{source_group_id:state.filters.source_group_id||undefined,client_id:state.filters.client_id||undefined}}})));
-    host.querySelectorAll('[data-wsr-manage]').forEach(button=>button.addEventListener('click',async()=>{
-      const owner=model.owners.find(item=>item.key===button.dataset.wsrManage);if(!owner)return;
-      session.reviewSingleScope=true;session.workspace.selected={...owner.scope};await loadWorkspace('queries');
+    host.querySelectorAll('[data-wsr-accept-shift]').forEach(button=>button.addEventListener('click',()=>{
+      const row=model.rows.find(item=>item.combined_key===button.dataset.wsrRow);
+      const child=row?.children?.[Number(button.dataset.wsrAcceptShift)];
+      const payload=acceptSingleSystemShiftPayload(row,child?.incident_id);
+      if(!payload)return;
+      root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:{
+        label:'Accept system hours',command:'ACCEPT_SYSTEM_HOURS',payload,
+        context:{candidate:row.candidate,client:row.client,status:child.day_date+' · 1 shift selected',
+          candidate_hours:child.candidate_hours,system_hours:child.system_hours}
+      }}));
     }));
+    host.querySelector('[data-wsr-add-protected]')?.addEventListener('click',()=>root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:{label:'Add protected shift',payload:{source_group_id:state.filters.source_group_id||undefined,client_id:state.filters.client_id||undefined}}})));
     const table=host.querySelector('[data-wsr-table]');
     if(table){table.scrollTop=session.scrollByTab[tab]||0;table.addEventListener('scroll',()=>{session.scrollByTab[tab]=table.scrollTop;},{passive:true});}
     table?.addEventListener('keydown',event=>{
@@ -1022,19 +1106,29 @@
     if (append && session.combined.loadingMore) return;
     session.combined.loadingMore = append;
     const state = session.combined, sequence = ++session.requestSequence;
+    state.filters=session.sourceFilters;
+    const filterIdentity=JSON.stringify(state.filters);
+    if(state.filterIdentity!==filterIdentity){
+      state.selected.clear();state.exclusions.clear();state.seek='';state.filterIdentity=filterIdentity;
+      append=false;
+    }
     session.loading = !append; session.error = ''; await repaint();
     try {
       const model = await issueCommand('COMBINED_FINALISE_WORKSPACE', { ...state.filters,
-        list: state.list, sort_key: state.sort || (state.filters.client_id ? 'candidate' : 'client'),
+        list: state.list, sort_key: state.sort || (state.filters.client_id ? 'period' : 'client'),
         sort_direction: state.direction, seek: state.seek, limit: 50,
         ...(append ? { cursor: state.model?.next_cursor || '' } : {}) });
       if (sequence !== session.requestSequence) return;
       if (model?.contract !== 'WEEKLY_SOURCE_COMBINED_FINALISE_V1') throw new Error('Finalisation information could not be verified.');
+      if(!append&&!Number(model.counts?.[state.list]||0)){
+        const available=['ready','blocked'].find(key=>Number(model.counts?.[key]||0)>0);
+        if(available&&available!==state.list){state.list=available;return loadCombinedFinalise();}
+      }
       if (!Object.values(state.filters).some(Boolean)) state.options = model.scope_options;
       if (append && state.model) model.rows = [...state.model.rows,...model.rows];
       state.model = model; session.loadedTab = 'finalise';
     } catch (error) { if (sequence !== session.requestSequence) return; session.error = friendlyWorkspaceError(error); }
-    finally { if (sequence === session.requestSequence) { state.loadingMore = false; session.loading = false; await repaint(); } }
+    finally { if (sequence === session.requestSequence) { state.loadingMore = false; session.loading = false; await repaint(); restoreCombinedFilterFocus(state,'data-wsc-filter'); } }
   }
 
   function bindCombinedFinalise(host) {
@@ -1060,7 +1154,7 @@
       const action=normaliseActions(obligation?.progress?.actions,ACTIONS.tracker).find(item=>item.label==='No shifts to import');
       if(action&&action.enabled!==false)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:action}));
     }));
-    host.querySelectorAll('[data-wsc-filter]').forEach(input=>input.addEventListener('change',()=>{ state.filters[input.dataset.wscFilter]=input.value; state.sort=''; reload(); }));
+    host.querySelectorAll('[data-wsc-filter]').forEach(input=>input.addEventListener('change',()=>{ state.filterFocus=input.dataset.wscFilter; state.filters[input.dataset.wscFilter]=input.value; state.sort=''; reload(); }));
     host.querySelectorAll('[data-wsc-list]').forEach(button=>button.addEventListener('click',()=>{ state.list=button.dataset.wscList; reload(); }));
     host.querySelectorAll('[data-wsc-sort]').forEach(button=>button.addEventListener('click',()=>{ const key=button.dataset.wscSort; state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc'; state.sort=key; reload(); }));
     host.querySelectorAll('[data-wsc-select]').forEach(input=>input.addEventListener('change',()=>{ input.checked?state.selected.add(input.dataset.wscSelect):state.selected.delete(input.dataset.wscSelect); repaint(); }));
@@ -1371,30 +1465,12 @@
       uploadInput.click();
     }); uploadInput?.addEventListener('change', async () => { const files = [...(uploadInput.files || [])]; uploadInput.value = ''; if (!files.length) return; try { if (files.length > 1) await uploadSources(files); else await uploadSource(files[0]); await loadWorkspace('imports'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); } });
     const dailyInput = host.querySelector('[data-ws-daily-input]'); host.querySelector('[data-ws-daily]')?.addEventListener('click', () => dailyInput?.click()); dailyInput?.addEventListener('change', async () => { const file = dailyInput.files?.[0]; dailyInput.value = ''; if (file && typeof root.handleHrRotaFileDrop === 'function') await root.handleHrRotaFileDrop(file); });
-    const attentionHeader = host.querySelector('[data-ws-import-attention-header]');
-    const attentionRows = [...host.querySelectorAll('[data-ws-import-attention]')];
-    const attentionButton = host.querySelector('[data-ws-import-email-manager]');
-    const attentionCount = host.querySelector('[data-ws-import-attention-count]');
-    const syncAttention = () => {
-      const selected = attentionRows.filter((input) => input.checked);
-      if (attentionHeader) {
-        attentionHeader.checked = attentionRows.length > 0 && selected.length === attentionRows.length;
-        attentionHeader.indeterminate = selected.length > 0 && selected.length < attentionRows.length;
-      }
-      if (attentionCount) attentionCount.textContent = `${selected.length} selected`;
-      if (attentionButton) attentionButton.disabled = selected.length === 0;
-    };
-    attentionHeader?.addEventListener('change', () => {
-      attentionRows.forEach((input) => { input.checked = attentionHeader.checked; });
-      syncAttention();
-    });
-    attentionRows.forEach((input) => input.addEventListener('change', syncAttention));
-    attentionButton?.addEventListener('click', () => {
-      root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action', {
-        detail: { label: 'Email manager', kind: 'NAVIGATION', payload: { row_keys: attentionRows.filter((input) => input.checked).map((input) => input.value) } }
-      }));
-    });
-    syncAttention();
+    host.querySelectorAll('[data-ws-signed-tab]').forEach((button) => button.addEventListener('click', () => {
+      if (button.disabled) return;
+      session.signedTab = ['checks', 'ready', 'waiting'].includes(button.dataset.wsSignedTab)
+        ? button.dataset.wsSignedTab : 'checks';
+      repaint();
+    }));
   }
 
   function bindFinalise(host) {
@@ -1533,7 +1609,7 @@
       button.setAttribute('aria-selected', String(descriptor.key === tab));
     });
     if(tab==='finalise'&&session.workspace?.combined_source_workspace){ bindCombinedFinalise(host); return; }
-    if(['imports','queries'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope){bindCommon(host);bindCombinedReview(host,tab);return;}
+    if(['imports','queries','history'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope){bindCommon(host);bindCombinedReview(host,tab);return;}
     if(tab==='queries'&&session.reviewSingleScope){
       const back=document.createElement('button');back.className='btn btn-outline';back.textContent='Back to all queries';host.prepend(back);
       back.addEventListener('click',()=>{session.reviewSingleScope=false;loadCombinedReview('queries');});
@@ -1569,7 +1645,7 @@
       session.uploadProfileId = '';
       syncUploadProfile(session.workspace);
       session.loadedTab = tab;
-      if(['finalise','imports','queries'].includes(tab)&&session.workspace.combined_source_workspace) session.loadedTab='';
+      if(['finalise','imports','queries','history'].includes(tab)&&session.workspace.combined_source_workspace) session.loadedTab='';
     } catch (error) {
       session.workspace = emptyWorkspace(); session.loadedTab = tab; session.error = friendlyWorkspaceError(error);
     }
@@ -1586,9 +1662,10 @@
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
     normaliseBulkActions, normaliseRateWarnings, buildRateWarningAcceptancePayload, buildOutreachRequest,
     open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
+    acceptSystemShiftSelectionPayload,
     refresh: (tab = session.activeTab) => loadWorkspace(tab),
     clearShiftSelections: () => { session.shiftSelections.clear(); },
-    _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload, friendlyWorkspaceError, cycleForClientChange }),
+    _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload, acceptSingleSystemShiftPayload, friendlyWorkspaceError, cycleForClientChange, queryFor }),
     _session: session
   });
 });

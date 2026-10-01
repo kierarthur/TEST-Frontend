@@ -11,6 +11,19 @@ const WORKSPACE_VERSION = 'c'.repeat(64);
 const ACCEPT_PROOF = 'd'.repeat(64);
 const INCIDENT_ONE = '66666666-6666-4666-8666-666666666666';
 
+test('workspace requests omit absent optional filters instead of serialising null UUIDs', () => {
+  const params = new URLSearchParams(workspace._test.queryFor('queries', {
+    source_group_id: '11111111-1111-4111-8111-111111111111',
+    source_cycle_id: '22222222-2222-4222-8222-222222222222',
+    client_id: null, report_scope_id: null, cursor: undefined, seek: ''
+  }));
+  assert.equal(params.get('tab'), 'queries');
+  assert.equal(params.get('source_group_id'), '11111111-1111-4111-8111-111111111111');
+  assert.equal(params.get('source_cycle_id'), '22222222-2222-4222-8222-222222222222');
+  for (const key of ['client_id', 'report_scope_id', 'cursor', 'seek']) assert.equal(params.has(key), false);
+  assert.equal(workspace._test.queryFor('queries', { limit: 0 }).limit, 0);
+});
+
 test('changing the upload client preserves the week without reusing another client cycle', () => {
   const model = workspace.normaliseWorkspace({ combined_source_workspace: true,
     selected: { source_cycle_id: 'client-a-cycle' }, context: { controls: [{ key: 'cycle', options: [
@@ -509,18 +522,43 @@ test('Imports presents signed-Timesheet authority inside the same calm workspace
       title: 'Signed Timesheet decides hours',
       body: 'Timesheet hours are used. The client system is checked so matching references can be added.',
       attention_count: 1,
-      attention_rows: [{ row_key: 'authority-comparison-1', candidate: 'Jane Smith', day_date: 'Mon 1 Sep 2026', attention: 'Hours are different', reference: 'Not added', status: { text: 'Needs manager correction', tone: 'warning' }, actions: ['View Timesheet', 'Email manager'] }]
+      attention_rows: [{ row_key: 'authority-comparison-1', candidate: 'Jane Smith', day_date: 'Mon 1 Sep 2026', attention: 'Hours are different', reference: 'Not added', status: { text: 'Needs manager correction', tone: 'warning' }, actions: ['View Timesheet', 'Email manager'] }],
+      ready_rows: [{ row_key: 'authority-ready-2', candidate: 'John Jones', day_date: 'Mon 1 Sep 2026', attention: 'Source reference added', reference: 'ABC', status: { text: 'Ready for Office authorisation', tone: 'positive' }, actions: ['View Timesheet'] }],
+      waiting_rows: [{ row_key: 'authority-waiting-3', candidate: 'Mary Brown', day_date: 'Week ending 6 Sep 2026', attention: 'Timesheet not yet completed', reference: 'Not added', status: { text: 'Waiting for completed Timesheet', tone: 'neutral' }, actions: [] }]
     },
     rows: []
   } }), 'imports');
   assert.match(html, /Signed Timesheet decides hours/);
   assert.match(html, /Timesheet hours are used\. The client system is checked so matching references can be added\./);
-  assert.match(html, /Needs attention \(1\)/);
-  assert.match(html, /aria-label="Select all visible rows"/);
+  assert.match(html, /Checks \(1\)/);
+  assert.match(html, /Ready \(1\)/);
+  assert.match(html, /Waiting \(1\)/);
   assert.match(html, /Hours are different/);
+  assert.doesNotMatch(html, /John Jones|data-ws-import-email-manager|>History</);
   assert.match(html, /View Timesheet/);
   assert.match(html, /Email manager/);
   assert.doesNotMatch(html, /secure manager response|source authority|non-authoritative/i);
+  const ready = workspace.renderWorkspace(fixture({ imports: {
+    total_count: 1,
+    journey: {
+      authority_mode: 'TIMESHEET_AUTHORITY', title: 'Signed Timesheet decides hours',
+      attention_rows: [{ candidate: 'Jane Smith', attention: 'Hours are different' }],
+      ready_rows: [{ candidate: 'John Jones', attention: 'Source reference added', status: { text: 'Ready for Office authorisation', tone: 'positive' }, actions: ['View Timesheet'] }]
+    }, rows: []
+  } }), 'imports', { signedTab: 'ready' });
+  assert.match(ready, /John Jones|Source reference added/);
+  assert.doesNotMatch(ready, />History</);
+  const waiting = workspace.renderWorkspace(fixture({ imports: {
+    total_count: 1,
+    journey: {
+      authority_mode: 'TIMESHEET_AUTHORITY', title: 'Signed Timesheet decides hours',
+      waiting_count: 1,
+      waiting_rows: [{ candidate: 'Mary Brown', attention: 'Timesheet not yet completed', status: { text: 'Waiting for completed Timesheet', tone: 'neutral' }, actions: [] }]
+    }, rows: []
+  } }), 'imports', { signedTab: 'waiting' });
+  assert.match(waiting, /Mary Brown/);
+  assert.match(waiting, /1 waiting/);
+  assert.doesNotMatch(waiting, /Up to date/);
 });
 
 test('Reminder command preserves the exact server payload without injecting a source cycle', async () => {
@@ -571,6 +609,28 @@ test('outreach fails closed when the server filter-selection proof is missing or
   const queries = workspace.normaliseWorkspace({ queries: { total_count: 1, bulk_actions: invalidActions, rows: [] } }).queries;
   assert.equal(workspace.buildOutreachRequest(queries, { mode: 'ALL_FILTERED', ids: new Set(), exclusions: new Set() }, 'ASK_CANDIDATES'), null);
   assert.equal(workspace.buildOutreachRequest(fixture().queries, { mode: 'EXPLICIT', ids: new Set(['loaded-row-guess']), exclusions: new Set() }, 'SEND_MANAGER_NOW'), null);
+});
+
+test('combined shift acceptance narrows only eligible incidents and retains the server proof', () => {
+  const group = fixture().queries.rows.find(row => row.group_key === GROUP_KEY);
+  const original = structuredClone(group);
+  const payload = workspace._test.acceptSingleSystemShiftPayload(group, INCIDENT_ONE);
+  assert.ok(payload);
+  assert.deepEqual(payload.selection.incident_ids, [INCIDENT_ONE]);
+  assert.deepEqual(payload.selection.group_selection_proofs, [{ group_key: GROUP_KEY, selection_proof: ACCEPT_PROOF }]);
+  assert.equal(payload.expected_workspace_version, WORKSPACE_VERSION);
+  assert.deepEqual(group, original);
+  const eligible = group.accept_system_hours_action.payload.selection.incident_ids;
+  const multiple = workspace.acceptSystemShiftSelectionPayload(group, eligible);
+  assert.deepEqual(multiple.selection.incident_ids, [...eligible].sort());
+  assert.deepEqual(multiple.selection.group_selection_proofs, payload.selection.group_selection_proofs);
+  assert.equal(workspace.acceptSystemShiftSelectionPayload(group, []), null);
+  assert.equal(workspace.acceptSystemShiftSelectionPayload(group, [INCIDENT_ONE, INCIDENT_ONE]), null);
+  assert.equal(workspace.acceptSystemShiftSelectionPayload(group, [INCIDENT_ONE, 'foreign']), null);
+  assert.equal(workspace._test.acceptSingleSystemShiftPayload(group, 'unknown'), null);
+  assert.equal(workspace._test.acceptSingleSystemShiftPayload({ ...group, group_key: 'other' }, INCIDENT_ONE), null);
+  group.accept_system_hours_action.enabled = false;
+  assert.equal(workspace._test.acceptSingleSystemShiftPayload(group, INCIDENT_ONE), null);
 });
 
 test('Accept system hours preserves the complete server guard for one selected shift', () => {

@@ -1,10 +1,48 @@
 const assert = require('node:assert/strict');
+const test = require('node:test');
+
+test('query details show actual replies and timestamps without treating delivery as a reply', () => {
+  const model = actions.normaliseDetail({ detail: { shifts: [{ day_date: '21 Sep 2026',
+    candidate_response: 'My hours are correct', candidate_responded_at: '1 Oct 2026, 10:00',
+    manager_response: 'Reported a source correction', manager_responded_at: '1 Oct 2026, 11:00',
+    manager_intended_hours: '09:00-16:00 (15 min break)' }] } });
+  const html = actions.renderDetail(model);
+  for (const value of ['My hours are correct', '1 Oct 2026, 10:00', 'Reported a source correction', '1 Oct 2026, 11:00', '09:00-16:00 (15 min break)']) assert.ok(html.includes(value));
+  assert.doesNotMatch(actions.renderDetail(actions.normaliseDetail({ detail: { shifts: [{ day_date: '21 Sep 2026', status: 'Manager informed' }] } })), /Recorded replies/);
+});
 const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
-const test = require('node:test');
 
 const actions = require('../../js/weekly-source/workspace-actions.js');
 const fixtures = JSON.parse(readFileSync(resolve(__dirname, '../fixtures/weekly-source-workspace-actions-v1.json'), 'utf8'));
+
+test('signed-Timesheet manager action opens the exact established import review', () => {
+  const importId = '11111111-1111-4111-8111-111111111111';
+  const previous = global.CloudTmsImportReviewV1;
+  let opened = '';
+  global.CloudTmsImportReviewV1 = {
+    openReview: (id) => { opened = id; return true; },
+    openImportsModal: () => { throw new Error('Must not reopen the upload hub'); }
+  };
+  try {
+    actions.handleAction({label:'Email manager',payload:{import_id:importId}});
+    assert.equal(opened,importId);
+  } finally {
+    global.CloudTmsImportReviewV1 = previous;
+  }
+});
+
+test('Open query detail offers selection only for server-eligible shifts, without authorising acceptance itself', () => {
+  const payload={accept_group:{accept_system_hours_action:{enabled:true,payload:{selection:{incident_ids:['allowed']}}}},
+    detail:{shifts:[{incident_id:'allowed',day_date:'21 Sep 2026',candidate_hours:'7 hours',system_hours:'7.5 hours'},
+      {incident_id:'foreign',day_date:'22 Sep 2026'}]}};
+  const html=actions.renderDetail(actions.normaliseDetail(payload));
+  assert.match(html,/data-wsa-accept-incident="allowed"/);
+  assert.doesNotMatch(html,/data-wsa-accept-incident="foreign"/);
+  assert.match(html,/data-wsa-accept-selected disabled>Accept selected system hours/);
+  payload.accept_group.accept_system_hours_action.enabled=false;
+  assert.doesNotMatch(actions.renderDetail(actions.normaliseDetail(payload)),/data-wsa-accept-/);
+});
 
 test('saved rejected upload reasons remain explanatory', () => {
   assert.match(actions._plainMessage('WEEKLY_SOURCE_UPLOAD_DUPLICATE_EXTERNAL_KEY'), /repeats a booking reference/);
