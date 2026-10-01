@@ -9,6 +9,18 @@
     root.addEventListener('cloudtms:weekly-source-preview', (event) => api.openPreview(event.detail));
     root.addEventListener('cloudtms:weekly-source-batch-preview', (event) => api.openBatchPreview(event.detail));
     root.addEventListener('cloudtms:weekly-source-action', (event) => api.handleAction(event.detail));
+    // The shared shell stores a dragged/centred position in pixels. Keep only
+    // this feature's child modal on screen when the window or device rotates.
+    root.addEventListener('resize', () => root.requestAnimationFrame(() => {
+      const modal = root.document?.getElementById('modal');
+      if (!modal?.querySelector('.ws-child')) return;
+      const bounds = modal.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const left = Math.max(12, Math.min(bounds.left, root.innerWidth - bounds.width - 12));
+      const top = Math.max(12, Math.min(bounds.top, root.innerHeight - bounds.height - 12));
+      if (Math.abs(left - bounds.left) < 1 && Math.abs(top - bounds.top) < 1) return;
+      Object.assign(modal.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', transform: 'none' });
+    }));
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildWeeklySourceWorkspaceActions(root) {
   'use strict';

@@ -143,6 +143,12 @@ test('file View loads its own bounded shift details without accepting or changin
   const requests=await page.evaluate(()=>(window as any).__requests);
   expect(requests.map((item:any)=>item.action)).toEqual(['UPLOAD_DETAIL','UPLOAD_DETAIL']);
   expect(requests[1].payload).toEqual({upload_id:'file-one',limit:50,cursor:'page-two'});
+  for(const width of [390,1280,1700]){
+    await page.setViewportSize({width,height:1000});
+    await expect.poll(()=>page.locator('#modal').evaluate(el=>{
+      const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;
+    })).toBe(true);
+  }
   await page.locator('#modal').screenshot({path:testInfo.outputPath('file-details-office.png')});
 });
 
@@ -178,6 +184,10 @@ test('protected shift editor uses the real Office modal at desktop and phone wid
   for(const width of [390,1700]){
     await page.setViewportSize({width,height:1000});
     expect(await page.locator('#modalBody').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+    await expect.poll(()=>page.locator('#modal').evaluate(el=>{
+      const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;
+    })).toBe(true);
+    await page.locator('[data-protected-field="start"]').click({trial:true});
     await page.locator('#modal').screenshot({path:testInfo.outputPath(`protected-shift-office-${width}.png`)});
   }
   expect(await page.evaluate(()=>(window as any).__requests.map((r:any)=>r.action))).toEqual(['PROTECTED_EDITOR_CONTEXT']);
