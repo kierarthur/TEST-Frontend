@@ -56,6 +56,15 @@
   function plainMessage(value, fallback = 'This item needs attention before you can continue.') {
     const text = asText(value);
     const guidance = {
+      WEEKLY_SOURCE_UPLOAD_DUPLICATE_EXTERNAL_KEY: 'The file repeats a booking reference. Correct the duplicate reference before uploading again.',
+      WEEKLY_SOURCE_UPLOAD_HAS_BLOCKERS: 'The file contains duplicate or malformed source rows. Correct the flagged rows before uploading again.',
+      WEEKLY_SOURCE_COVERAGE_SHRINK_ACKNOWLEDGEMENT_REQUIRED: 'This file covers a shorter period than the earlier file. Confirm the shorter coverage when reviewing a new upload.',
+      WEEKLY_SOURCE_COVERAGE_CONFIRMATION_NARROWER_THAN_EVIDENCE: 'The confirmed period excludes shifts contained in the file. Include every shift date in the export period.',
+      WEEKLY_SOURCE_CYCLE_NOT_OPEN: 'This period is already finalised. Use the final-source correction journey for a replacement.',
+      WEEKLY_SOURCE_REPORT_SCOPE_NOT_OPEN: 'This report is already finalised. Use the final-source correction journey for a replacement.',
+      WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED: 'Work is already recorded for this candidate and time. Choose that existing shift instead of adding it again.',
+      WEEKLY_PROTECTED_EDITOR_SHIFT_STALE: 'This shift has changed. Close this window and recheck before continuing.',
+      WEEKLY_PROTECTED_EDITOR_SOURCE_SCOPE_REQUIRED: 'Choose the source group that covers this client and work date.',
       WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING: 'That candidate is inactive or unavailable. Choose an active candidate, or review their record before linking this shift.',
       WEEKLY_SOURCE_CLIENT_NOT_ELIGIBLE: 'That client does not belong to this source report. Choose the matching client.',
       WEEKLY_SOURCE_CONTRACT_NOT_ELIGIBLE: 'That contract does not cover this candidate, client and shift date. Review the contract or choose another.',
@@ -63,7 +72,7 @@
       WEEKLY_SOURCE_RECHECK_REPLAY_CONFLICT: 'This check was already started with a different choice. Close this window and refresh Queries before making another choice.',
       WEEKLY_SOURCE_PREVIEW_STALE: 'The source information has changed. Close this window and refresh Queries before continuing.'
     };
-    const code = text.match(/WEEKLY_SOURCE_[A-Z0-9_]+/)?.[0];
+    const code = text.match(/WEEKLY_(?:SOURCE|PROTECTED)_[A-Z0-9_]+/)?.[0];
     if (guidance[code]) return guidance[code];
     if (!text || /\b(uuid|hash|fingerprint|rpc|tsfin|manifest|stack|sql|exception|workbench|idempotency|generation|authority pointer|work event|rate class)\b/i.test(text)) return fallback;
     return text.replace(/\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b/g, '').replace(/\s{2,}/g, ' ').trim() || fallback;
@@ -767,9 +776,253 @@
     return openChild({ title: model.title, kind, render, wire });
   }
 
+  function openProtectedMatch(payloadValue) {
+    const payload = asObject(payloadValue);
+    const choices = asArray(payload.match_choices).filter(item => item.contract_id === payload.contract_id);
+    const state = { selected: '', reason: '', busy: false, pending: null, error: '' };
+    const kind = 'weekly-source-protected-match-v1';
+    const render = () => `<div class="ws-child" data-protected-match>
+      <p><strong>${escapeHtml(payload.candidate)}</strong> · ${escapeHtml(payload.client)} · ${escapeHtml(payload.shift)}</p>
+      <p>Imported shift: <strong>${escapeHtml(payload.system_hours)}</strong></p>
+      <p>Choose the protected shift this report refers to. Different hours or breaks do not necessarily mean different work. Matching does not change the protected hours; reconciliation is a separate choice.</p>
+      <div class="ws-child-fields"><label>Protected shift<select data-match-choice${state.busy || state.pending ? ' disabled' : ''}><option value="">Choose a shift</option>${choices.map(item => `<option value="${escapeHtml(item.work_event_id)}"${state.selected === item.work_event_id ? ' selected' : ''}>${escapeHtml(item.start)}–${escapeHtml(item.end)} · ${escapeHtml(item.break_minutes)} min break</option>`).join('')}<option value="NEW"${state.selected === 'NEW' ? ' selected' : ''}>This is separate work, not a protected shift</option></select></label><label>Reason<textarea data-match-reason maxlength="1000"${state.busy || state.pending ? ' disabled' : ''}>${escapeHtml(state.reason)}</textarea></label></div>
+      ${state.error ? `<p role="alert">${escapeHtml(state.error)}</p>` : ''}<div class="ws-child-actions"><button class="btn btn-outline" data-match-cancel${state.busy ? ' disabled' : ''}>Cancel</button><button class="btn primary" data-match-save${state.busy ? ' disabled' : ''}>${state.pending ? 'Check saved result' : 'Confirm and recheck'}</button></div></div>`;
+    const wire = () => {
+      const host = root.document?.querySelector('[data-protected-match]');
+      if (!host || host.dataset.wsaWired) return;
+      host.dataset.wsaWired = '1';
+      host.querySelector('[data-match-cancel]')?.addEventListener('click', closeChild);
+      host.querySelector('[data-match-choice]')?.addEventListener('change', event => { state.selected = event.target.value; });
+      host.querySelector('[data-match-reason]')?.addEventListener('input', event => { state.reason = event.target.value; });
+      host.querySelector('[data-match-save]')?.addEventListener('click', async () => {
+        if (state.busy) return;
+        if (!state.pending && (!state.selected || !asText(state.reason))) { state.error = 'Choose the shift and enter a reason.'; rerender(kind); return; }
+        state.pending ||= { ...payload.recheck_payload, contract_id: payload.contract_id, match_reason: asText(state.reason),
+          ...(state.selected === 'NEW' ? { separate_shift: true } : { work_event_id: state.selected }) };
+        state.busy = true; state.error = ''; rerender(kind);
+        try {
+          const result = await workspaceApi().issueCommand('RECHECK_SOURCE', state.pending);
+          if (result?.ok !== true) throw new Error('The saved comparison is not yet confirmed. Check its saved result.');
+          await finishAction();
+        } catch (error) { state.error = plainMessage(error?.message, 'The comparison is not yet confirmed. Check its saved result before starting another match.'); }
+        finally { state.busy = false; rerender(kind); }
+      });
+    };
+    return openChild({ title: 'Confirm shift match', kind, render, wire });
+  }
+
+  function openUploadDetail(payload) {
+    const uploadId = asText(payload.upload_id);
+    const kind = 'weekly-source-upload-detail-v1';
+    const state = { model: null, busy: false, error: '' };
+    const render = () => {
+      const model = state.model;
+      const labels = [['candidate','Candidate'],['client','Client'],['day_date','Day/date'],
+        ['source_reference','Source worker reference'],['booking_reference','Booking reference'],
+        ['system_hours','Source hours / break'],['status','Status'],['issue','Issue']];
+      const rows = asArray(model?.shifts).map(row => `<tr>${labels.map(([key,label])=>`<td data-label="${escapeHtml(label)}">${escapeHtml(row[key]||'—')}</td>`).join('')}</tr>`).join('');
+      const refusal = model?.reason_code ? `<div class="ws-notice ws-notice--warning"><strong>Why this file was refused</strong><span>${escapeHtml(plainMessage(model.reason_code, 'The saved attempt was refused. Quote the reference below when requesting an investigation.'))}</span><span>Reference: ${escapeHtml(model.reason_code)}</span></div>` : '';
+      return `<div class="ws-child" data-wsa-screen="upload-detail">${model?`<h3>${escapeHtml(model.file)}</h3><div class="ws-child-context">${[['purpose','Purpose'],['uploaded','Uploaded'],['coverage','Coverage'],['status','File status'],['rows','Source rows'],['final_source','Finalisation']].map(([key,label])=>`<div><span>${label}</span><strong>${escapeHtml(model[key])}</strong></div>`).join('')}</div>${refusal}<div class="ws-child-scroll" data-wsr-table><table class="grid mini ws-grid"><thead><tr>${labels.map(([,label])=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="8">No source rows recorded.</td></tr>'}</tbody></table></div>`:'<p role="status">Loading file details…</p>'}${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions">${model?.has_more?`<button class="btn btn-outline" data-wsa-file-more${state.busy?' disabled':''}>Load more shifts</button>`:''}${state.error&&!model?'<button class="btn btn-outline" data-wsa-file-retry>Retry</button>':''}<button class="btn primary" data-wsa-close>Close</button></div></div>`;
+    };
+    const load = async (append=false) => {
+      if(state.busy)return;
+      state.busy=true;state.error='';rerender(kind);
+      try {
+        const model=await workspaceApi().issueCommand('UPLOAD_DETAIL',{upload_id:uploadId,limit:50,
+          ...(append?{cursor:state.model.next_cursor}:{})});
+        if(model?.contract!=='WEEKLY_SOURCE_UPLOAD_DETAIL_V1'||model.upload_id!==uploadId)throw new Error('The file details could not be verified.');
+        if(append)model.shifts=[...state.model.shifts,...model.shifts];
+        state.model=model;
+      } catch(error){state.error=plainMessage(error?.message,'The file details could not be loaded.');}
+      finally {state.busy=false;rerender(kind);}
+    };
+    const wire=()=>{
+      const host=root.document?.querySelector('[data-wsa-screen="upload-detail"]');
+      if(!host||host.dataset.wsaWired)return;
+      host.dataset.wsaWired='1';
+      host.querySelector('[data-wsa-close]')?.addEventListener('click',closeChild);
+      host.querySelector('[data-wsa-file-more]')?.addEventListener('click',()=>load(true));
+      host.querySelector('[data-wsa-file-retry]')?.addEventListener('click',()=>load(false));
+    };
+    const opened=openChild({title:'Source file details',kind,render,wire});
+    if(opened)void load();
+    return opened;
+  }
+
+  function openProtectedReview(payloadValue) {
+    const editor = root.CloudTMSProtectedShiftEditorV1;
+    if (!editor) return openDetail({ detail: { problem: 'Refresh the page to review protected pay.' } });
+    const initial = asObject(payloadValue);
+    const selection = { client_id: initial.client_id, candidate_id: initial.candidate_id,
+      source_group_id: initial.source_group_id, work_date: initial.work_date, work_event_id: initial.work_event_id };
+    let context = { ...initial, allowed: false };
+    const values = { reason: '' }, state = { busy: true, pending: null, error: '' };
+    const kind = 'weekly-source-protected-review-v1';
+    const load = async () => {
+      state.busy = true; rerender(kind);
+      try {
+        const result = await workspaceApi().issueCommand('PROTECTED_EDITOR_CONTEXT', selection);
+        if (result?.contract !== 'WEEKLY_PROTECTED_EDITOR_V1') throw new Error('The protected shift could not be verified.');
+        context = result;
+      } catch (error) { state.error = plainMessage(error?.message, 'Recheck the protected shift.'); }
+      finally { state.busy = false; rerender(kind); }
+    };
+    const submit = async (mode) => {
+      if (state.busy) return;
+      state.error = '';
+      try {
+        state.busy = true; rerender(kind);
+        if (!state.pending) {
+          // Do not refresh the displayed source here: the user's confirmation
+          // must retain its exact reviewed source hash and family version.
+          state.pending = editor.request(context, values, root.crypto.randomUUID(), mode);
+        } else state.pending.payload.recover_unknown_outcome = state.retryUnstaged !== true;
+        const result = await workspaceApi().issueCommand(state.pending.action, state.pending.payload);
+        if (result?.ok !== true) throw new Error('The outcome is not yet confirmed. Check the saved result.');
+        state.pending = null;
+        await finishAction();
+      } catch (error) {
+        if(error?.code==='WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED'){
+          // Both server refusals with this exact code precede calculation and
+          // durable publication. Do not treat a known stale review as an
+          // unknown payment outcome, or silently accept the replacement facts.
+          state.pending=null;state.retryUnstaged=false;
+          await load();
+          state.error='The imported hours have changed. Review the updated details and choose again.';
+        } else if(error?.code==='C1_DURABLE_RECOVERY_NOT_REQUIRED'){
+          // The server proved there is no staged publication for this exact
+          // saved request. A user retry may resume it through the normal owner.
+          state.retryUnstaged=true;
+          state.error='No submitted result needs recovery. You can retry the saved request.';
+        } else {
+          state.retryUnstaged=false;
+          state.error = plainMessage(error?.message, 'The outcome is not yet confirmed. Check the saved result before retrying.');
+        }
+      } finally { state.busy = false; rerender(kind); }
+    };
+    const wire = () => {
+      const host = root.document?.querySelector('[data-protected-review]');
+      if (!host || host.dataset.wsaWired === '1') return;
+      host.dataset.wsaWired = '1';
+      host.querySelector('[data-protected-review-close]')?.addEventListener('click', closeChild);
+      host.querySelector('[data-protected-review-reason]')?.addEventListener('input', event => { values.reason = event.target.value; });
+      host.querySelectorAll('[data-protected-review-action]').forEach(button => button.addEventListener('click', () => submit(button.dataset.protectedReviewAction)));
+      host.querySelector('[data-protected-review-recover]')?.addEventListener('click', () => submit());
+    };
+    const opened = openChild({ title: 'Review protected pay', kind,
+      render: () => editor.renderReview(context, values, state), wire });
+    if (opened) void load();
+    return opened;
+  }
+
+  function openProtectedShift(payloadValue, mode = 'approve') {
+    const editor = root.CloudTMSProtectedShiftEditorV1;
+    if (!editor) return openDetail({ detail: { problem: 'The protected shift editor is unavailable. Refresh the page.' } }, 'Protect shift pay');
+    const initial = asObject(payloadValue);
+    let context = { ...initial, allowed: false, contracts: [] };
+    const values = { work_date: asText(initial.work_date), start: asText(initial.start || initial.start_at_local),
+      end: asText(initial.end || initial.end_at_local), break_minutes: initial.break_minutes ?? '',
+      contract_id: asText(initial.contract_id), shift_choice: asText(initial.work_event_id), reason: '' };
+    const state = { mode, busy: false, error: '', pending: null, idempotencyKey: null };
+    let readSequence = 0;
+    const kind = 'weekly-source-protected-shift-v1';
+    const selection = () => ({ client_id: context.client_id, candidate_id: context.candidate_id,
+      work_date: values.work_date, ...(context.source_group_id ? { source_group_id: context.source_group_id } : {}),
+      ...(values.shift_choice && values.shift_choice !== 'NEW' ? { work_event_id: values.shift_choice } : {}) });
+    const reload = async () => {
+      const sequence = ++readSequence;
+      context.allowed = false; context.contracts = [];
+      if (!context.client_id || !context.candidate_id || !values.work_date) { rerender(kind); return; }
+      state.busy = true; state.error = ''; rerender(kind);
+      try {
+        const result = await workspaceApi().issueCommand('PROTECTED_EDITOR_CONTEXT', selection());
+        if (sequence !== readSequence) return;
+        if (result?.contract !== 'WEEKLY_PROTECTED_EDITOR_V1') throw new Error('Recheck the candidate, client and work date.');
+        context = { ...result };
+        values.contract_id = editor.contractChoice(context.contracts, context.shift_contract_id || values.contract_id);
+        if (mode === 'amend' && context.current_schedule) Object.assign(values, context.current_schedule);
+      } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
+      finally { if (sequence === readSequence) { state.busy = false; rerender(kind); } }
+    };
+    const render = () => editor.render(context, values, { ...state, busy: state.busy || !!state.pending })
+      + (state.pending && !state.busy ? '<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-check-result>Check saved result</button></div><p>The outcome is not yet confirmed. Keep these details unchanged while checking; do not add this shift again.</p>' : '')
+      + (!state.busy && !state.pending && context.allowed && !context.contracts.length
+        ? '<p>No eligible contract covers this date.</p><button type="button" class="btn btn-outline" data-protected-create-contract>Create contract</button><button type="button" class="btn btn-outline" data-protected-recheck>Recheck contracts</button>' : '');
+    const submit = async () => {
+      if (state.busy) return;
+      state.error = '';
+      try {
+        // Validate all user-entered intent before cycle preparation. The exact
+        // qualified contract and source period are checked again server-side.
+        editor.schedule(values);
+        if (!asText(values.reason)) throw new Error('Enter a reason.');
+        if (!values.contract_id) throw new Error('Choose an eligible contract.');
+        state.busy = true; rerender(kind);
+        if (!state.pending) {
+          const prepared = await workspaceApi().issueCommand('PREPARE_PROTECTED_EDITOR', selection());
+          context = { ...context, ...prepared };
+          state.idempotencyKey = root.crypto.randomUUID();
+          state.pending = editor.request(context, values, state.idempotencyKey, mode);
+        } else {
+          state.pending.payload.recover_unknown_outcome = true;
+        }
+        const result = await workspaceApi().issueCommand(state.pending.action, state.pending.payload);
+        if (result?.ok !== true) throw new Error('The approved-hours update is not yet confirmed. Check its saved result before continuing.');
+        state.pending = null;
+        await finishAction();
+      } catch (error) {
+        // These exact refusals occur in the first transactional family prepare,
+        // before an orchestration run or pay publication can survive. Unknown
+        // outcomes still retain their original command for explicit recovery.
+        if (['WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED', 'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID',
+          'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID'].includes(error?.code)) state.pending = null;
+        state.error = plainMessage(error?.message, state.pending
+          ? 'The outcome is not yet confirmed. Check the saved result; do not add the shift again.'
+          : 'Recheck the selected contract and shift details.');
+      } finally { state.busy = false; rerender(kind); }
+    };
+    const wire = () => {
+      const host = root.document?.querySelector('[data-protected-editor]');
+      if (!host || host.dataset.wsaWired === '1') return;
+      host.dataset.wsaWired = '1';
+      host.querySelector('[data-protected-cancel]')?.addEventListener('click', closeChild);
+      host.querySelectorAll('[data-protected-field]').forEach((input) => input.addEventListener('change', async () => {
+        values[input.dataset.protectedField] = input.value;
+        if (input.dataset.protectedField === 'work_date') { values.shift_choice = ''; await reload(); }
+        else if (input.dataset.protectedField === 'shift_choice') await reload();
+        else {
+          const output = host.querySelector('[data-protected-net]');
+          try { const item = editor.schedule(values); output.textContent = `${Math.floor(item.net_minutes / 60)} hours ${item.net_minutes % 60} minutes`; }
+          catch (error) { output.textContent = error.message; }
+        }
+      }));
+      host.querySelectorAll('[data-protected-choose]').forEach((button) => button.addEventListener('click', () => {
+        const field = button.dataset.protectedChoose;
+        const picker = field === 'client' ? root.openClientPicker : root.openCandidatePicker;
+        if (typeof picker !== 'function') { state.error = 'The chooser is unavailable. Refresh the page.'; rerender(kind); return; }
+        picker(async ({ id }) => { context[`${field}_id`] = id; values.contract_id = ''; values.shift_choice = ''; if (field === 'client') delete context.source_group_id; await reload(); }, { title: `Choose ${field}` });
+      }));
+      host.querySelector('[data-protected-submit]')?.addEventListener('click', submit);
+      root.document?.querySelector('[data-protected-check-result]')?.addEventListener('click', submit);
+      root.document?.querySelector('[data-protected-recheck]')?.addEventListener('click', reload);
+      root.document?.querySelector('[data-protected-create-contract]')?.addEventListener('click', () => {
+        root.openContract?.(context.create_contract_seed, { noParentGate: true });
+      });
+    };
+    const opened = openChild({ title: mode === 'amend' ? 'Change protected shift' : 'Protect shift pay', kind, render, wire });
+    if (opened) void reload();
+    return opened;
+  }
+
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
+    if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
+    if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);
+    if (label === 'Review protected pay') return openProtectedReview(detail.payload);
+    if (['Protect pay', 'Add protected shift', 'Change protected shift'].includes(label)) {
+      return openProtectedShift(detail.payload, label === 'Change protected shift' ? 'amend' : 'approve');
+    }
     if (['Link candidate','Link client'].includes(label) && detail.payload?.recheck_payload?.request_id) {
       const picker = label === 'Link candidate' ? root.openCandidatePicker : root.openClientPicker;
       if (typeof picker !== 'function') return openDetail({ detail: { problem: 'The matching picker is unavailable. Refresh the page and try again.' } }, label);

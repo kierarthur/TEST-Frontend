@@ -11,6 +11,37 @@ const WORKSPACE_VERSION = 'c'.repeat(64);
 const ACCEPT_PROOF = 'd'.repeat(64);
 const INCIDENT_ONE = '66666666-6666-4666-8666-666666666666';
 
+test('changing the upload client preserves the week without reusing another client cycle', () => {
+  const model = workspace.normaliseWorkspace({ combined_source_workspace: true,
+    selected: { source_cycle_id: 'client-a-cycle' }, context: { controls: [{ key: 'cycle', options: [
+      {value:'client-a-cycle',label:'This week',scope_client_id:'a',finalisation_week_ending:'2026-10-04'},
+      {value:'client-b-cycle',label:'This week',scope_client_id:'b',finalisation_week_ending:'2026-10-04'},
+      {value:'calendar',label:'This week',finalisation_week_ending:'2026-10-04'},
+      {value:'next-week',label:'Next week',scope_client_id:'c',finalisation_week_ending:'2026-10-11'}
+    ] }] } });
+  const resolve = workspace._test.cycleForClientChange;
+  assert.equal(resolve(model,'a'),'client-a-cycle');
+  assert.equal(resolve(model,'b'),'client-b-cycle');
+  assert.equal(resolve(model,'c'),'calendar');
+  assert.equal(resolve(model,''),'calendar');
+  model.context.controls[0].options = model.context.controls[0].options.filter(option=>option.value!=='calendar');
+  assert.throws(()=>resolve(model,'c'),/no available source period/);
+  model.combined_source_workspace = false;
+  assert.equal(resolve(model,'b'),'client-a-cycle');
+});
+
+test('completed evidence remains visible after a checking upload and cannot be finalised again', () => {
+  const model = workspace.normaliseWorkspace({ profile: { id: 'NHSP_PREFINAL_RELEASED_V1' },
+    finalise: { prepared: false, active_list: 'complete',
+      complete: { rows: [{ candidate: 'Completed worker', client: 'Trust A', finalised_at: '1 Oct 2026, 12:00', status: 'Finalised' }], total_count: 1 } } });
+  const html = workspace.renderWorkspace(model, 'finalise', {});
+  assert.match(html, /Complete \(1\)/);
+  assert.match(html, /Completed worker/);
+  assert.match(html, /1 Oct 2026, 12:00/);
+  assert.doesNotMatch(html, /data-ws-finalise-confirm|data-ws-finalise>/);
+  assert.match(html, /class="ws-tab-empty">Ready \(0\)/);
+});
+
 test('checking files show no Ready or Blocked lists and retain Office checks in Queries', () => {
   const model = workspace.normaliseWorkspace({ profile: { id: 'NHSP_PREFINAL_RELEASED_V1' },
     counts: { blockers: 1 },

@@ -13,6 +13,136 @@ const fixtures = JSON.parse(readFileSync(
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
+test('combined finalise reviews eligible clients only and retains their individual completion results',async({page},testInfo)=>{
+  await page.route('**/*',route=>route.abort());
+  await loadFoundation(page);
+  await page.evaluate(async(workspace:any)=>{
+    const win=window as any; workspace.combined_source_workspace=true;
+    const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+    const scopes=[1,2,3].map(n=>({key:String(n),client:`Client ${n}`,source:'HealthRoster',period:'27 Sep 2026',
+      finalise_enabled:n!==3,blocked_count:n===3?1:0,scope:{source_cycle_id:id(n)},
+      finalise_payload:{source_cycle_id:id(n),authority_scope_kind:'CYCLE',report_scope_id:null,
+        upload_id:id(n+10),projection_publication_id:id(n+20),expected_authority_scope_version:1,
+        expected_row_manifest_hash:'a'.repeat(64),expected_comparison_manifest_hash:'b'.repeat(64),expected_issue_set_hash:'c'.repeat(64)}}));
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>workspace};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action==='COMBINED_FINALISE_WORKSPACE')return {ok:true,json:async()=>({
+        contract:'WEEKLY_SOURCE_COMBINED_FINALISE_V1',list:request.payload.list,counts:{ready:2,blocked:1,complete:0},
+        scopes,scope_options:[],obligations:[],summary:{missing_previous_reports:1},has_more:false,
+        rows:scopes.map(scope=>({scope_key:scope.key,row_key:scope.key,client:scope.client,candidate:'Example Worker',
+          day_date:'21 Sep 2026',system_hours:'09:00–17:00 · 30 min break',status:{text:scope.blocked_count?'Blocked':'Ready'},actions:[]}))
+      })};
+      return {ok:true,json:async()=>({ok:true,status:'FINALISED',source_finalised:true,invoice_authority_committed:true,
+        source_finalisation:{source_cycle_id:request.payload.source_cycle_id,final_revision_id:id(99)}})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('finalise');
+  },fixtures.workspace);
+  await expect(page.locator('[data-wsc-select="3"]')).toBeDisabled();
+  for(const width of [390,1120]){
+    await page.setViewportSize({width,height:900});
+    expect(await page.locator('[data-wsc-table]').evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
+  }
+  await page.screenshot({path:testInfo.outputPath('combined-finalise-desktop.png'),fullPage:true});
+  await page.locator('[data-wsc-progress="missing"]').click();
+  await expect(page.locator('[data-wsc-obligations]')).toHaveAttribute('open','');
+  await page.locator('[data-wsc-select-all]').click();
+  await page.locator('[data-wsc-review]').click();
+  await expect(page.getByRole('heading',{name:'Finalisation review'})).toBeVisible();
+  await page.locator('[data-wsc-run]').click();
+  await expect(page.locator('[data-wsc-dismiss]')).toHaveText('Done');
+  const calls=await page.evaluate(()=>(window as any).__requests.filter((request:any)=>request.action!=='COMBINED_FINALISE_WORKSPACE'));
+  expect(calls).toHaveLength(2);
+  expect(calls.map((request:any)=>request.payload.source_cycle_id)).toEqual([
+    '00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002']);
+});
+
+test('combined queries retain independent cycle actions and full-result seek',async({page},testInfo)=>{
+  await page.route('**/*',route=>route.abort());
+  await loadFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any;
+    const workspace={...fixture,combined_source_workspace:true};
+    const rows=[1,2].map(n=>({combined_key:'row'+n,scope_key:'cycle'+n,row_key:'qg_'+String(n).repeat(64),
+      group_key:'qg_'+String(n).repeat(64),candidate:'Worker '+n,candidate_sort:'Worker '+n,client:'Trust '+n,
+      source:'NHSP',period:'27 Sep 2026',issues:1,status:{text:'Needs action'},actions:[],
+      children:[{day_date:'21 Sep 2026',candidate_hours:'7 hours',system_hours:'7.5 hours',issue:'Hours differ',
+        actions:[{label:'Protect pay',enabled:true,payload:{work_date:'2026-09-21',candidate_id:'candidate'+n}}]}]}));
+    const owners=[1,2].map(n=>({key:'cycle'+n,protected_pay_enabled:true,bulk_actions:{
+      selection_complete:true,ask_candidates:{enabled:true,request:{source_cycle_id:'cycle'+n,
+        projection_publication_id:'publication'+n,expected_workspace_version:'version'+n,
+        selection:{filters:{},selection_proof:'proof'+n}}}}}));
+    win.__actions=[];win.addEventListener('cloudtms:weekly-source-action',(event:any)=>win.__actions.push(event.detail));
+    win.authFetch=async(url:string,options:any={})=>{
+      if(url.includes('/commands')){
+        const request=JSON.parse(options.body);win.__requests.push(request);
+        if(request.action==='COMBINED_REVIEW_WORKSPACE')return {ok:true,json:async()=>({
+          contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:request.payload.tab,section:request.payload.section,
+          counts:{questions:2},rows:request.payload.tab==='queries'?rows:[],owners,scope_options:[],
+          has_more:false,sort_key:request.payload.sort_key,sort_direction:request.payload.sort_direction
+        })};
+        return {ok:true,json:async()=>({ok:true,status:'COMPLETE'})};
+      }
+      return {ok:true,json:async()=>workspace};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  await expect(page.locator('[data-wsr-select]')).toHaveCount(2);
+  for (const width of [390,1120]) {
+    await page.setViewportSize({width,height:900});
+    expect(await page.locator('[data-wsr-table]').evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
+    const buttons=page.locator('[data-wsr-table] tbody tr').first().locator('td.ws-actions > button');
+    await expect(buttons).toHaveCount(1);
+    await expect(buttons.first()).toBeVisible();
+  }
+  await page.screenshot({path:testInfo.outputPath('combined-queries-desktop.png'),fullPage:true});
+  await page.locator('[data-wsr-select="row1"]').check();
+  await page.locator('[data-wsr-select="row2"]').check();
+  await page.locator('[data-wsr-outreach="ASK_CANDIDATES"]').click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__requests.filter((item:any)=>item.action==='ASK_CANDIDATES'))).toHaveLength(2);
+  const sent=await page.evaluate(()=>(window as any).__requests.filter((item:any)=>item.action==='ASK_CANDIDATES'));
+  expect(sent.map((item:any)=>item.payload.source_cycle_id)).toEqual(['cycle1','cycle2']);
+  expect(sent[0].payload.selection.group_keys).toEqual(['qg_'+'1'.repeat(64)]);
+  expect(sent[1].payload.selection.group_keys).toEqual(['qg_'+'2'.repeat(64)]);
+  await page.getByText('Shifts for Worker 1',{exact:true}).click();
+  await page.locator('[data-wsr-row="row1"][data-wsr-child="0"]').click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__actions.at(-1)?.payload?.candidate_id)).toBe('candidate1');
+  await expect(page.locator('#modalTitle')).toHaveText('Protect shift pay');
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  await expect(page.locator('[data-wsr-select]')).toHaveCount(2);
+  await page.locator('[data-wsr-table]').focus();
+  await page.keyboard.type('Tr');
+  await expect.poll(()=>page.evaluate(()=>(window as any).__requests.filter((item:any)=>item.action==='COMBINED_REVIEW_WORKSPACE').at(-1)?.payload.seek)).toBe('Tr');
+});
+
+test('file View loads its own bounded shift details without accepting or changing the import',async({page})=>{
+  await page.route('**/*',route=>route.abort());
+  await loadFoundation(page);
+  await page.evaluate(()=>{
+    const win=window as any;
+    win.authFetch=async(_url:string,options:any)=>{
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_UPLOAD_DETAIL_V1',upload_id:'file-one',
+        file:'NHSP report.xlsx',purpose:'Checking hours',uploaded:'1 Oct 2026, 10:00',coverage:'21 Sep 2026 to 21 Sep 2026',
+        status:'Current',rows:2,final_source:'Not finalised',has_more:!request.payload.cursor,next_cursor:'page-two',
+        shifts:[{candidate:request.payload.cursor?'Kier Arthur':'Rai-Baptiste Baljit',client:'Test Trust',
+          source_reference:'CCR-02611',booking_reference:'155154209',day_date:'21 Sep 2026',
+          system_hours:'09:00–17:00 · 30 min break',status:'Needs correction',issue:'Candidate needs linking'}]})};
+    };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({label:'View',payload:{upload_id:'file-one'}});
+  });
+  await expect(page.getByRole('heading',{name:'NHSP report.xlsx'})).toBeVisible();
+  await expect(page.getByText('Rai-Baptiste Baljit',{exact:true})).toBeVisible();
+  await expect(page.getByText('Checking hours',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Load more shifts'}).click();
+  await expect(page.getByText('Kier Arthur',{exact:true})).toBeVisible();
+  await expect(page.getByText('Rai-Baptiste Baljit',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Load more shifts'})).toHaveCount(0);
+  const requests=await page.evaluate(()=>(window as any).__requests);
+  expect(requests.map((item:any)=>item.action)).toEqual(['UPLOAD_DETAIL','UPLOAD_DETAIL']);
+  expect(requests[1].payload).toEqual({upload_id:'file-one',limit:50,cursor:'page-two'});
+});
+
 async function loadFoundation(page: import('@playwright/test').Page) {
   await page.setContent(`<!doctype html><html><head></head><body><header><h1 id="modalTitle"></h1><button id="btnCloseModal" type="button">Close</button></header><nav id="modalTabs"></nav><main id="modalBody"></main></body></html>`);
   await page.addStyleTag({ content: `
@@ -23,6 +153,9 @@ async function loadFoundation(page: import('@playwright/test').Page) {
     header{display:flex;justify-content:space-between;align-items:center} #modalBody{min-width:0;max-width:1120px;margin:0 auto}
   ` });
   await page.addStyleTag({ path: stylePath });
+  for(const module of ['finalise-batch','combined-finalise','combined-review','protected-shift-editor']) {
+    await page.addScriptTag({path:resolve(__dirname,`../../js/weekly-source/${module}.js`)});
+  }
   await page.addScriptTag({ path: workspaceScript });
   await page.addScriptTag({ path: actionsScript });
   await page.evaluate(({ workspaceFixture, correctionPreview }) => {

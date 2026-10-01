@@ -191,6 +191,7 @@
 .ws-grid th:has(input[type="checkbox"]), .ws-grid td:has(input[type="checkbox"]) { width: 48px; text-align: center; }
 .ws-selection-summary, .ws-source-summary { padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--panel, #0f172a) 84%, transparent); }
 .ws-inner-tabs { display: flex; gap: 6px; }
+.ws-inner-tabs .ws-tab-empty:not([aria-selected="true"]) { opacity: .55; }
 .ws-inner-tabs button { min-height: 40px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
 .ws-inner-tabs button[aria-selected="true"] { border-color: var(--accent, #3b82f6); background: color-mix(in srgb, var(--accent, #3b82f6) 15%, transparent); }
 .ws-confirm { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; }
@@ -612,6 +613,42 @@
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+/* Combined source-only lists: do not affect the signed-roster table contract. */
+:is([data-wsr-table], [data-wsc-table]) { min-width: 0; max-width: 100%; }
+:is([data-wsr-table], [data-wsc-table]) > table { width: 100%; min-width: 0; table-layout: fixed; }
+:is([data-wsr-table], [data-wsc-table]) :is(th, td) { min-width: 0; overflow-wrap: anywhere; vertical-align: top; }
+:is([data-wsr-table], [data-wsc-table]) td.ws-actions { white-space: normal; }
+:is([data-wsr-table], [data-wsc-table]) td.ws-actions > .btn { display: block; width: 100%; margin: 0 0 6px; white-space: normal; }
+:is([data-wsr-table], [data-wsc-table]) .ws-status { border-radius: 6px; padding: 4px 7px; max-width: 100%; }
+:is([data-wsr-table], [data-wsc-table]) details > ul { padding-left: 20px; }
+:is([data-wsr-table], [data-wsc-table]) details li { margin: 8px 0; }
+:is([data-wsr-table], [data-wsc-table]) .ws-sort {
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
+  padding: 0; min-height: 0; text-align: left; color: inherit; font: inherit;
+}
+.ws-workspace:has([data-wsc-table]) > details > ul {
+  list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 8px;
+}
+.ws-workspace:has([data-wsc-table]) > details > ul > li {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  padding: 10px 12px; border: 1px solid var(--line, #334155); border-radius: 8px;
+}
+.ws-workspace:has([data-wsc-table]) > details > ul > li > label:first-child { flex: 1 1 300px; }
+.ws-workspace:has([data-wsc-table]) > details > ul > li > .ws-confirm,
+.ws-workspace:has([data-wsc-table]) > details > ul > li > p { flex-basis: 100%; }
+.ws-workspace:has([data-wsc-table]) > details > .btn { margin: 0 8px 8px 0; }
+@media (max-width: 900px) {
+  :is([data-wsr-table], [data-wsc-table]) > table,
+  :is([data-wsr-table], [data-wsc-table]) :is(thead, tbody) { display: block; }
+  :is([data-wsr-table], [data-wsc-table]) thead > tr { display: flex; flex-wrap: wrap; }
+  :is([data-wsr-table], [data-wsc-table]) th:not(:has(button)) { display: none; }
+  :is([data-wsr-table], [data-wsc-table]) tbody > tr { display: grid; border-bottom: 1px solid var(--line); padding: 8px 0; }
+  :is([data-wsr-table], [data-wsc-table]) tbody td { display: block; width: 100%; box-sizing: border-box; }
+  :is([data-wsr-table], [data-wsc-table]) td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 3px; font-size: 11px; font-weight: 650; color: var(--ws-muted-text, #94a3b8); }
+  .ws-workspace:has([data-wsr-table], [data-wsc-table]) .ws-toolbar > label { min-width: 0; flex: 1 1 160px; max-width: 100%; }
+  .ws-workspace:has([data-wsr-table], [data-wsc-table]) .ws-toolbar select { width: 100%; min-width: 0; }
 }
 
 /* Policy WEEKLY_SOURCE_IMPORT_QUERY_POLICY_20260930_V2. Restrict shell

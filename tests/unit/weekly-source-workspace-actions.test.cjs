@@ -6,6 +6,12 @@ const test = require('node:test');
 const actions = require('../../js/weekly-source/workspace-actions.js');
 const fixtures = JSON.parse(readFileSync(resolve(__dirname, '../fixtures/weekly-source-workspace-actions-v1.json'), 'utf8'));
 
+test('saved rejected upload reasons remain explanatory', () => {
+  assert.match(actions._plainMessage('WEEKLY_SOURCE_UPLOAD_DUPLICATE_EXTERNAL_KEY'), /repeats a booking reference/);
+  assert.match(actions._plainMessage('WEEKLY_SOURCE_COVERAGE_SHRINK_ACKNOWLEDGEMENT_REQUIRED'), /shorter period/);
+  assert.match(actions._plainMessage('WEEKLY_SOURCE_REPORT_SCOPE_NOT_OPEN'), /correction journey/);
+});
+
 test('missing-week reminder confirmation identifies the week and source-link errors give usable guidance', () => {
   const html = actions.renderCommandConfirmation({ message: 'Remind missing timesheet',
     context: { candidate: 'Kier Arthur', weeks: '20 Sep 2026' }, confirmation: 'Send reminder', action_label: 'Send reminder' }, {});
