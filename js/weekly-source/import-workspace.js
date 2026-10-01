@@ -1523,6 +1523,15 @@
 
   function wire(tab) {
     const host = document.querySelector(`.ws-workspace[data-ws-tab="${CSS.escape(tab)}"]`); if (!host || host.dataset.wsWired === '1') return; host.dataset.wsWired = '1';
+    // The shared shell highlights clicks, but programmatic deep-links and
+    // return-to-parent renders also need the selected tab to match the body.
+    const descriptors = tabDescriptors(session.workspace);
+    document.querySelectorAll('#modalTabs > button').forEach((button, index) => {
+      const descriptor = descriptors[index];
+      if (!descriptor) return;
+      button.classList.toggle('active', descriptor.key === tab);
+      button.setAttribute('aria-selected', String(descriptor.key === tab));
+    });
     if(tab==='finalise'&&session.workspace?.combined_source_workspace){ bindCombinedFinalise(host); return; }
     if(['imports','queries'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope){bindCommon(host);bindCombinedReview(host,tab);return;}
     if(tab==='queries'&&session.reviewSingleScope){

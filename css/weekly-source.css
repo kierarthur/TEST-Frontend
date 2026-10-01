@@ -113,7 +113,7 @@
 }
 .ws-grid th button[data-ws-sort] { all: unset; display: inline-flex; min-height: 44px; cursor: pointer; font: inherit; align-items: center; }
 /* The generic modal button rule is loaded later; source-table headings remain flat labels. */
-#modal.ctms-modern-modal .ws-grid th button[data-ws-sort] {
+#modal.ctms-modern-modal .ws-grid th button:is([data-ws-sort], [data-wsr-sort], [data-wsc-sort]) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -129,13 +129,13 @@
   text-align: left;
   cursor: pointer;
 }
-#modal.ctms-modern-modal .ws-grid th button[data-ws-sort]:hover {
+#modal.ctms-modern-modal .ws-grid th button:is([data-ws-sort], [data-wsr-sort], [data-wsc-sort]):hover {
   border: 0;
   background: transparent;
   color: #a9cbff;
   box-shadow: none;
 }
-#modal.ctms-modern-modal .ws-grid th button[data-ws-sort]:focus-visible {
+#modal.ctms-modern-modal .ws-grid th button:is([data-ws-sort], [data-wsr-sort], [data-wsc-sort]):focus-visible {
   outline: 2px solid #7aa7ff;
   outline-offset: 3px;
   border-radius: 2px;
@@ -616,12 +616,46 @@
 }
 
 /* Combined source-only lists: do not affect the signed-roster table contract. */
+.ws-workspace:has([data-wsr-table], [data-wsc-table]) > .ws-toolbar:first-child {
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel, #0f172a); gap: 12px;
+}
+.ws-workspace:has([data-wsr-table], [data-wsc-table]) > .ws-toolbar:first-child > label {
+  flex: 0 1 230px; gap: 6px; color: var(--ws-muted-text, #94a3b8);
+}
+.ws-workspace:has([data-wsc-table]) > .ws-notice {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 20px;
+  border-left-width: 1px; padding: 12px 14px;
+}
+.ws-workspace:has([data-wsc-table]) > .ws-notice > :is(strong, span) { grid-column: 1; }
+.ws-workspace:has([data-wsc-table]) > .ws-notice > .btn {
+  grid-column: 2; grid-row: auto; justify-self: end; max-width: 100%; white-space: normal;
+}
+#modal.ctms-modern-modal .ws-workspace .ws-inner-tabs { flex-wrap: wrap; gap: 8px; }
+#modal.ctms-modern-modal .ws-workspace .ws-inner-tabs button[aria-selected="true"] {
+  border-color: #777bec; background: #252d56; color: #fff;
+}
+.ws-workspace:has([data-wsc-table]) > details > summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
 :is([data-wsr-table], [data-wsc-table]) { min-width: 0; max-width: 100%; }
+.ws-workspace > :is([data-wsr-table], [data-wsc-table]) { min-height: 200px; }
+#modal.ctms-modern-modal .ws-grid th button:is([data-wsr-sort], [data-wsc-sort]) {
+  text-transform: uppercase; font-size: 11px; letter-spacing: .025em;
+}
 :is([data-wsr-table], [data-wsc-table]) > table { width: 100%; min-width: 0; table-layout: fixed; }
 :is([data-wsr-table], [data-wsc-table]) :is(th, td) { min-width: 0; overflow-wrap: anywhere; vertical-align: top; }
 :is([data-wsr-table], [data-wsc-table]) td.ws-actions { white-space: normal; }
 :is([data-wsr-table], [data-wsc-table]) td.ws-actions > .btn { display: block; width: 100%; margin: 0 0 6px; white-space: normal; }
 :is([data-wsr-table], [data-wsc-table]) .ws-status { border-radius: 6px; padding: 4px 7px; max-width: 100%; }
+:is([data-wsr-table], [data-wsc-table]) .ws-status-sub { color: var(--ws-muted-text, #94a3b8); font-weight: 400; }
+[data-wsr-table] th:has([data-wsr-sort="client"]), [data-wsc-table] th:has([data-wsc-sort="client"]) { width: 19%; }
+[data-wsr-table] th:first-child:has(+ th [data-wsr-sort="client"]):not(:has(button)) { width: 64px; white-space: nowrap; }
+:is([data-wsr-table], [data-wsc-table]) th:last-child { width: 170px; }
+[data-wsc-table] th:has([data-wsc-sort="system_hours"]) { width: 20%; }
+[data-wsc-table] td[data-label="Hours / break"] { overflow-wrap: normal; }
+[data-protected-editor] .ws-child-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+[data-protected-editor] .ws-child-fields label:has([data-protected-field="contract_id"]) { grid-column: span 2; }
+[data-protected-editor] .ws-child-fields label:has(textarea) { grid-column: 1 / -1; }
+[data-protected-editor] .ws-child-context button { align-self: flex-start; margin-top: 6px; }
 :is([data-wsr-table], [data-wsc-table]) details > ul { padding-left: 20px; }
 :is([data-wsr-table], [data-wsc-table]) details li { margin: 8px 0; }
 :is([data-wsr-table], [data-wsc-table]) .ws-sort {
@@ -640,6 +674,10 @@
 .ws-workspace:has([data-wsc-table]) > details > ul > li > p { flex-basis: 100%; }
 .ws-workspace:has([data-wsc-table]) > details > .btn { margin: 0 8px 8px 0; }
 @media (max-width: 900px) {
+  .ws-workspace:has([data-wsc-table]) > .ws-notice { display: flex; }
+  .ws-workspace:has([data-wsc-table]) > .ws-notice > .btn { align-self: flex-start; }
+  [data-protected-editor] .ws-child-fields { grid-template-columns: 1fr; }
+  [data-protected-editor] .ws-child-fields label:has([data-protected-field="contract_id"]) { grid-column: auto; }
   :is([data-wsr-table], [data-wsc-table]) > table,
   :is([data-wsr-table], [data-wsc-table]) :is(thead, tbody) { display: block; }
   :is([data-wsr-table], [data-wsc-table]) thead > tr { display: flex; flex-wrap: wrap; }

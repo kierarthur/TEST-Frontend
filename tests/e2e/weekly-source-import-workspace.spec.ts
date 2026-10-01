@@ -14,8 +14,7 @@ const fixtures = JSON.parse(readFileSync(
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test('combined finalise reviews eligible clients only and retains their individual completion results',async({page},testInfo)=>{
-  await page.route('**/*',route=>route.abort());
-  await loadFoundation(page);
+  await loadOfficeFoundation(page);
   await page.evaluate(async(workspace:any)=>{
     const win=window as any; workspace.combined_source_workspace=true;
     const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -30,7 +29,7 @@ test('combined finalise reviews eligible clients only and retains their individu
       if(request.action==='COMBINED_FINALISE_WORKSPACE')return {ok:true,json:async()=>({
         contract:'WEEKLY_SOURCE_COMBINED_FINALISE_V1',list:request.payload.list,counts:{ready:2,blocked:1,complete:0},
         scopes,scope_options:[],obligations:[],summary:{missing_previous_reports:1},has_more:false,
-        rows:scopes.map(scope=>({scope_key:scope.key,row_key:scope.key,client:scope.client,candidate:'Example Worker',
+        rows:scopes.filter(scope=>request.payload.list==='blocked'?scope.blocked_count:request.payload.list==='complete'?false:!scope.blocked_count).map(scope=>({scope_key:scope.key,row_key:scope.key,client:scope.client,candidate:'Example Worker',period:scope.period,source:scope.source,
           day_date:'21 Sep 2026',system_hours:'09:00–17:00 · 30 min break',status:{text:scope.blocked_count?'Blocked':'Ready'},actions:[]}))
       })};
       return {ok:true,json:async()=>({ok:true,status:'FINALISED',source_finalised:true,invoice_authority_committed:true,
@@ -39,7 +38,10 @@ test('combined finalise reviews eligible clients only and retains their individu
     await win.CloudTMSWeeklySourceImportWorkspaceV1.open('finalise');
   },fixtures.workspace);
   await expect(page.locator('[data-wsc-select="3"]')).toBeDisabled();
-  for(const width of [390,1120]){
+  await expect(page.locator('#modalTabs button.active')).toHaveText(/Finalise report/);
+  await expect(page.locator('[data-wsc-table] tbody tr')).toHaveCount(2);
+  expect(await page.locator('[data-wsc-sort="client"]').evaluate(el=>getComputedStyle(el).borderTopWidth)).toBe('0px');
+  for(const width of [390,1700]){
     await page.setViewportSize({width,height:900});
     expect(await page.locator('[data-wsc-table]').evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
   }
@@ -58,8 +60,7 @@ test('combined finalise reviews eligible clients only and retains their individu
 });
 
 test('combined queries retain independent cycle actions and full-result seek',async({page},testInfo)=>{
-  await page.route('**/*',route=>route.abort());
-  await loadFoundation(page);
+  await loadOfficeFoundation(page);
   await page.evaluate(async fixture=>{
     const win=window as any;
     const workspace={...fixture,combined_source_workspace:true};
@@ -88,7 +89,7 @@ test('combined queries retain independent cycle actions and full-result seek',as
     await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
   },fixtures.workspace);
   await expect(page.locator('[data-wsr-select]')).toHaveCount(2);
-  for (const width of [390,1120]) {
+  for (const width of [390,1700]) {
     await page.setViewportSize({width,height:900});
     expect(await page.locator('[data-wsr-table]').evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
     const buttons=page.locator('[data-wsr-table] tbody tr').first().locator('td.ws-actions > button');
@@ -115,12 +116,13 @@ test('combined queries retain independent cycle actions and full-result seek',as
   await expect.poll(()=>page.evaluate(()=>(window as any).__requests.filter((item:any)=>item.action==='COMBINED_REVIEW_WORKSPACE').at(-1)?.payload.seek)).toBe('Tr');
 });
 
-test('file View loads its own bounded shift details without accepting or changing the import',async({page})=>{
-  await page.route('**/*',route=>route.abort());
-  await loadFoundation(page);
+test('file View loads its own bounded shift details without accepting or changing the import',async({page},testInfo)=>{
+  await loadOfficeFoundation(page);
   await page.evaluate(()=>{
     const win=window as any;
+    const officeAuthFetch=win.authFetch;
     win.authFetch=async(_url:string,options:any)=>{
+      if(!_url.includes('/weekly-source/v1/commands'))return officeAuthFetch(_url,options);
       const request=JSON.parse(options.body);win.__requests.push(request);
       return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_UPLOAD_DETAIL_V1',upload_id:'file-one',
         file:'NHSP report.xlsx',purpose:'Checking hours',uploaded:'1 Oct 2026, 10:00',coverage:'21 Sep 2026 to 21 Sep 2026',
@@ -141,6 +143,44 @@ test('file View loads its own bounded shift details without accepting or changin
   const requests=await page.evaluate(()=>(window as any).__requests);
   expect(requests.map((item:any)=>item.action)).toEqual(['UPLOAD_DETAIL','UPLOAD_DETAIL']);
   expect(requests[1].payload).toEqual({upload_id:'file-one',limit:50,cursor:'page-two'});
+  await page.locator('#modal').screenshot({path:testInfo.outputPath('file-details-office.png')});
+});
+
+async function loadOfficeFoundation(page: import('@playwright/test').Page) {
+  await page.setViewportSize({width:1700,height:1000});
+  await mountOfficeShell(page,{broker(pathname){
+    if(pathname.startsWith('/api/weekly-source/v1/workspace')) return fixtures.workspace;
+    return undefined;
+  }});
+  await page.waitForFunction(()=>typeof (window as any).CloudTMSWeeklySourceImportWorkspaceV1?.open==='function');
+  await page.evaluate(()=>{(window as any).__requests=[];});
+}
+
+test('protected shift editor uses the real Office modal at desktop and phone widths',async({page},testInfo)=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(()=>{
+    const win=window as any, original=win.authFetch;
+    win.authFetch=async(url:string,options:any)=>{
+      if(!url.includes('/weekly-source/v1/commands'))return original(url,options);
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      return {ok:true,json:async()=>({contract:'WEEKLY_PROTECTED_EDITOR_V1',allowed:true,
+        client:'CloudTMS Stage 8 NHSP Test Trust',candidate:'Kier Arthur',
+        client_id:'11111111-1111-4111-8111-111111111111',candidate_id:'22222222-2222-4222-8222-222222222222',
+        work_date:'2026-09-21',candidate_hours:'09:00–17:00 · 30 min break',source_hours:'No shift on the source report',
+        contracts:[{id:'33333333-3333-4333-8333-333333333333',label:'Band 6 · Community nursing · 1 Sep – 30 Nov 2026'}]})};
+    };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({label:'Protect pay',payload:{
+      client_id:'11111111-1111-4111-8111-111111111111',candidate_id:'22222222-2222-4222-8222-222222222222',
+      work_date:'2026-09-21',start:'09:00',end:'16:00',break_minutes:15}});
+  });
+  await expect(page.locator('[data-protected-field="contract_id"]')).toContainText('Band 6');
+  await expect(page.locator('[data-protected-net]')).toHaveText('6 hours 45 minutes');
+  for(const width of [390,1700]){
+    await page.setViewportSize({width,height:1000});
+    expect(await page.locator('#modalBody').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+    await page.locator('#modal').screenshot({path:testInfo.outputPath(`protected-shift-office-${width}.png`)});
+  }
+  expect(await page.evaluate(()=>(window as any).__requests.map((r:any)=>r.action))).toEqual(['PROTECTED_EDITOR_CONTEXT']);
 });
 
 async function loadFoundation(page: import('@playwright/test').Page) {
