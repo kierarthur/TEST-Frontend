@@ -32,8 +32,8 @@
   const ACTIONS = Object.freeze({
     imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager']),
     queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet']),
-    shifts: new Set(['Accept system hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay']),
-    finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details']),
+    shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay']),
+    finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send back to Queries']),
     tracker: new Set(['No shifts to import', 'View'])
   });
   const TONES = new Set(['neutral', 'info', 'warning', 'positive', 'danger']);
@@ -52,7 +52,8 @@
   const MUTATING_ACTIONS = new Set([
     'Review', 'Review pricing', 'Correct final source', 'Remind candidate', 'Accept system hours',
     'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band',
-    'Review overlapping shift', 'Upload corrected source', 'Protect pay', 'No shifts to import', 'Confirm shift match'
+    'Review overlapping shift', 'Upload corrected source', 'Protect pay', 'No shifts to import', 'Confirm shift match',
+    'Accept current source hours', 'Send back to Queries'
   ]);
   const asText = (value) => String(value == null ? '' : value).trim();
   const asArray = (value) => Array.isArray(value) ? value : [];
@@ -310,7 +311,11 @@
         exclusion_confirmation: asText(finalise.exclusion_confirmation),
         excluded_rows: asArray(finalise.excluded_rows),
         ...normalisePage(finalise), ready: normalisePage(finalise.ready), blocked: normalisePage(finalise.blocked), complete: normalisePage(finalise.complete),
-        active_list: ['ready', 'blocked', 'complete'].includes(asText(finalise.active_list).toLowerCase()) ? asText(finalise.active_list).toLowerCase() : 'blocked',
+        active_list: ((journey.authority_mode === 'TIMESHEET_AUTHORITY' ? ['ready', 'blocked', 'complete'] : ['ready', 'blocked'])
+          .includes(asText(finalise.active_list).toLowerCase()) && finalise[asText(finalise.active_list).toLowerCase()]?.total_count)
+          ? asText(finalise.active_list).toLowerCase() : finalise.ready?.total_count ? 'ready'
+            : finalise.blocked?.total_count ? 'blocked'
+              : journey.authority_mode === 'TIMESHEET_AUTHORITY' && finalise.complete?.total_count ? 'complete' : 'blocked',
         confirmation_text: asText(finalise.confirmation_text), confirmation_required: finalise.confirmation_required !== false,
         finalise_enabled: finalise.finalise_enabled === true, finalise_payload: asObject(finalise.finalise_payload),
         source_summary: asText(finalise.source_summary),
@@ -693,11 +698,11 @@
     ];
     if (workspace.profile.id === 'NHSP_FINAL_BACKING_V1' || workspace.profile.id === 'NHSP_BACKING_REPORT_ACTUAL_V1') return [
       ['Candidate','candidate'], ['Day/date','day_date'], ['Actual hours','actual_hours'], ['Movement','movement'],
-      ['Commission','commission'], ['Total cost','total_cost'], ['Invoice charge','invoice_charge'], ['Status','status']
+      ['Commission','commission'], ['Total cost','total_cost'], ['Invoice charge','invoice_charge'], ['Status','status'], ['Action','actions']
     ];
     return [
       ['Candidate','candidate'], ['Day/date','day_date'], ['Job role','job_role'], ['Client','client'],
-      ['System hours','system_hours'], ['Contract','contract'], ['Outcome','outcome']
+      ['System hours','system_hours'], ['Contract','contract'], ['Outcome','outcome'], ['Action','actions']
     ];
   }
 
@@ -812,16 +817,17 @@
 
   function renderFinalise(workspace, viewState) {
     const finalise = workspace.finalise;
-    if (!finalise.prepared && !finalise.complete.total_count) {
+    const signedTimesheetJourney = workspace.imports.journey.authority_mode === 'TIMESHEET_AUTHORITY';
+    if (!finalise.prepared && !(signedTimesheetJourney && finalise.complete.total_count)) {
       const prepare = finalise.prepare_action;
-      return `${renderFinalisationTracker(workspace)}<div class="ws-notice"><strong>No finalisation report has been prepared</strong><span>Checking files remain available in Imports and Queries.</span>${prepare.command === 'PREPARE_FINALISATION' ? '<button type="button" class="btn primary" data-ws-prepare>Prepare current file for finalisation</button>' : ''}</div>`;
+      return `${signedTimesheetJourney ? renderFinalisationTracker(workspace) : ''}<div class="ws-notice"><strong>No finalisation report has been prepared</strong><span>Checking files remain available in Imports and Queries.</span>${prepare.command === 'PREPARE_FINALISATION' ? '<button type="button" class="btn primary" data-ws-prepare>Prepare current file for finalisation</button>' : ''}</div>`;
     }
     const active = finalise.active_list;
     const ready = finalise.ready.total_count;
     const blocked = finalise.blocked.total_count;
     const page = finalise[active];
-    const tabs = `<div class="ws-inner-tabs" role="tablist">${['ready', 'blocked', 'complete'].map((key) => `<button type="button" role="tab" data-ws-finalise-list="${key}" aria-selected="${active === key}"${finalise[key].total_count ? '' : ' class="ws-tab-empty"'}>${key[0].toUpperCase() + key.slice(1)} (${finalise[key].total_count})</button>`).join('')}</div>`;
-    if (active === 'complete') {
+    const tabs = `<div class="ws-inner-tabs" role="tablist">${(signedTimesheetJourney ? ['ready', 'blocked', 'complete'] : ['ready', 'blocked']).map((key) => `<button type="button" role="tab" data-ws-finalise-list="${key}" aria-selected="${active === key}"${finalise[key].total_count ? '' : ' class="ws-tab-empty" disabled'}>${key[0].toUpperCase() + key.slice(1)} (${finalise[key].total_count})</button>`).join('')}</div>`;
+    if (signedTimesheetJourney && active === 'complete') {
       return `${renderFinalisationTracker(workspace)}${renderApprovedHoursFollowUp(finalise, viewState)}${tabs}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, false, viewState)}<div data-ws-sentinel></div></div><div class="ws-sticky-footer"><span>${page.total_count} complete</span><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button></div>`;
     }
     const sortable = finaliseColumns(workspace, active === 'blocked').filter(([,key]) => key !== 'actions');
@@ -836,7 +842,7 @@
     const intentionalActionLock = finaliseReady && confirmationChecked ? '' : ' disabled data-ctms-intentional-lock="1"';
     const staleNotice = stale ? '<div class="ws-notice ws-notice--warning" role="status"><span>This information has changed. Recheck before continuing.</span></div>' : '';
     const excluded = finalise.exclusion_confirmation ? `<section><h3>Not included as finalised shifts</h3>${renderFinaliseTable(workspace, { rows: finalise.excluded_rows, stale }, true, viewState)}<label class="ws-confirm"><input type="checkbox" data-ws-exclusion-confirm><span>${escapeHtml(finalise.exclusion_confirmation)}</span></label></section>` : '';
-    return `${renderFinalisationTracker(workspace)}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current source')}</div>${renderRateWarnings(finalise.rate_warnings, viewState)}${excluded}${tabs}${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div><label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${confirmationChecked ? ' checked' : ''}${intentionalConfirmationLock}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.phase === 'READY' ? `${finalise.rate_warnings.accepted_count} rate warnings accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise${intentionalActionLock}>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
+    return `${signedTimesheetJourney ? renderFinalisationTracker(workspace) : ''}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current report')}</div>${renderRateWarnings(finalise.rate_warnings, viewState)}${excluded}${tabs}${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div><label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${confirmationChecked ? ' checked' : ''}${intentionalConfirmationLock}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.phase === 'READY' ? `${finalise.rate_warnings.accepted_count} rate warnings accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise${intentionalActionLock}>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
   }
 
   function renderHistory(workspace, state) {
@@ -980,7 +986,7 @@
 
   async function loadCombinedReview(tab,append=false) {
     const state=session.reviews[tab] ||= {filters:{},section:tab==='imports'?'current':'questions',sort:tab==='history'?'finalised_at':tab==='imports'?'uploaded':'',direction:tab==='queries'?'asc':'desc',seek:''};
-    state.filters=session.sourceFilters;
+    state.filters=tab==='history'?{...session.sourceFilters,...(state.historyDates||{})}:session.sourceFilters;
     const filterIdentity=JSON.stringify(state.filters);
     if(state.filterIdentity!==filterIdentity){
       state.selected?.clear();state.reportDetail=null;state.seek='';state.filterIdentity=filterIdentity;
@@ -998,7 +1004,7 @@
       if(!Object.values(state.filters).some(Boolean))state.options=model.scope_options;
       if(tab==='history'&&!append&&!Object.prototype.hasOwnProperty.call(state.filters,'week_ending')){
         const recent=asArray(model.scope_options).map(option=>option.week_ending).filter(Boolean).sort().at(-1);
-        if(recent){state.options=model.scope_options;state.filters.week_ending=recent;return loadCombinedReview(tab);}
+        if(recent){state.options=model.scope_options;state.historyDates={...(state.historyDates||{}),week_ending:recent};return loadCombinedReview(tab);}
       }
       if(append&&state.model)model.rows=[...state.model.rows,...model.rows];
       state.model=model; session.loadedTab=tab;
@@ -1034,6 +1040,13 @@
       const action=normaliseActions([state.reportDetail?.actions?.[Number(button.dataset.wsrReportAction)]],ACTIONS.imports)[0];
       if(action&&action.enabled!==false)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:action}));
     }));
+    host.querySelectorAll('[data-wsr-manual-review]').forEach(button=>button.addEventListener('click',()=>{
+      const shift=(state.reportDetail?.shifts||[]).find(item=>item.source_row_id===button.dataset.wsrManualReview);
+      if(shift)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:{
+        label:'Send back to Queries',payload:{source_row_id:shift.source_row_id,
+          candidate:shift.candidate,client:state.reportDetail.report.client,day_date:shift.day_date}
+      }}));
+    }));
     host.querySelectorAll('[data-wsr-follow-up]').forEach(button=>button.addEventListener('click',async()=>{
       const row=model.rows.find(item=>item.combined_key===button.dataset.wsrFollowUp);
       if(!row?.follow_up_scope)return;
@@ -1068,7 +1081,13 @@
       finally{state.busy=false;await repaint();}
     }));
     host.querySelector('[data-wsr-refresh]')?.addEventListener('click',reload);
-    host.querySelectorAll('[data-wsr-filter]').forEach(input=>input.addEventListener('change',()=>{state.filterFocus=input.dataset.wsrFilter;state.filters[input.dataset.wsrFilter]=input.value;state.sort=tab==='history'?'finalised_at':tab==='imports'?'uploaded':'';reload();}));
+    host.querySelectorAll('[data-wsr-filter]').forEach(input=>input.addEventListener('change',()=>{
+      state.filterFocus=input.dataset.wsrFilter;
+      if(tab==='history'&&['date_from','date_to','week_ending'].includes(input.dataset.wsrFilter)){
+        state.historyDates={...(state.historyDates||{}),[input.dataset.wsrFilter]:input.value};
+      } else session.sourceFilters[input.dataset.wsrFilter]=input.value;
+      state.sort=tab==='history'?'finalised_at':tab==='imports'?'uploaded':'';reload();
+    }));
     host.querySelectorAll('[data-wsr-section]').forEach(button=>button.addEventListener('click',()=>{state.section=button.dataset.wsrSection;reload();}));
     host.querySelectorAll('[data-wsr-sort]').forEach(button=>button.addEventListener('click',()=>{const key=button.dataset.wsrSort;state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc';state.sort=key;reload();}));
     host.querySelectorAll('[data-wsr-action]').forEach(button=>button.addEventListener('click',()=>{
@@ -1159,7 +1178,11 @@
     host.querySelectorAll('[data-wsc-sort]').forEach(button=>button.addEventListener('click',()=>{ const key=button.dataset.wscSort; state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc'; state.sort=key; reload(); }));
     host.querySelectorAll('[data-wsc-select]').forEach(input=>input.addEventListener('change',()=>{ input.checked?state.selected.add(input.dataset.wscSelect):state.selected.delete(input.dataset.wscSelect); repaint(); }));
     host.querySelectorAll('[data-wsc-exclude]').forEach(input=>input.addEventListener('change',()=>{ input.checked?state.exclusions.add(input.dataset.wscExclude):state.exclusions.delete(input.dataset.wscExclude); }));
-    host.querySelector('[data-wsc-select-all]')?.addEventListener('click',()=>{ model.scopes.filter(item=>item.finalise_enabled===true&&item.blocked_count===0).forEach(item=>state.selected.add(item.key)); repaint(); });
+    host.querySelector('[data-wsc-select-all]')?.addEventListener('change',event=>{
+      const eligible=model.scopes.filter(item=>item.finalise_enabled===true&&item.blocked_count===0);
+      eligible.forEach(item=>event.target.checked?state.selected.add(item.key):state.selected.delete(item.key));
+      repaint();
+    });
     host.querySelector('[data-wsc-review]')?.addEventListener('click',()=>{
       try { state.batch=root.CloudTMSWeeklySourceFinaliseBatchV1.create(model.scopes,[...state.selected],[...state.exclusions]); state.error=''; }
       catch(error){ state.error=error.message; } repaint();
@@ -1479,7 +1502,7 @@
       try { await issueCommand('PREPARE_FINALISATION', session.workspace.finalise.prepare_action.payload); await loadWorkspace('finalise'); }
       catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
     });
-    host.querySelectorAll('[data-ws-finalise-list]').forEach((button) => button.addEventListener('click', () => { session.workspace.finalise.active_list = ['ready', 'blocked', 'complete'].includes(button.dataset.wsFinaliseList) ? button.dataset.wsFinaliseList : 'ready'; repaint(); }));
+    host.querySelectorAll('[data-ws-finalise-list]').forEach((button) => button.addEventListener('click', () => { if (!button.disabled && (session.workspace.imports.journey.authority_mode === 'TIMESHEET_AUTHORITY' ? ['ready', 'blocked', 'complete'] : ['ready', 'blocked']).includes(button.dataset.wsFinaliseList)) { session.workspace.finalise.active_list = button.dataset.wsFinaliseList; repaint(); } }));
     const confirmation = host.querySelector('[data-ws-finalise-confirm]'); const action = host.querySelector('[data-ws-finalise]');
     const canFinalise = () => session.workspace.finalise.finalise_enabled
       && session.workspace.finalise.rate_warnings.phase !== 'FINAL_AWAITING_ACCEPTANCE'

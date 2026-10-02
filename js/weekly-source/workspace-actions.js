@@ -82,7 +82,9 @@
       WEEKLY_SOURCE_CONTRACT_NOT_ELIGIBLE: 'That contract does not cover this candidate, client and shift date. Review the contract or choose another.',
       WEEKLY_SOURCE_RECHECK_NOT_CURRENT: 'A newer file or comparison has replaced this one. Close this window and refresh Queries before continuing.',
       WEEKLY_SOURCE_RECHECK_REPLAY_CONFLICT: 'This check was already started with a different choice. Close this window and refresh Queries before making another choice.',
-      WEEKLY_SOURCE_PREVIEW_STALE: 'The source information has changed. Close this window and refresh Queries before continuing.'
+      WEEKLY_SOURCE_PREVIEW_STALE: 'The source information has changed. Close this window and refresh Queries before continuing.',
+      WEEKLY_SOURCE_MANUAL_REVIEW_ALREADY_AUTHORISED: 'This Timesheet has already been authorised. Use the existing unauthorise control first if it is still permitted, then reopen this shift for review.',
+      WEEKLY_SOURCE_MANUAL_REVIEW_SOURCE_STALE: 'A newer import has changed this shift. Refresh Queries to review the current source hours before deciding.'
     };
     const code = text.match(/WEEKLY_(?:SOURCE|PROTECTED)_[A-Z0-9_]+/)?.[0];
     if (guidance[code]) return guidance[code];
@@ -776,6 +778,12 @@
         && proofs.every((proof) => groupKeys.includes(asText(proof.group_key))
           && /^[0-9a-f]{64}$/.test(asText(proof.selection_proof).toLowerCase()));
     }
+    if (command === 'RESOLVE_MANUAL_REVIEW') return !!asText(payload.review_id)
+      && ['OFFICE_ACCEPTED_SOURCE','PROTECTED_PAY'].includes(asText(payload.resolution_kind))
+      && (payload.resolution_kind !== 'OFFICE_ACCEPTED_SOURCE'
+        || /^[0-9a-f]{64}$/.test(asText(payload.expected_current_row_hash)));
+    if (command === 'OPEN_MANUAL_REVIEW') return !!asText(payload.source_row_id)
+      && !!asText(payload.reason);
     if (command === 'CORRECT_FINAL_SOURCE') return false;
     if (command === 'NO_SHIFTS_TO_IMPORT') return !!asText(payload.source_cycle_id)
       && !!asText(payload.source_group_id)
@@ -857,9 +865,9 @@
       const labels = [['candidate','Candidate'],['client','Client'],['day_date','Day/date'],
         ['source_reference','Source worker reference'],['booking_reference','Booking reference'],
         ['system_hours','Source hours / break'],['status','Status'],['issue','Issue']];
-      const rows = asArray(model?.shifts).map(row => `<tr>${labels.map(([key,label])=>`<td data-label="${escapeHtml(label)}">${escapeHtml(row[key]||'—')}</td>`).join('')}</tr>`).join('');
+      const rows = asArray(model?.shifts).map(row => `<tr>${labels.map(([key,label])=>`<td data-label="${escapeHtml(label)}">${escapeHtml(row[key]||'—')}</td>`).join('')}<td data-label="Action">${row.source_row_id?`<button class="btn btn-outline" data-wsa-file-query="${escapeHtml(row.source_row_id)}">Send back to Queries</button>`:''}</td></tr>`).join('');
       const refusal = model?.reason_code ? `<div class="ws-notice ws-notice--warning"><strong>Why this file was refused</strong><span>${escapeHtml(plainMessage(model.reason_code, 'The saved attempt was refused. Quote the reference below when requesting an investigation.'))}</span><span>Reference: ${escapeHtml(model.reason_code)}</span></div>` : '';
-      return `<div class="ws-child" data-wsa-screen="upload-detail">${model?`<h3>${escapeHtml(model.file)}</h3><div class="ws-child-context">${[['purpose','Purpose'],['uploaded','Uploaded'],['coverage','Coverage'],['status','File status'],['rows','Source rows'],['final_source','Finalisation']].map(([key,label])=>`<div><span>${label}</span><strong>${escapeHtml(model[key])}</strong></div>`).join('')}</div>${refusal}<div class="ws-child-scroll" data-wsr-table><table class="grid mini ws-grid"><thead><tr>${labels.map(([,label])=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${rows||'<tr><td colspan="8">No source rows recorded.</td></tr>'}</tbody></table></div>`:'<p role="status">Loading file details…</p>'}${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions">${model?.has_more?`<button class="btn btn-outline" data-wsa-file-more${state.busy?' disabled':''}>Load more shifts</button>`:''}${state.error&&!model?'<button class="btn btn-outline" data-wsa-file-retry>Retry</button>':''}<button class="btn primary" data-wsa-close>Close</button></div></div>`;
+      return `<div class="ws-child" data-wsa-screen="upload-detail">${model?`<h3>${escapeHtml(model.file)}</h3><div class="ws-child-context">${[['purpose','Purpose'],['uploaded','Uploaded'],['coverage','Coverage'],['status','File status'],['rows','Source rows'],['final_source','Finalisation']].map(([key,label])=>`<div><span>${label}</span><strong>${escapeHtml(model[key])}</strong></div>`).join('')}</div>${refusal}<div class="ws-child-scroll" data-wsr-table><table class="grid mini ws-grid"><thead><tr>${labels.map(([,label])=>`<th>${label}</th>`).join('')}<th>Action</th></tr></thead><tbody>${rows||'<tr><td colspan="9">No source rows recorded.</td></tr>'}</tbody></table></div>`:'<p role="status">Loading file details…</p>'}${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions">${model?.has_more?`<button class="btn btn-outline" data-wsa-file-more${state.busy?' disabled':''}>Load more shifts</button>`:''}${state.error&&!model?'<button class="btn btn-outline" data-wsa-file-retry>Retry</button>':''}<button class="btn primary" data-wsa-close>Close</button></div></div>`;
     };
     const load = async (append=false) => {
       if(state.busy)return;
@@ -880,10 +888,40 @@
       host.querySelector('[data-wsa-close]')?.addEventListener('click',closeChild);
       host.querySelector('[data-wsa-file-more]')?.addEventListener('click',()=>load(true));
       host.querySelector('[data-wsa-file-retry]')?.addEventListener('click',()=>load(false));
+      host.querySelectorAll('[data-wsa-file-query]').forEach(button=>button.addEventListener('click',()=>{
+        const row=asArray(state.model?.shifts).find(item=>item.source_row_id===button.dataset.wsaFileQuery);
+        if(row)openManualReview({...row,day_date:row.day_date});
+      }));
     };
     const opened=openChild({title:'Source file details',kind,render,wire});
     if(opened)void load();
     return opened;
+  }
+
+  function openManualReview(payloadValue) {
+    const payload=asObject(payloadValue);
+    const sourceRowId=asText(payload.source_row_id);
+    if(!sourceRowId)return openDetail({detail:{problem:'This imported shift is not available for manual review. Recheck the report.'}},'View details');
+    const state={reason:'',busy:false,error:''};
+    const kind='weekly-source-manual-review-v1';
+    const render=()=>`<div class="ws-child" data-wsa-screen="manual-review"><h3>Send back to Queries</h3><p>${escapeHtml(payload.candidate||'Selected candidate')} · ${escapeHtml(payload.client||'Selected client')} · ${escapeHtml(payload.day_date||'Imported shift')}</p><p>This holds the existing Timesheet at first authorisation until Office accepts the current source hours or protects pay. It does not contact the candidate or create another shift.</p><label>Reason<textarea data-wsa-manual-reason maxlength="1000" required${state.busy?' disabled':''}>${escapeHtml(state.reason)}</textarea></label>${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions"><button class="btn btn-outline" data-wsa-manual-cancel${state.busy?' disabled':''}>Cancel</button><button class="btn primary" data-wsa-manual-submit${state.busy?' disabled':''}>Send back to Queries</button></div></div>`;
+    const wire=()=>{
+      const host=root.document?.querySelector('[data-wsa-screen="manual-review"]');
+      if(!host||host.dataset.wsaWired==='1')return;
+      host.dataset.wsaWired='1';
+      host.querySelector('[data-wsa-manual-cancel]')?.addEventListener('click',closeChild);
+      host.querySelector('[data-wsa-manual-reason]')?.addEventListener('input',event=>{state.reason=event.target.value;});
+      host.querySelector('[data-wsa-manual-submit]')?.addEventListener('click',async()=>{
+        if(state.busy)return;
+        if(!state.reason.trim()){state.error='Enter a reason.';rerender(kind);return;}
+        state.busy=true;state.error='';rerender(kind);
+        try{const result=await workspaceApi().issueCommand('OPEN_MANUAL_REVIEW',{source_row_id:sourceRowId,reason:state.reason.trim()});
+          if(result?.ok!==true)throw new Error('The query was not confirmed. Recheck this shift.');
+          await finishAction();
+        }catch(error){state.error=plainMessage(error?.message,'The query could not be saved.');state.busy=false;rerender(kind);}
+      });
+    };
+    return openChild({title:'Send back to Queries',kind,render,wire});
   }
 
   function openProtectedReview(payloadValue) {
@@ -960,7 +998,8 @@
     const values = { work_date: asText(initial.work_date), start: asText(initial.start || initial.start_at_local),
       end: asText(initial.end || initial.end_at_local), break_minutes: initial.break_minutes ?? '',
       contract_id: asText(initial.contract_id), shift_choice: asText(initial.work_event_id), reason: '' };
-    const state = { mode, busy: false, error: '', pending: null, idempotencyKey: null };
+    const state = { mode, busy: false, error: '', pending: null, idempotencyKey: null,
+      protectedSaved: false };
     let readSequence = 0;
     const kind = 'weekly-source-protected-shift-v1';
     const selection = () => ({ client_id: context.client_id, candidate_id: context.candidate_id,
@@ -981,7 +1020,8 @@
       } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
       finally { if (sequence === readSequence) { state.busy = false; rerender(kind); } }
     };
-    const render = () => editor.render(context, values, { ...state, busy: state.busy || !!state.pending })
+    const render = () => editor.render(context, values, { ...state,
+      lockedIdentity: !!initial.work_event_id, busy: state.busy || !!state.pending })
       + (state.pending && !state.busy ? '<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-check-result>Check saved result</button></div><p>The outcome is not yet confirmed. Keep these details unchanged while checking; do not add this shift again.</p>' : '')
       + (!state.busy && !state.pending && context.allowed && !context.contracts.length
         ? '<p>No eligible contract covers this date.</p><button type="button" class="btn btn-outline" data-protected-create-contract>Create contract</button><button type="button" class="btn btn-outline" data-protected-recheck>Recheck contracts</button>' : '');
@@ -995,17 +1035,25 @@
         if (!asText(values.reason)) throw new Error('Enter a reason.');
         if (!values.contract_id) throw new Error('Choose an eligible contract.');
         state.busy = true; rerender(kind);
-        if (!state.pending) {
+        if (!state.pending && !state.protectedSaved) {
           const prepared = await workspaceApi().issueCommand('PREPARE_PROTECTED_EDITOR', selection());
           context = { ...context, ...prepared };
           state.idempotencyKey = root.crypto.randomUUID();
           state.pending = editor.request(context, values, state.idempotencyKey, mode);
-        } else {
+        } else if (state.pending) {
           state.pending.payload.recover_unknown_outcome = true;
         }
-        const result = await workspaceApi().issueCommand(state.pending.action, state.pending.payload);
-        if (result?.ok !== true) throw new Error('The approved-hours update is not yet confirmed. Check its saved result before continuing.');
-        state.pending = null;
+        if (!state.protectedSaved) {
+          const result = await workspaceApi().issueCommand(state.pending.action, state.pending.payload);
+          if (result?.ok !== true) throw new Error('The approved-hours update is not yet confirmed. Check its saved result before continuing.');
+          state.pending = null; state.protectedSaved = true;
+        }
+        if (initial.manual_review_id) {
+          const resolved = await workspaceApi().issueCommand('RESOLVE_MANUAL_REVIEW', {
+            review_id: initial.manual_review_id, resolution_kind: 'PROTECTED_PAY'
+          });
+          if (resolved?.ok !== true) throw new Error('Protected pay was saved, but the query still needs checking. Recheck this result.');
+        }
         await finishAction();
       } catch (error) {
         // These exact refusals occur in the first transactional family prepare,
@@ -1054,6 +1102,7 @@
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
+    if(label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
     if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
     if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);
     if (label === 'Review protected pay') return openProtectedReview(detail.payload);

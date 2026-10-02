@@ -653,6 +653,10 @@
 [data-wsr-table] .ws-query-expansion summary { cursor: pointer; padding: 4px 0; }
 [data-wsr-table] .ws-query-shifts { width: 100%; table-layout: fixed; margin-top: 8px; }
 [data-wsr-table] .ws-query-shifts :is(th, td) { padding: 8px 10px; vertical-align: middle; }
+[data-wsr-table] tr.ws-query-hold > td { background: rgba(180, 48, 64, .15); }
+[data-wsr-table] tr.ws-query-nonblocking > td { background: rgba(31, 148, 94, .13); }
+[data-wsr-table] tr.ws-query-hold > td:first-child { box-shadow: inset 3px 0 #d35a69; }
+[data-wsr-table] tr.ws-query-nonblocking > td:first-child { box-shadow: inset 3px 0 #58bd8a; }
 [data-wsr-table] .ws-query-contact-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 [data-wsr-table] .ws-query-contact-actions:empty { display: none; }
 :is([data-wsr-table], [data-wsc-table]) .ws-status { border-radius: 6px; padding: 4px 7px; max-width: 100%; }

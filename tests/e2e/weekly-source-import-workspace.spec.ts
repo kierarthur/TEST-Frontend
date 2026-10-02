@@ -27,8 +27,11 @@ test('History opens a completed report and loads its immutable detail pages with
         tab:request.payload.tab,section:'questions',rows:[],counts:{questions:0},owners:[],scope_options:[],has_more:false})};
       if(request.payload.report_key)return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_COMPLETED_REPORT_V1',report,
         shifts:[{candidate:request.payload.cursor?'Second Worker':'First Worker',day_date:'21 Sep 2026',
-          start:'09:00',end:'17:00',break_minutes:30,net_minutes:450,booking_reference:'123'}],
-        movements:[],shift_count:2,movement_count:0,invoice_charge_pence:0,
+          start:'09:00',end:'17:00',break_minutes:30,net_minutes:450,booking_reference:'123',
+          source_total_cost_pence:5000,source_commission_pence:1000,source_shift_charge_pence:6000}],
+        movements:[{candidate:'First Worker',day_date:'21 Sep 2026',booking_reference:'123',
+          movement:'Positive',pay_ex_vat_pence:5000,invoice_charge_pence:6000,vat_pence:1200,
+          total_inc_vat_pence:7200}],shift_count:2,movement_count:1,invoice_charge_pence:6000,
         has_more:!request.payload.cursor,next_cursor:request.payload.cursor?'':'second-page'})};
       return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_REPORT_HISTORY_V1',rows:[report],
         scope_options:[{week_ending:'2026-09-20',period:'20 Sep 2026'},{week_ending:'2026-09-27',period:'27 Sep 2026'}],has_more:false})};
@@ -37,8 +40,11 @@ test('History opens a completed report and loads its immutable detail pages with
   },fixtures.workspace);
   await expect(page.locator('[data-wsr-filter="week_ending"]')).toHaveValue('2026-09-27');
   await page.getByRole('button',{name:'View report',exact:true}).click();
-  await expect(page.getByText('First Worker',{exact:true})).toBeVisible();
+  await expect(page.getByText('First Worker',{exact:true}).first()).toBeVisible();
   await expect(page.getByText('30 min',{exact:true})).toBeVisible();
+  await expect(page.getByText('Source charges',{exact:true})).toBeVisible();
+  await page.getByText('£60.00',{exact:true}).first().click();
+  await expect(page.getByText('Cost £50.00 · Commission £10.00 · Charge £60.00')).toBeVisible();
   await page.getByRole('button',{name:'Load more report details',exact:true}).click();
   await expect(page.getByText('Second Worker',{exact:true})).toBeVisible();
   await expect(page.getByRole('button',{name:'Load more report details',exact:true})).toHaveCount(0);
@@ -279,6 +285,64 @@ test('protected shift editor uses the real Office modal at desktop and phone wid
     await page.locator('#modal').screenshot({path:testInfo.outputPath(`protected-shift-office-${width}.png`)});
   }
   expect(await page.evaluate(()=>(window as any).__requests.map((r:any)=>r.action))).toEqual(['PROTECTED_EDITOR_CONTEXT']);
+});
+
+test('protecting an existing imported shift locks its identity while Add protected shift remains separate', async ({ page }) => {
+  await loadFoundation(page);
+  const result = await page.evaluate(() => {
+    const editor = (window as any).CloudTMSProtectedShiftEditorV1;
+    const context = { allowed: true, client: 'Example Trust', candidate: 'Kier Arthur',
+      source_family: 'NHSP', source_hours: '09:00–17:00 · 30 min break',
+      contracts: [{ id: '33333333-3333-4333-8333-333333333333', label: 'Band 6' }],
+      events: [{ work_event_id: '44444444-4444-4444-8444-444444444444', source_hours: '09:00–17:00' }] };
+    const values = { work_date: '2026-09-21', start: '09:00', end: '16:00', break_minutes: 15,
+      contract_id: context.contracts[0].id, shift_choice: context.events[0].work_event_id };
+    return { existing: editor.render(context, values, { lockedIdentity: true }),
+      missing: editor.render(context, values, { lockedIdentity: false }) };
+  });
+  expect(result.existing).toContain('Imported NHSP Shift:');
+  expect(result.existing).not.toContain('Choose candidate');
+  expect(result.existing).not.toContain('Choose client');
+  expect(result.existing).not.toContain('A separate new shift');
+  expect(result.existing).toMatch(/data-protected-field="contract_id" disabled/);
+  expect(result.missing).toContain('Choose candidate');
+  expect(result.missing).toContain('A separate new shift');
+});
+
+test('Queries shades each shift independently and marks a mixed group red', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(() => {
+    const review = (window as any).CloudTMSCombinedReviewV1;
+    const model = { contract: 'WEEKLY_SOURCE_COMBINED_REVIEW_V1', tab: 'queries',
+      section: 'questions', rows: [{ combined_key: 'kier-week', client: 'Example Trust',
+        candidate: 'Kier Arthur', source: 'NHSP', period: '2 Oct 2026',
+        children: [{ issue: 'Timesheet missing', day_date: '21 Sep 2026' },
+          { issue: 'Manually queried', day_date: '22 Sep 2026' }] }] };
+    document.getElementById('modalBody')!.innerHTML = review.render(model);
+  });
+  await expect(page.locator('tr.ws-query-hold').first()).toBeVisible();
+  await page.locator('.ws-query-expansion summary').click();
+  await expect(page.locator('.ws-query-shifts tbody tr').nth(0)).toHaveClass(/ws-query-nonblocking/);
+  await expect(page.locator('.ws-query-shifts tbody tr').nth(1)).toHaveClass(/ws-query-hold/);
+  await expect(page.getByText('Manually queried')).toBeVisible();
+});
+
+test('Query progress does not call queued outreach contacted and retains candidate-manager disagreement', async ({ page }) => {
+  await loadFoundation(page);
+  const result = await page.evaluate(() => {
+    const summary = (window as any).CloudTMSCombinedReviewV1.questionSummary;
+    const base = { candidate_asked: true, manager_informed: false, source_family: 'NHSP',
+      children: [{ issue: 'Hours differ' }] };
+    return { queued: summary(base), disagreed: summary({ ...base, manager_informed: true,
+      children: [{ issue: 'Hours differ', candidate_response: 'My hours are correct',
+        candidate_contacted_at: '2 Oct 2026, 14:30', manager_response: 'System hours are correct',
+        manager_contacted_at: '2 Oct 2026, 15:00' }] }) };
+  });
+  expect(result.queued.candidate).toBe('Candidate not contacted');
+  expect(result.disagreed.candidate).toBe('My hours are correct');
+  expect(result.disagreed.manager).toBe('System hours are correct');
+  expect(result.disagreed.next).toBe('Speak to candidate');
+  expect(result.disagreed.managerHint).toContain('2 Oct 2026, 15:00 UK');
 });
 
 async function loadFoundation(page: import('@playwright/test').Page) {
@@ -969,97 +1033,95 @@ test('Imports keeps signed-Timesheet checks inside the same weekly workspace', a
   await page.screenshot({ path: testInfo.outputPath('weekly-imports-two-journeys.png'), fullPage: true });
 });
 
-test('Finalise tracker stays simple and no-shifts certification uses the exact server action', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1120, height: 900 });
+async function loadCombinedFinaliseProof(page: import('@playwright/test').Page) {
   await loadFoundation(page);
-  await page.evaluate(async () => {
-    const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
-    await api.open();
-    await (window as any).__modalStack.at(-1).setTab('finalise');
-  });
-  await page.waitForTimeout(50);
-
-  await expect(page.getByRole('heading', { name: 'Finalisation progress' })).toBeVisible();
-  await expect(page.getByRole('combobox', { name: 'Finalisation week' })).toHaveValue('22222222-2222-4222-8222-222222222222');
-  await expect(page.getByText('Royal Berkshire NHS Trust')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'No shifts to import' })).toBeVisible();
-  await expect(page.getByRole('checkbox')).toHaveCount(1);
-  await page.screenshot({ path: testInfo.outputPath('weekly-source-finalisation-tracker.png'), fullPage: true });
-
-  await page.getByRole('button', { name: 'No shifts to import' }).click();
-  await page.waitForTimeout(25);
-  await expect(page.getByRole('heading', { name: 'No shifts to import' })).toBeVisible();
-  await expect(page.getByText('Royal Berkshire NHS Trust', { exact: true })).toBeVisible();
-  await page.getByLabel('I confirm there are no shifts to import for this week.').check();
-  await page.getByRole('button', { name: 'Confirm no shifts to import' }).click();
-  await page.waitForTimeout(50);
-
-  const sent = await page.evaluate(() => (window as any).__requests[0]);
-  expect(sent).toEqual({
-    action: 'NO_SHIFTS_TO_IMPORT',
-    payload: {
+  await page.evaluate(async fixture => {
+    const win = window as any;
+    const workspace = { ...fixture, combined_source_workspace: true };
+    const zeroPayload = {
       source_cycle_id: '22222222-2222-4222-8222-222222222222',
       source_group_id: '11111111-1111-4111-8111-111111111111',
       client_id: '63333333-3333-4333-8333-333333333333',
       expected_cycle_version: 3,
       attestation_text: 'No shifts to import'
+    };
+    win.authFetch = async (url: string, options: any = {}) => {
+      if (!url.includes('/commands')) return { ok: true, json: async () => workspace };
+      const request = JSON.parse(options.body); win.__requests.push(request);
+      if (request.action === 'COMBINED_FINALISE_WORKSPACE') return { ok: true, json: async () => ({
+        contract: 'WEEKLY_SOURCE_COMBINED_FINALISE_V1', list: request.payload.list,
+        counts: { ready: 0, blocked: 0 }, scopes: [], rows: [], has_more: false,
+        scope_options: [
+          { source_group_id: zeroPayload.source_group_id, source: 'Stage 8 NHSP Test', week_ending: '2026-09-27', period: '27 Sep 2026' },
+          { source_group_id: zeroPayload.source_group_id, source: 'Stage 8 NHSP Test', week_ending: '2026-09-06', period: '6 Sep 2026' }
+        ], summary: { missing_previous_reports: 1 },
+        obligations: [{ key: 'zero-return', client: 'Royal Berkshire NHS Trust', source: 'Stage 8 NHSP Test',
+          period: '27 Sep 2026', missing_previous_report: true,
+          progress: { status: { text: 'Not finalised' }, actions: [{ label: 'No shifts to import', enabled: true,
+            kind: 'COMMAND', command: 'NO_SHIFTS_TO_IMPORT', payload: zeroPayload }] } }]
+      }) };
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('finalise');
+  }, fixtures.workspace);
+}
+
+test('combined Finalise keeps zero-return certification in client-and-period progress', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1120, height: 900 });
+  await loadCombinedFinaliseProof(page);
+  await expect(page.getByRole('combobox', { name: 'Period' })).toBeVisible();
+  await expect(page.getByText('1 missing finalisation report for previous weeks')).toBeVisible();
+  await page.locator('[data-wsc-obligations] summary').click();
+  await expect(page.getByText('Royal Berkshire NHS Trust')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('weekly-source-finalisation-progress.png'), fullPage: true });
+  await page.getByRole('button', { name: 'No shifts to import' }).click();
+  await expect(page.getByRole('heading', { name: 'No shifts to import' })).toBeVisible();
+  await page.getByLabel('I confirm there are no shifts to import for this week.').check();
+  await page.getByRole('button', { name: 'Confirm no shifts to import' }).click();
+  expect(await page.evaluate(() => (window as any).__requests.find((request: any) => request.action === 'NO_SHIFTS_TO_IMPORT'))).toEqual({
+    action: 'NO_SHIFTS_TO_IMPORT', payload: {
+      source_cycle_id: '22222222-2222-4222-8222-222222222222',
+      source_group_id: '11111111-1111-4111-8111-111111111111',
+      client_id: '63333333-3333-4333-8333-333333333333',
+      expected_cycle_version: 3, attestation_text: 'No shifts to import'
     }
   });
 });
 
-test('NHSP earlier-week filter changes the selected server cycle without changing the locked context bar', async ({ page }) => {
+test('signed-Timesheet authority keeps its existing completed route', async ({ page }) => {
   await loadFoundation(page);
-  await page.evaluate(() => {
-    const win = window as any;
-    const originalFetch = win.authFetch;
-    win.__cycleRequests = [];
-    win.authFetch = async (url: string, options: any = {}) => {
-      if (String(url).includes('/workspace')) {
-        const request = Object.fromEntries(new URLSearchParams(String(url).split('?')[1] || '').entries());
-        win.__cycleRequests.push(request);
-        const payload = structuredClone(win.__workspaceFixture);
-        if (request.source_cycle_id === '52222222-2222-4222-8222-222222222222') {
-          payload.selected = { source_group_id: '11111111-1111-4111-8111-111111111111', source_cycle_id: request.source_cycle_id };
-          payload.finalise.tracker.cycle_id = request.source_cycle_id;
-          payload.finalise.tracker.cycle_label = 'Week ending 6 Sep 2026';
-        }
-        return { ok: true, json: async () => payload };
-      }
-      return originalFetch(url, options);
-    };
-  });
-  await page.evaluate(async (fixture) => {
-    (window as any).__workspaceFixture = fixture;
+  const result = await page.evaluate(workspaceFixture => {
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.imports.journey = { authority_mode: 'TIMESHEET_AUTHORITY',
+      title: 'Signed Timesheet decides hours' };
+    payload.finalise.prepared = true;
+    payload.finalise.ready = { total_count: 0, rows: [] };
+    payload.finalise.blocked = { total_count: 0, rows: [] };
+    payload.finalise.complete = { total_count: 1, rows: [{ candidate: 'Kier Arthur', day_date: '21 Sep 2026' }] };
+    payload.finalise.active_list = 'complete';
     const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
-    await api.open();
-    await (window as any).__modalStack.at(-1).setTab('finalise');
+    const workspace = api.normaliseWorkspace(payload);
+    return { active: workspace.finalise.active_list,
+      html: api.renderWorkspace(workspace, 'finalise', api._session) };
   }, fixtures.workspace);
-  await page.getByRole('combobox', { name: 'Finalisation week' }).selectOption('52222222-2222-4222-8222-222222222222');
-  const last = await page.evaluate(() => (window as any).__cycleRequests.at(-1));
-  expect(last.source_cycle_id).toBe('52222222-2222-4222-8222-222222222222');
-  await expect(page.getByRole('combobox', { name: 'Finalisation week' })).toHaveValue('52222222-2222-4222-8222-222222222222');
-  await expect(page.getByRole('combobox', { name: 'Trust' })).toHaveCount(1);
-  await expect(page.locator('.ws-context-bar [data-ws-context="cycle"]')).toHaveCount(0);
-  expect(last.client_id).toBeUndefined();
-  expect(last.report_scope_id).toBeUndefined();
+  expect(result.active).toBe('complete');
+  expect(result.html).toContain('data-ws-finalise-list="complete"');
+  expect(result.html).toContain('1 complete');
 });
 
 for (const width of [360, 720, 1120]) {
-  test(`NHSP week filter stays compact and usable at ${width}px`, async ({ page }, testInfo) => {
+  test(`combined Finalise period filter stays compact and selects the earlier cutoff at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 820 });
-    await loadFoundation(page);
-    await page.evaluate(async () => {
-      const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
-      await api.open();
-      await (window as any).__modalStack.at(-1).setTab('finalise');
-    });
-    await expect(page.getByRole('combobox', { name: 'Finalisation week' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Finalisation progress' })).toBeVisible();
-    const bounds = await page.getByRole('combobox', { name: 'Finalisation week' }).boundingBox();
+    await loadCombinedFinaliseProof(page);
+    const filter = page.getByRole('combobox', { name: 'Period' });
+    await expect(filter).toBeVisible();
+    const bounds = await filter.boundingBox();
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    await page.screenshot({ path: testInfo.outputPath(`nhsp-finalisation-week-${width}.png`), fullPage: true });
+    await filter.selectOption('2026-09-06');
+    await expect.poll(() => page.evaluate(() => (window as any).__requests.filter((request: any) => request.action === 'COMBINED_FINALISE_WORKSPACE').at(-1)?.payload.week_ending)).toBe('2026-09-06');
+    await page.screenshot({ path: testInfo.outputPath(`nhsp-finalisation-period-${width}.png`), fullPage: true });
   });
 }
 
