@@ -798,6 +798,32 @@ test('NHSP import review and finalise show the accepted source facts without bla
   await page.screenshot({ path: testInfo.outputPath('nhsp-accepted-report-finalise-facts.png'), fullPage: true });
 });
 
+test('NHSP final report keeps the row action visible at Office desktop widths', async ({ page }) => {
+  await page.setViewportSize({ width: 1193, height: 900 });
+  await loadFoundation(page);
+  await page.evaluate(async (fixture) => {
+    const payload = structuredClone(fixture);
+    payload.imports.journey = { authority_mode: 'SOURCE_AUTHORITY' };
+    payload.finalise.active_list = 'ready';
+    payload.finalise.blocked = { total_count: 0, rows: [] };
+    payload.finalise.ready = { total_count: 1, rows: [{
+      candidate: 'Kier Arthur', day_date: 'Tue 8 Sep 2026', actual_hours: '01:00-04:00 (30 min break)',
+      movement: 'Positive', commission: '£50.00', total_cost: '£50.00', invoice_charge: '£100.00',
+      status: { text: 'Ready', tone: 'positive' },
+      actions: [{ label: 'Send back to Queries', enabled: true, payload: { source_row_id: 'row-1' } }]
+    }] };
+    const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
+    await api.open();
+    api._session.workspace = api.normaliseWorkspace(payload);
+    api._session.loadedTab = 'finalise';
+    await (window as any).__modalStack.at(-1).setTab('finalise');
+  }, fixtures.workspace);
+  const table = page.locator('.ws-source-finalise-grid');
+  await expect(table.getByRole('button', { name: 'Send back to Queries' })).toBeVisible();
+  const overflow = await page.locator('[data-ws-scroll]').evaluate(region => region.scrollWidth - region.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
 test('one selection reviews separate NHSP backing reports and accepts each exact Trust scope', async ({ page }, testInfo) => {
   await loadFoundation(page);
   await page.evaluate(async (workspaceFixture) => {

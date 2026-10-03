@@ -738,7 +738,8 @@
         return `<td data-label="${escapeHtml(label)}">${escapeHtml(asText(row[key]) || '—')}</td>`;
       }).join('')}</tr>`;
     }).join('');
-    return `<table class="grid mini ws-grid"><thead><tr>${columns.map(([label, key]) => key === 'actions' ? `<th>${label}</th>` : renderSortHeader(label, key, sort)).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${columns.length}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table>`;
+    const sourceAuthorityClass = workspace.imports.journey.authority_mode === 'SOURCE_AUTHORITY' ? ' ws-source-finalise-grid' : '';
+    return `<table class="grid mini ws-grid${sourceAuthorityClass}"><thead><tr>${columns.map(([label, key]) => key === 'actions' ? `<th>${label}</th>` : renderSortHeader(label, key, sort)).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${columns.length}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table>`;
   }
 
   function renderFinalisationTracker(workspace) {
