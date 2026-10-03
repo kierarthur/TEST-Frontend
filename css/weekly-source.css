@@ -156,6 +156,7 @@
   overflow-wrap: break-word;
 }
 .ws-action-hint { display: inline-flex; max-width: 100%; align-items: center; }
+.ws-source-ids { display: block; margin-top: 3px; color: var(--ws-muted-text, #94a3b8); font-size: 11px; line-height: 1.3; }
 .ws-empty { padding: 32px 12px !important; text-align: center; color: var(--ws-muted-text, #94a3b8); }
 
 .ws-sticky-footer {

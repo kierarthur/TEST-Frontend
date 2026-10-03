@@ -148,6 +148,41 @@ test('combined query Open accepts only selected eligible shifts after explicit c
   expect(actual).toEqual(expected);
 });
 
+test('Office checks show source identity and prefill candidate search without a false empty match',async({page})=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any,workspace={...fixture,combined_source_workspace:true};
+    const row={combined_key:'checks:baljit',row_key:'baljit',section:'checks',
+      client:'Berkshire Healthcare NHS Foundation Trust',candidate:'Rai-Baptiste Baljit',
+      source_reference:'CCR-02611',booking_reference:'155154209',day_date:'Mon 21 Sep 2026',
+      system_hours:'09:00–17:00 (30 min break)',status:{text:'Needs correction'},
+      problem:'No active candidate matches this source row',actions:[{label:'Link candidate',enabled:true,
+        payload:{candidate:'Rai-Baptiste Baljit',client:'Berkshire Healthcare NHS Foundation Trust',
+          shift:'21 Sep 2026',detail:{source_reference:'CCR-02611',booking_reference:'155154209'},
+          recheck_payload:{request_id:'test'}}}]};
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>workspace};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action!=='COMBINED_REVIEW_WORKSPACE')throw new Error('Unexpected mutation');
+      return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',
+        tab:'queries',section:request.payload.section||'questions',
+        rows:request.payload.section==='checks'?[row]:[],counts:{questions:0,checks:1,protected:0},
+        owners:[],scope_options:[],has_more:false})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  await page.locator('[data-wsr-section="checks"]').click();
+  await expect(page.getByText('Source ref: CCR-02611')).toBeVisible();
+  await expect(page.getByText('Booking: 155154209')).toBeVisible();
+  await page.getByRole('button',{name:'Link candidate'}).click();
+  await expect(page.getByRole('dialog',{name:'Link candidate'})).toBeVisible();
+  await expect(page.getByText('Source worker reference:')).toBeVisible();
+  await expect(page.getByText('CCR-02611',{exact:true})).toBeVisible();
+  await expect(page.getByText('Booking reference:')).toBeVisible();
+  await expect(page.getByRole('textbox',{name:/Type at least 2 characters/})).toHaveValue('Baljit');
+  expect(await page.evaluate(()=>(window as any).__requests.some((request:any)=>request.action==='RECHECK_SOURCE'))).toBe(false);
+});
+
 test('combined queries retain independent cycle actions and full-result seek',async({page},testInfo)=>{
   await loadOfficeFoundation(page);
   await page.evaluate(async fixture=>{

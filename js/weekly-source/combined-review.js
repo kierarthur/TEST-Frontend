@@ -67,6 +67,12 @@
       if(key.startsWith('question_')){const summary=questionSummary(row),part=key.slice(9),hint=summary[`${part}Hint`];return `<td data-label="${e(label)}"${hint?` title="${e(hint)}"`:''}>${e(summary[part])}</td>`;}
       if(key==='actions')return `<td data-label="Actions" class="ws-actions">${row.follow_up_scope?`<button class="btn btn-outline" data-wsr-follow-up="${e(row.combined_key)}">Open</button>`:actionButtons(row,row.actions,undefined,action=>model.section!=='questions'||action.label==='Open')}</td>`;
       if(key==='status')return `<td data-label="${e(label)}"><span class="ws-status">${e(row.status?.text||'—')}</span>${row.problem?`<p>${e(row.problem)}</p>`:''}</td>`;
+      if(key==='candidate'&&model.section==='checks'){
+        const sourceRef=String(row.source_reference||'').trim();
+        const bookingRef=String(row.booking_reference||'').trim();
+        const ids=[sourceRef&&sourceRef.toLocaleLowerCase('en-GB')!==String(row.candidate||'').trim().toLocaleLowerCase('en-GB')?`Source ref: ${e(sourceRef)}`:'',bookingRef?`Booking: ${e(bookingRef)}`:''].filter(Boolean);
+        return `<td data-label="${e(label)}">${e(row.candidate||'—')}${ids.length?`<span class="ws-source-ids">${ids.join(' · ')}</span>`:''}</td>`;
+      }
       if(key==='candidate_asked'||key==='manager_informed')return `<td data-label="${e(label)}">${row[key]===true?'Yes':'Not yet'}</td>`;
       if(key==='purpose_label')return `<td data-label="${e(label)}">${e(row.purpose_label||'Not recorded')}</td>`;
       return `<td data-label="${e(label)}">${e(row[key]??'—')}${key===(filters.client_id?'candidate':'client')?`<span class="ws-status-sub">${e(row.source)} · ${e(row.period)}</span>`:''}</td>`;

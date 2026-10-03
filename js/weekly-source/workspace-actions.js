@@ -1117,7 +1117,10 @@
         await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...detail.payload.recheck_payload, [field]: asText(id) });
         await workspaceApi()?.refresh?.();
       }, { title: label, seed_hint: { display_name: detail.payload.candidate },
-        context: { staffName: detail.payload.candidate, unit: detail.payload.client, dateYmd: detail.payload.shift } });
+        seed_query: label === 'Link candidate' ? asText(detail.payload.candidate).split(/\s+/).filter(Boolean).at(-1) : '',
+        context: { staffName: detail.payload.candidate, unit: detail.payload.client, dateYmd: detail.payload.shift,
+          sourceReference: detail.payload.detail?.source_reference,
+          bookingReference: detail.payload.detail?.booking_reference } });
     }
     if (label === 'View Timesheet' && typeof root.openTimesheet === 'function') {
       return root.openTimesheet({ timesheet_id: asText(detail.payload?.timesheet_id) });

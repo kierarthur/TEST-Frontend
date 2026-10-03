@@ -287728,6 +287728,8 @@ async function openCandidatePicker(onPick, options) {
     const ymd      = ctx.dateYmd || '';
     const nice     = ctx.dateNice || (typeof formatYmdToNiceDate === 'function' ? formatYmdToNiceDate(ymd) : ymd);
     const importId = ctx.importId || '';
+    const sourceReference = ctx.sourceReference || '';
+    const bookingReference = ctx.bookingReference || '';
 
     ctxHtml = `
       <div class="row">
@@ -287737,7 +287739,8 @@ async function openCandidatePicker(onPick, options) {
             Candidate: <span class="mono">${escapeHtml ? escapeHtml(staff) : staff}</span><br/>
             Unit / Site: <span class="mono">${escapeHtml ? escapeHtml(unit) : unit}</span><br/>
             Date: <span class="mono">${escapeHtml ? escapeHtml(nice || '—') : (nice || '—')}</span><br/>
-            Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>
+            ${sourceReference ? `Source worker reference: <span class="mono">${escapeHtml ? escapeHtml(sourceReference) : sourceReference}</span>` : `Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>`}
+            ${bookingReference ? `<br/>Booking reference: <span class="mono">${escapeHtml ? escapeHtml(bookingReference) : bookingReference}</span>` : ''}
           </div>
         </div>
       </div>`;
@@ -288238,6 +288241,8 @@ async function openClientPicker(onPick, opts) {
     const ymd      = ctx.dateYmd || '';
     const nice     = ctx.dateNice || (typeof formatYmdToNiceDate === 'function' ? formatYmdToNiceDate(ymd) : ymd);
     const importId = ctx.importId || '';
+    const sourceReference = ctx.sourceReference || '';
+    const bookingReference = ctx.bookingReference || '';
 
     ctxHtml = `
       <div class="row">
@@ -288247,7 +288252,8 @@ async function openClientPicker(onPick, opts) {
             Candidate: <span class="mono">${escapeHtml ? escapeHtml(staff) : staff}</span><br/>
             Unit / Site: <span class="mono">${escapeHtml ? escapeHtml(unit) : unit}</span><br/>
             Date: <span class="mono">${escapeHtml ? escapeHtml(nice || '—') : (nice || '—')}</span><br/>
-            Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>
+            ${sourceReference ? `Source worker reference: <span class="mono">${escapeHtml ? escapeHtml(sourceReference) : sourceReference}</span>` : `Import ID: <span class="mono">${escapeHtml ? escapeHtml(importId || '—') : (importId || '—')}</span>`}
+            ${bookingReference ? `<br/>Booking reference: <span class="mono">${escapeHtml ? escapeHtml(bookingReference) : bookingReference}</span>` : ''}
           </div>
         </div>
       </div>`;
