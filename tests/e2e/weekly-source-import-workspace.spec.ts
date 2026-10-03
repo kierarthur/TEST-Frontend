@@ -456,21 +456,28 @@ test('an overdue open cycle says cutoff passed in report detail without changing
   expect(labels.future).toContain('>Before cutoff</span>');
 });
 
-test('Queries shades each shift independently and marks a mixed group red', async ({ page }) => {
+test('Queries shades a missing Timesheet green and a manual Office check red', async ({ page }) => {
   await loadFoundation(page);
-  await page.evaluate(() => {
+  const html = await page.evaluate(() => {
     const review = (window as any).CloudTMSCombinedReviewV1;
-    const model = { contract: 'WEEKLY_SOURCE_COMBINED_REVIEW_V1', tab: 'queries',
-      section: 'questions', rows: [{ combined_key: 'kier-week', client: 'Example Trust',
-        candidate: 'Kier Arthur', source: 'NHSP', period: '2 Oct 2026',
-        children: [{ issue: 'Timesheet missing', day_date: '21 Sep 2026' },
-          { issue: 'Manually queried', day_date: '22 Sep 2026' }] }] };
-    document.getElementById('modalBody')!.innerHTML = review.render(model);
+    const base = { contract: 'WEEKLY_SOURCE_COMBINED_REVIEW_V1', tab: 'queries',
+      counts: { questions: 1, checks: 1 } };
+    return {
+      questions: review.render({ ...base, section: 'questions', rows: [{ combined_key: 'kier-week',
+        client: 'Example Trust', candidate: 'Kier Arthur', source: 'NHSP', period: '2 Oct 2026',
+        children: [{ issue: 'Timesheet missing', day_date: '21 Sep 2026' }] }] }),
+      checks: review.render({ ...base, section: 'checks', rows: [{ combined_key: 'manual-1',
+        client: 'Example Trust', candidate: 'Kier Arthur', source: 'NHSP', period: '2 Oct 2026',
+        day_date: '22 Sep 2026', pay_blocking: true, manual_query: { opened_by: 'Office user',
+          reason: 'Check this shift' } }] })
+    };
   });
-  await expect(page.locator('tr.ws-query-hold').first()).toBeVisible();
+  await page.evaluate(value => { document.getElementById('modalBody')!.innerHTML = value; }, html.questions);
+  await expect(page.locator('tr[data-wsr-group="kier-week"]')).toHaveClass(/ws-query-nonblocking/);
   await page.locator('.ws-query-expansion summary').click();
-  await expect(page.locator('.ws-query-shifts tbody tr').nth(0)).toHaveClass(/ws-query-nonblocking/);
-  await expect(page.locator('.ws-query-shifts tbody tr').nth(1)).toHaveClass(/ws-query-hold/);
+  await expect(page.locator('.ws-query-shifts tbody tr')).toHaveClass(/ws-query-nonblocking/);
+  await page.evaluate(value => { document.getElementById('modalBody')!.innerHTML = value; }, html.checks);
+  await expect(page.locator('tr[data-wsr-group="manual-1"]')).toHaveClass(/ws-query-hold/);
   await expect(page.getByText('Manually queried')).toBeVisible();
 });
 

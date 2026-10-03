@@ -79,24 +79,28 @@ test('Office checks distinguish pay-blocking identity work from charge decisions
   assert.match(html,/<tr data-wsr-group="charge" class="ws-query-nonblocking">[^]*Accept final charge/);
 });
 
-test('manual query Problem shows Office author, UK time and a short escaped reason, retaining full context on hover',()=>{
+test('manual Office check shows author, UK time and a short escaped reason, retaining full context on hover',()=>{
   const reason='Should be an extra hour here and please double check the manager approval <script> before accepting source';
-  const child={day_date:'8 Sep 2026',issue:'Manually queried',manual_query:{opened_by:'Kier Arthur',opened_at_uk:'1 Sep 2026, 14:30',reason},actions:[]};
-  const html=view.render({...model,section:'questions',rows:[{combined_key:'manual',candidate:'Worker',client:'Trust A',children:[child],actions:[]}]});
+  const html=view.render({...model,section:'checks',rows:[{combined_key:'manual-check',candidate:'Worker',client:'Trust A',
+    day_date:'8 Sep 2026',pay_blocking:true,manual_query:{opened_by:'Kier Arthur',opened_at_uk:'1 Sep 2026, 14:30',reason},
+    actions:[{label:'Protect pay',enabled:true}]}]});
   assert.match(html,/Manually queried/);
   assert.match(html,/Kier Arthur · 1 Sep 2026, 14:30/);
   assert.match(html,/“Should be an extra hour here and please double check…/);
   assert.match(html,/title="Kier Arthur queried this on 1 Sep 2026, 14:30 because/);
   assert.match(html,/&lt;script&gt;/);
   assert.doesNotMatch(html,/<script>/);
-  assert.equal((html.match(/class="ws-query-problem"/g)||[]).length,2);
+  assert.match(html,/<tr data-wsr-group="manual-check" class="ws-query-hold">/);
+  assert.match(html,/data-wsr-action="0">Protect pay/);
+  assert.equal((html.match(/class="ws-query-problem"/g)||[]).length,1);
 });
 
-test('several manual queries keep individual reasons on expanded shifts without attributing one to the whole group',()=>{
-  const children=[{issue:'Manually queried',manual_query:{opened_by:'Kier Arthur',opened_at_uk:'1 Sep 2026, 14:30',reason:'First reason'}},
-    {issue:'Manually queried',manual_query:{opened_by:'Alex Office',opened_at_uk:'2 Sep 2026, 09:00',reason:'Second reason'}}];
-  const html=view.render({...model,section:'questions',rows:[{combined_key:'manuals',candidate:'Worker',children,actions:[]}]});
-  assert.match(html,/Manual queries \(2\)/);
+test('several manual Office checks retain their own reasons',()=>{
+  const rows=[{combined_key:'manual-1',candidate:'Worker',pay_blocking:true,manual_query:{opened_by:'Kier Arthur',opened_at_uk:'1 Sep 2026, 14:30',reason:'First reason'}},
+    {combined_key:'manual-2',candidate:'Worker',pay_blocking:true,manual_query:{opened_by:'Alex Office',opened_at_uk:'2 Sep 2026, 09:00',reason:'Second reason'}}];
+  const html=view.render({...model,section:'checks',rows});
+  assert.match(html,/data-wsr-group="manual-1"/);
+  assert.match(html,/data-wsr-group="manual-2"/);
   assert.match(html,/First reason/);
   assert.match(html,/Second reason/);
 });

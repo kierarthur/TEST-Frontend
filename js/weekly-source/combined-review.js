@@ -84,7 +84,9 @@
       if(key==='selection')return `<td data-label="Select"><input type="checkbox" data-wsr-select="${e(row.combined_key)}"${selected.has(row.combined_key)?' checked':''}${state.busy?' disabled':''} aria-label="Select ${e(row.candidate)}"></td>`;
       if(key.startsWith('question_')){const summary=questionSummary(row),part=key.slice(9),hint=summary[`${part}Hint`];return `<td data-label="${e(label)}"${hint?` title="${e(hint)}"`:''}>${part==='problem'?groupProblem(row,summary):e(summary[part])}</td>`;}
       if(key==='actions')return `<td data-label="Actions" class="ws-actions">${row.follow_up_scope?`<button class="btn btn-outline" data-wsr-follow-up="${e(row.combined_key)}">Open</button>`:actionButtons(row,row.actions,undefined,action=>model.section!=='questions'||action.label==='Open')}</td>`;
-      if(key==='status')return `<td data-label="${e(label)}"><span class="ws-status">${e(row.status?.text||'—')}</span>${row.problem?`<p>${e(row.problem)}</p>`:''}</td>`;
+      if(key==='status')return `<td data-label="${e(label)}">${row.manual_query
+        ?manualProblem({issue:'Manually queried',manual_query:row.manual_query})
+        :`<span class="ws-status">${e(row.status?.text||'—')}</span>${row.problem?`<p>${e(row.problem)}</p>`:''}`}</td>`;
       if(key==='candidate'&&model.section==='checks'){
         const sourceRef=String(row.source_reference||'').trim();
         const bookingRef=String(row.booking_reference||'').trim();
