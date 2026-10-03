@@ -81,6 +81,28 @@ test('source linking opens the existing picker and rechecks the exact saved row'
   }
 });
 
+test('source linking explains that a selected inactive Candidate must be reactivated', async () => {
+  const saved = { picker: globalThis.openCandidatePicker, workspace: globalThis.CloudTMSWeeklySourceImportWorkspaceV1 };
+  let choose;
+  try {
+    globalThis.openCandidatePicker = (callback) => { choose = callback; };
+    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = {
+      issueCommand: () => { throw new Error('An inactive candidate must not be sent to recheck.'); },
+      refresh: () => { throw new Error('An inactive candidate must not refresh the workspace.'); }
+    };
+    actions.handleAction({ label: 'Link candidate', payload: {
+      candidate: 'Source Worker', recheck_payload: { request_id: 'request', upload_id: 'upload', upload_row_id: 'row' }
+    } });
+    await assert.rejects(choose({ id: 'inactive-candidate', candidate: { active: false } }),
+      /currently inactive\. Reactivate their Candidate record before linking this shift/);
+    assert.match(actions._plainMessage('RPC failed: {"message":"WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING"}'),
+      /reactivate their Candidate record/);
+  } finally {
+    globalThis.openCandidatePicker = saved.picker;
+    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = saved.workspace;
+  }
+});
+
 test('an unmatched contract provides a create path without pretending it is a tie', () => {
   const model = actions.normaliseContractChooser({ choices: [], recheck_payload: { request_id: 'request' },
     contract_seed: { candidate_id: 'candidate', client_id: 'client' } });

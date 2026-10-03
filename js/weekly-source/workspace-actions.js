@@ -77,7 +77,7 @@
       WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED: 'Work is already recorded for this candidate and time. Choose that existing shift instead of adding it again.',
       WEEKLY_PROTECTED_EDITOR_SHIFT_STALE: 'This shift has changed. Close this window and recheck before continuing.',
       WEEKLY_PROTECTED_EDITOR_SOURCE_SCOPE_REQUIRED: 'Choose the source group that covers this client and work date.',
-      WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING: 'That candidate is inactive or unavailable. Choose an active candidate, or review their record before linking this shift.',
+      WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING: 'The selected candidate is inactive or no longer available. If inactive, reactivate their Candidate record before linking this shift; otherwise choose an active candidate.',
       WEEKLY_SOURCE_CLIENT_NOT_ELIGIBLE: 'That client does not belong to this source report. Choose the matching client.',
       WEEKLY_SOURCE_CONTRACT_NOT_ELIGIBLE: 'That contract does not cover this candidate, client and shift date. Review the contract or choose another.',
       WEEKLY_SOURCE_RECHECK_NOT_CURRENT: 'A newer file or comparison has replaced this one. Close this window and refresh Queries before continuing.',
@@ -1122,8 +1122,15 @@
       const picker = label === 'Link candidate' ? root.openCandidatePicker : root.openClientPicker;
       if (typeof picker !== 'function') return openDetail({ detail: { problem: 'The matching picker is unavailable. Refresh the page and try again.' } }, label);
       const field = label === 'Link candidate' ? 'candidate_id' : 'client_id';
-      return picker(async ({ id }) => {
-        await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...detail.payload.recheck_payload, [field]: asText(id) });
+      return picker(async ({ id, candidate }) => {
+        if (label === 'Link candidate' && candidate?.active === false) {
+          throw new Error('This candidate is currently inactive. Reactivate their Candidate record before linking this shift.');
+        }
+        try {
+          await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...detail.payload.recheck_payload, [field]: asText(id) });
+        } catch (error) {
+          throw new Error(plainMessage(error?.message, 'The selected record could not be linked. Recheck its status and try again.'));
+        }
         await workspaceApi()?.refresh?.();
       }, { title: label, seed_hint: { display_name: detail.payload.candidate },
         seed_query: label === 'Link candidate' ? asText(detail.payload.candidate).split(/\s+/).filter(Boolean).at(-1) : '',
