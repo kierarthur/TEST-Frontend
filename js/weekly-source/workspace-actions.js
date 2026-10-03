@@ -1014,7 +1014,9 @@
         const result = await workspaceApi().issueCommand('PROTECTED_EDITOR_CONTEXT', selection());
         if (sequence !== readSequence) return;
         if (result?.contract !== 'WEEKLY_PROTECTED_EDITOR_V1') throw new Error('Recheck the candidate, client and work date.');
-        context = { ...result };
+        context = { ...result,
+          client: asText(result.client) || context.client,
+          candidate: asText(result.candidate) || context.candidate };
         values.contract_id = editor.contractChoice(context.contracts, context.shift_contract_id || values.contract_id);
         if (mode === 'amend' && context.current_schedule) Object.assign(values, context.current_schedule);
       } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
@@ -1085,7 +1087,14 @@
         const field = button.dataset.protectedChoose;
         const picker = field === 'client' ? root.openClientPicker : root.openCandidatePicker;
         if (typeof picker !== 'function') { state.error = 'The chooser is unavailable. Refresh the page.'; rerender(kind); return; }
-        picker(async ({ id }) => { context[`${field}_id`] = id; values.contract_id = ''; values.shift_choice = ''; if (field === 'client') delete context.source_group_id; await reload(); }, { title: `Choose ${field}` });
+        picker(async ({ id, label }) => {
+          context[`${field}_id`] = id;
+          context[field] = asText(label);
+          values.contract_id = '';
+          values.shift_choice = '';
+          if (field === 'client') delete context.source_group_id;
+          await reload();
+        }, { title: `Choose ${field}` });
       }));
       host.querySelector('[data-protected-submit]')?.addEventListener('click', submit);
       root.document?.querySelector('[data-protected-check-result]')?.addEventListener('click', submit);

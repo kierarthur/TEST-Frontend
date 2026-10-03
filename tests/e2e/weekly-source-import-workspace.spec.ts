@@ -322,6 +322,51 @@ test('protected shift editor uses the real Office modal at desktop and phone wid
   expect(await page.evaluate(()=>(window as any).__requests.map((r:any)=>r.action))).toEqual(['PROTECTED_EDITOR_CONTEXT']);
 });
 
+test('new protected shift retains client and candidate selected through the real picker Apply buttons', async ({ page }) => {
+  await loadOfficeFoundation(page);
+  const clientId = '11111111-1111-4111-8111-111111111111';
+  const candidateId = '22222222-2222-4222-8222-222222222222';
+  await page.evaluate(({ clientId, candidateId }) => {
+    const win = window as any;
+    const original = win.authFetch;
+    win.__pickerData = {
+      clients: { since: null, itemsById: { [clientId]: { id: clientId, name: 'Example Trust' } } },
+      candidates: { since: null, itemsById: { [candidateId]: {
+        id: candidateId, display_name: 'Kier Arthur', first_name: 'Kier', last_name: 'Arthur', active: true
+      } } }
+    };
+    win.authFetch = async (url: string, options: any = {}) => {
+      if (url.includes(`/api/clients/${clientId}`)) return { ok: true, json: async () => ({ id: clientId, name: 'Example Trust' }) };
+      if (url.includes(`/api/candidates/${candidateId}`)) return { ok: true, json: async () => ({
+        id: candidateId, first_name: 'Kier', last_name: 'Arthur', display_name: 'Kier Arthur', active: true
+      }) };
+      if (url.includes('/weekly-source/v1/commands')) {
+        const request = JSON.parse(options.body);
+        win.__requests.push(request);
+        return { ok: true, json: async () => ({ contract: 'WEEKLY_PROTECTED_EDITOR_V1', allowed: true,
+          client_id: clientId, candidate_id: candidateId, work_date: '2026-09-21', contracts: [] }) };
+      }
+      return original(url, options);
+    };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Add protected shift', payload: {} });
+  }, { clientId, candidateId });
+  await page.locator('[data-protected-choose="client"]').click();
+  await page.locator(`[data-picker-kind="client"] tr[data-id="${clientId}"] td`).first().click();
+  await page.locator('#btnSave').click();
+  await expect(page.locator('[data-protected-editor] .ws-child-context strong').first()).toHaveText('Example Trust');
+
+  await page.locator('[data-protected-choose="candidate"]').click();
+  await page.locator(`[data-picker-kind="candidate"] tr[data-id="${candidateId}"] td`).first().click();
+  await page.locator('#btnSave').click();
+  await expect(page.locator('[data-protected-editor] .ws-child-context strong').nth(1)).toHaveText('Arthur, Kier');
+  expect(await page.evaluate(() => (window as any).__requests)).toEqual([]);
+  await page.locator('[data-protected-field="work_date"]').fill('2026-09-21');
+  await page.locator('[data-protected-field="work_date"]').blur();
+  await expect.poll(() => page.evaluate(() => (window as any).__requests.length)).toBe(1);
+  await expect(page.locator('[data-protected-editor] .ws-child-context strong').first()).toHaveText('Example Trust');
+  await expect(page.locator('[data-protected-editor] .ws-child-context strong').nth(1)).toHaveText('Arthur, Kier');
+});
+
 test('protecting an existing imported shift locks its identity while Add protected shift remains separate', async ({ page }) => {
   await loadFoundation(page);
   const result = await page.evaluate(() => {
