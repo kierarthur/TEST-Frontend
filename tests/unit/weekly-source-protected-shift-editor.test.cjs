@@ -86,6 +86,17 @@ test('form is minutes-only, never invents missing evidence before the read, and 
   assert.doesNotMatch(html, /Break start|Break end|booking_reference/);
 });
 
+test('an uncertain save retains the same action without a second result button', () => {
+  const pending = editor.render(context, values, { pending: { action: 'APPROVE_PROTECTED_HOURS' } });
+  assert.match(pending, /data-protected-submit[^>]*>Protect pay<\/button>/);
+  assert.doesNotMatch(pending, /Check saved result/);
+  assert.doesNotMatch(pending, /Saving…/);
+  assert.match(pending, /data-protected-field="start"[^>]* disabled/);
+  assert.doesNotMatch(pending, /data-protected-cancel disabled/);
+  const saved = editor.render(context, values, { protectedSaved: true, finishManualReview: true });
+  assert.match(saved, /data-protected-submit[^>]*>Finish query<\/button>/);
+});
+
 test('review history uses recorded actors, reasons and before/after schedules safely', () => {
   const html = editor.renderReview({ ...context, history: [{
     at: '2026-10-01T10:15:00Z', by: '<Office user>', reason: '<confirmed>', state: 'WAIT',

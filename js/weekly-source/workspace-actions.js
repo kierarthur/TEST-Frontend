@@ -64,6 +64,28 @@
   };
   const titleCaseStatus = (value) => asText(value).replaceAll('_', ' ').toLowerCase().replace(/(^|\s)\S/g, (token) => token.toUpperCase());
   const workspaceApi = () => root.CloudTMSWeeklySourceImportWorkspaceV1;
+  const knownProtectedRefusal = (error) => (error?.status === 400
+      && /weekly_source_target_managed_root_prepare_atomic_v1 failed 400:[\s\S]*WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH/i.test(asText(error?.message)))
+    || ['WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED', 'WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED',
+      'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID', 'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID'].includes(error?.code);
+
+  async function saveProtectedOnce(pending) {
+    const command = pending.action;
+    const payload = pending.payload;
+    if (!pending.attempted) {
+      pending.attempted = true;
+      try { return await workspaceApi().issueCommand(command, payload); }
+      catch (error) { if (knownProtectedRefusal(error)) throw error; }
+    }
+    try {
+      return await workspaceApi().issueCommand(command, { ...payload, recover_unknown_outcome: true });
+    } catch (error) {
+      if (error?.code !== 'C1_DURABLE_RECOVERY_NOT_REQUIRED') throw error;
+      // The same Office command is safe to resume with its original key when
+      // the durable owner proves that no publication requires recovery.
+      return workspaceApi().issueCommand(command, payload);
+    }
+  }
 
   function plainMessage(value, fallback = 'This item needs attention before you can continue.') {
     const text = asText(value);
@@ -84,9 +106,11 @@
       WEEKLY_SOURCE_RECHECK_REPLAY_CONFLICT: 'This check was already started with a different choice. Close this window and refresh Queries before making another choice.',
       WEEKLY_SOURCE_PREVIEW_STALE: 'The source information has changed. Close this window and refresh Queries before continuing.',
       WEEKLY_SOURCE_MANUAL_REVIEW_ALREADY_AUTHORISED: 'This Timesheet has already been authorised. Use the existing unauthorise control first if it is still permitted, then reopen this shift for review.',
-      WEEKLY_SOURCE_MANUAL_REVIEW_SOURCE_STALE: 'A newer import has changed this shift. Refresh Queries to review the current source hours before deciding.'
+      WEEKLY_SOURCE_MANUAL_REVIEW_SOURCE_STALE: 'A newer import has changed this shift. Refresh Queries to review the current source hours before deciding.',
+      WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH: 'The weekly Timesheet settings do not match this protected-pay request. No pay change was saved. Refresh the shift and try again.'
     };
-    const code = text.match(/WEEKLY_(?:SOURCE|PROTECTED)_[A-Z0-9_]+/)?.[0];
+    const code = [...text.matchAll(/WEEKLY_(?:SOURCE|PROTECTED)_[A-Z0-9_]+/g)]
+      .map((match) => match[0]).find((item) => guidance[item]);
     if (guidance[code]) return guidance[code];
     if (!text || /\b(uuid|hash|fingerprint|rpc|tsfin|manifest|stack|sql|exception|workbench|idempotency|generation|authority pointer|work event|rate class)\b/i.test(text)) return fallback;
     return text.replace(/\b[A-Z][A-Z0-9]+(?:_[A-Z0-9]+){2,}\b/g, '').replace(/\s{2,}/g, ' ').trim() || fallback;
@@ -832,7 +856,7 @@
       <p>Imported shift: <strong>${escapeHtml(payload.system_hours)}</strong></p>
       <p>Choose the protected shift this report refers to. Different hours or breaks do not necessarily mean different work. Matching does not change the protected hours; reconciliation is a separate choice.</p>
       <div class="ws-child-fields"><label>Protected shift<select data-match-choice${state.busy || state.pending ? ' disabled' : ''}><option value="">Choose a shift</option>${choices.map(item => `<option value="${escapeHtml(item.work_event_id)}"${state.selected === item.work_event_id ? ' selected' : ''}>${escapeHtml(item.start)}–${escapeHtml(item.end)} · ${escapeHtml(item.break_minutes)} min break</option>`).join('')}<option value="NEW"${state.selected === 'NEW' ? ' selected' : ''}>This is separate work, not a protected shift</option></select></label><label>Reason<textarea data-match-reason maxlength="1000"${state.busy || state.pending ? ' disabled' : ''}>${escapeHtml(state.reason)}</textarea></label></div>
-      ${state.error ? `<p role="alert">${escapeHtml(state.error)}</p>` : ''}<div class="ws-child-actions"><button class="btn btn-outline" data-match-cancel${state.busy ? ' disabled' : ''}>Cancel</button><button class="btn primary" data-match-save${state.busy ? ' disabled' : ''}>${state.pending ? 'Check saved result' : 'Confirm and recheck'}</button></div></div>`;
+      ${state.error ? `<p role="alert">${escapeHtml(state.error)}</p>` : ''}<div class="ws-child-actions"><button class="btn btn-outline" data-match-cancel${state.busy ? ' disabled' : ''}>Cancel</button><button class="btn primary" data-match-save${state.busy ? ' disabled' : ''}>Confirm and recheck</button></div></div>`;
     const wire = () => {
       const host = root.document?.querySelector('[data-protected-match]');
       if (!host || host.dataset.wsaWired) return;
@@ -951,10 +975,10 @@
         if (!state.pending) {
           // Do not refresh the displayed source here: the user's confirmation
           // must retain its exact reviewed source hash and family version.
-          state.pending = editor.request(context, values, root.crypto.randomUUID(), mode);
-        } else state.pending.payload.recover_unknown_outcome = state.retryUnstaged !== true;
-        const result = await workspaceApi().issueCommand(state.pending.action, state.pending.payload);
-        if (result?.ok !== true) throw new Error('The outcome is not yet confirmed. Check the saved result.');
+          state.pending = { ...editor.request(context, values, root.crypto.randomUUID(), mode), mode };
+        }
+        const result = await saveProtectedOnce(state.pending);
+        if (result?.ok !== true) throw new Error('The protected-pay decision has not completed.');
         state.pending = null;
         await finishAction();
       } catch (error) {
@@ -962,17 +986,16 @@
           // Both server refusals with this exact code precede calculation and
           // durable publication. Do not treat a known stale review as an
           // unknown payment outcome, or silently accept the replacement facts.
-          state.pending=null;state.retryUnstaged=false;
+          state.pending=null;
           await load();
           state.error='The imported hours have changed. Review the updated details and choose again.';
         } else if(error?.code==='C1_DURABLE_RECOVERY_NOT_REQUIRED'){
           // The server proved there is no staged publication for this exact
           // saved request. A user retry may resume it through the normal owner.
-          state.retryUnstaged=true;
           state.error='No submitted result needs recovery. You can retry the saved request.';
         } else {
-          state.retryUnstaged=false;
-          state.error = plainMessage(error?.message, 'The outcome is not yet confirmed. Check the saved result before retrying.');
+          if (knownProtectedRefusal(error)) state.pending = null;
+          state.error = plainMessage(error?.message, 'The save could not be confirmed. Retry the same decision.');
         }
       } finally { state.busy = false; rerender(kind); }
     };
@@ -983,7 +1006,6 @@
       host.querySelector('[data-protected-review-close]')?.addEventListener('click', closeChild);
       host.querySelector('[data-protected-review-reason]')?.addEventListener('input', event => { values.reason = event.target.value; });
       host.querySelectorAll('[data-protected-review-action]').forEach(button => button.addEventListener('click', () => submit(button.dataset.protectedReviewAction)));
-      host.querySelector('[data-protected-review-recover]')?.addEventListener('click', () => submit());
     };
     const opened = openChild({ title: 'Review protected pay', kind,
       render: () => editor.renderReview(context, values, state), wire });
@@ -1023,9 +1045,9 @@
       } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
       finally { if (sequence === readSequence) { state.busy = false; rerender(kind); setTimeout(() => warnIfOverlapping(), 30); } }
     };
-    const render = () => editor.render(context, values, { ...state,
-      lockedIdentity: !!initial.work_event_id, busy: state.busy || !!state.pending })
-      + (state.pending && !state.busy ? '<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-check-result>Check saved result</button></div><p>The outcome is not yet confirmed. Keep these details unchanged while checking; do not add this shift again.</p>' : '')
+    const render = () => editor.render(context, values, { ...state, mode,
+      finishManualReview: !!initial.manual_review_id,
+      lockedIdentity: !!initial.work_event_id })
       + (!state.busy && !state.pending && context.allowed && !context.contracts.length
         ? '<p>No eligible contract covers this date.</p><button type="button" class="btn btn-outline" data-protected-create-contract>Create contract</button><button type="button" class="btn btn-outline" data-protected-recheck>Recheck contracts</button>' : '');
     const routeLabel = (event) => event.pay_query_open ? 'Open Pay Queries'
@@ -1079,7 +1101,7 @@
       if (state.busy) return;
       state.error = '';
       try {
-        if (warnIfOverlapping(true)) return;
+        if (!state.pending && !state.protectedSaved && warnIfOverlapping(true)) return;
         // Validate all user-entered intent before cycle preparation. The exact
         // qualified contract and source period are checked again server-side.
         editor.schedule(values);
@@ -1091,30 +1113,31 @@
           context = { ...context, ...prepared };
           state.idempotencyKey = root.crypto.randomUUID();
           state.pending = editor.request(context, values, state.idempotencyKey, mode);
-        } else if (state.pending) {
-          state.pending.payload.recover_unknown_outcome = true;
         }
         if (!state.protectedSaved) {
-          const result = await workspaceApi().issueCommand(state.pending.action, state.pending.payload);
-          if (result?.ok !== true) throw new Error('The approved-hours update is not yet confirmed. Check its saved result before continuing.');
+          const result = await saveProtectedOnce(state.pending);
+          if (result?.ok !== true) throw new Error('The protected-pay save has not completed.');
           state.pending = null; state.protectedSaved = true;
         }
         if (initial.manual_review_id) {
           const resolved = await workspaceApi().issueCommand('RESOLVE_MANUAL_REVIEW', {
             review_id: initial.manual_review_id, resolution_kind: 'PROTECTED_PAY'
           });
-          if (resolved?.ok !== true) throw new Error('Protected pay was saved, but the query still needs checking. Recheck this result.');
+          if (resolved?.ok !== true) throw new Error('The Office check did not close.');
         }
         await finishAction();
       } catch (error) {
         // These exact refusals occur in the first transactional family prepare,
         // before an orchestration run or pay publication can survive. Unknown
         // outcomes still retain their original command for explicit recovery.
-        if (['WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED', 'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID',
-          'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID'].includes(error?.code)) state.pending = null;
-        state.error = plainMessage(error?.message, state.pending
-          ? 'The outcome is not yet confirmed. Check the saved result; do not add the shift again.'
-          : 'Recheck the selected contract and shift details.');
+        if (knownProtectedRefusal(error)) state.pending = null;
+        state.error = state.protectedSaved
+          ? initial.manual_review_id
+            ? 'Protected pay was saved, but the Office check did not close. Select Finish query.'
+            : 'Protected pay was saved, but the screen did not refresh. Close and refresh Queries.'
+          : state.pending
+            ? 'The save could not be confirmed. Select Protect pay again to retry this same request.'
+            : plainMessage(error?.message, 'Recheck the selected contract and shift details.');
       } finally { state.busy = false; rerender(kind); }
     };
     const wire = () => {
@@ -1149,7 +1172,6 @@
         }, { title: `Choose ${field}` });
       }));
       host.querySelector('[data-protected-submit]')?.addEventListener('click', submit);
-      root.document?.querySelector('[data-protected-check-result]')?.addEventListener('click', submit);
       root.document?.querySelector('[data-protected-recheck]')?.addEventListener('click', reload);
       root.document?.querySelector('[data-protected-create-contract]')?.addEventListener('click', () => {
         root.openContract?.(context.create_contract_seed, { noParentGate: true });

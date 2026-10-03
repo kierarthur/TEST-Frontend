@@ -367,6 +367,100 @@ test('new protected shift retains client and candidate selected through the real
   await expect(page.locator('[data-protected-editor] .ws-child-context strong').nth(1)).toHaveText('Arthur, Kier');
 });
 
+test('one protected-pay click recovers a transient result and closes the manual Office check', async ({ page }) => {
+  await loadOfficeFoundation(page);
+  await page.evaluate(() => {
+    const win = window as any;
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const context = { contract: 'WEEKLY_PROTECTED_EDITOR_V1', allowed: true,
+      source_cycle_id: id(1), source_group_id: id(2), client_id: id(3), candidate_id: id(4),
+      work_event_id: id(5), shift_contract_id: id(6), work_date: '2026-09-08',
+      client: 'Example Trust', candidate: 'Kier Arthur', source_hours: '01:00–04:00 · 30 min break',
+      contracts: [{ id: id(6), label: 'Band 6', week_ending_date: '2026-09-13' }] };
+    let approvalCalls = 0;
+    const original = win.authFetch;
+    win.authFetch = async (url: string, options: any = {}) => {
+      if (!url.includes('/weekly-source/v1/commands')) return original(url, options);
+      const request = JSON.parse(options.body);
+      win.__requests.push(request);
+      if (request.action === 'PROTECTED_EDITOR_CONTEXT') return { ok: true, json: async () => context };
+      if (request.action === 'PREPARE_PROTECTED_EDITOR') return { ok: true, json: async () => context };
+      if (request.action === 'APPROVE_PROTECTED_HOURS') {
+        approvalCalls += 1;
+        if (approvalCalls === 1) throw new Error('Connection interrupted');
+        if (approvalCalls === 2) return { ok: false, status: 409, json: async () => ({
+          error_code: 'C1_DURABLE_RECOVERY_NOT_REQUIRED', message: 'No unresolved C1 result.'
+        }) };
+        return { ok: true, json: async () => ({ ok: true, outcome: 'PUBLISHED' }) };
+      }
+      if (request.action === 'RESOLVE_MANUAL_REVIEW') return { ok: true, json: async () => ({ ok: true }) };
+      throw new Error(`Unexpected command ${request.action}`);
+    };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Protect pay', payload: {
+      ...context, manual_review_id: id(7), start: '01:00', end: '04:00', break_minutes: 30
+    } });
+  });
+  await expect(page.locator('[data-protected-field="contract_id"]')).toContainText('Band 6');
+  await page.locator('[data-protected-field="end"]').fill('05:00');
+  await page.locator('[data-protected-field="reason"]').fill('Worked an extra hour');
+  await page.locator('[data-protected-submit]').click();
+  await expect(page.locator('[data-protected-editor]')).toHaveCount(0);
+  await expect(page.getByText('Check saved result')).toHaveCount(0);
+  const requests = await page.evaluate(() => (window as any).__requests);
+  expect(requests.map((request: any) => request.action)).toEqual([
+    'PROTECTED_EDITOR_CONTEXT', 'PREPARE_PROTECTED_EDITOR',
+    'APPROVE_PROTECTED_HOURS', 'APPROVE_PROTECTED_HOURS',
+    'APPROVE_PROTECTED_HOURS', 'RESOLVE_MANUAL_REVIEW'
+  ]);
+  const approvals = requests.filter((request: any) => request.action === 'APPROVE_PROTECTED_HOURS');
+  expect(new Set(approvals.map((request: any) => request.payload.idempotency_key)).size).toBe(1);
+  expect(approvals.map((request: any) => request.payload.recover_unknown_outcome)).toEqual([
+    undefined, true, undefined
+  ]);
+  expect(requests.at(-1).payload.resolution_kind).toBe('PROTECTED_PAY');
+});
+
+test('a definite protected-pay refusal stops Saving without offering a result-check button', async ({ page }) => {
+  await loadOfficeFoundation(page);
+  await page.evaluate(() => {
+    const win = window as any;
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const context = { contract: 'WEEKLY_PROTECTED_EDITOR_V1', allowed: true,
+      source_cycle_id: id(1), source_group_id: id(2), client_id: id(3), candidate_id: id(4),
+      work_event_id: id(5), shift_contract_id: id(6), work_date: '2026-09-08',
+      client: 'Example Trust', candidate: 'Kier Arthur', source_hours: '01:00–04:00 · 30 min break',
+      contracts: [{ id: id(6), label: 'Band 6', week_ending_date: '2026-09-13' }] };
+    const original = win.authFetch;
+    win.authFetch = async (url: string, options: any = {}) => {
+      if (!url.includes('/weekly-source/v1/commands')) return original(url, options);
+      const request = JSON.parse(options.body);
+      win.__requests.push(request);
+      if (request.action === 'PROTECTED_EDITOR_CONTEXT' || request.action === 'PREPARE_PROTECTED_EDITOR')
+        return { ok: true, json: async () => context };
+      if (request.action === 'APPROVE_PROTECTED_HOURS')
+        return { ok: false, status: 400, json: async () => ({
+          error_code: 'WEEKLY_SOURCE_REQUEST_FAILED',
+          message: 'RPC weekly_source_target_managed_root_prepare_atomic_v1 failed 400: WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH'
+        }) };
+      throw new Error(`Unexpected command ${request.action}`);
+    };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Protect pay', payload: {
+      ...context, manual_review_id: id(7), start: '01:00', end: '04:00', break_minutes: 30
+    } });
+  });
+  await expect(page.locator('[data-protected-field="contract_id"]')).toContainText('Band 6');
+  await page.locator('[data-protected-field="end"]').fill('05:00');
+  await page.locator('[data-protected-field="reason"]').fill('Worked an extra hour');
+  await page.locator('[data-protected-submit]').click();
+  await expect(page.locator('[data-protected-submit]')).toHaveText('Protect pay');
+  await expect(page.locator('[data-protected-field="end"]')).toBeEnabled();
+  await expect(page.getByRole('alert')).toContainText('No pay change was saved');
+  await expect(page.getByText('Check saved result')).toHaveCount(0);
+  const requests = await page.evaluate(() => (window as any).__requests);
+  expect(requests.filter((request: any) => request.action === 'APPROVE_PROTECTED_HOURS')).toHaveLength(1);
+  expect(requests.some((request: any) => request.action === 'RESOLVE_MANUAL_REVIEW')).toBe(false);
+});
+
 test('new protected shift interrupts only when entered times overlap recorded work', async ({ page }) => {
   await loadOfficeFoundation(page);
   await page.evaluate(() => {
