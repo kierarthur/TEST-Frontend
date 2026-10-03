@@ -309,6 +309,24 @@ test('protecting an existing imported shift locks its identity while Add protect
   expect(result.missing).toContain('A separate new shift');
 });
 
+test('an overdue open cycle says cutoff passed in report detail without changing finalisation authority', async ({ page }) => {
+  await loadFoundation(page);
+  const labels = await page.evaluate((fixture: any) => {
+    const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
+    const render = (cutoff: string) => {
+      const workspace = api.normaliseWorkspace({ ...fixture, combined_source_workspace: false,
+        context: { ...fixture.context, cycle_state: 'Before cutoff', controls: [
+          { key: 'cutoff', label: 'Cutoff', value: cutoff, options: [] }
+        ] } });
+      return api.renderWorkspace(workspace, 'imports', { toolbarOnly: true });
+    };
+    return { overdue: render('30/09/2000 15:00'), future: render('30/09/2099 15:00') };
+  }, fixtures.workspace);
+  expect(labels.overdue).toContain('Cutoff passed · not finalised');
+  expect(labels.overdue).not.toContain('>Before cutoff</span>');
+  expect(labels.future).toContain('>Before cutoff</span>');
+});
+
 test('Queries shades each shift independently and marks a mixed group red', async ({ page }) => {
   await loadFoundation(page);
   await page.evaluate(() => {

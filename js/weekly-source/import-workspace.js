@@ -397,6 +397,21 @@
     return `<div class="ws-mobile-sort" aria-label="Sort results"><label>Sort by<select data-ws-mobile-sort>${fields.map(([label, key]) => `<option value="${escapeHtml(key)}"${sortState.key === key ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select></label><label>Order<select data-ws-mobile-direction><option value="asc"${direction === 'asc' ? ' selected' : ''}>Ascending</option><option value="desc"${direction === 'desc' ? ' selected' : ''}>Descending</option></select></label></div>`;
   }
 
+  function displayedCycleState(workspace) {
+    const current = workspace.context.cycle_state;
+    if (current !== 'Before cutoff') return current;
+    const cutoff = asText(workspace.context.controls.find(control => control.key === 'cutoff')?.value);
+    const match = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/.exec(cutoff);
+    if (!match) return current;
+    const cutoffKey = `${match[3]}${match[2]}${match[1]}${match[4]}${match[5]}`;
+    const now = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    const nowKey = `${now.year}${now.month}${now.day}${now.hour}${now.minute}`;
+    return nowKey >= cutoffKey ? 'Cutoff passed · not finalised' : current;
+  }
+
   function renderContext(workspace, uploadOnly = false) {
     const fields = workspace.context.controls.filter(control=>!uploadOnly||['source_group','client'].includes(control.key)).map((control) => {
       const optionalClient = control.key === 'client';
@@ -410,7 +425,7 @@
         : `<span class="ws-context-value">${escapeHtml(control.value || '—')}</span>`;
       return `<div class="ws-context-item"><span class="ws-context-label">${escapeHtml(control.label)}</span>${value}</div>`;
     }).join('');
-    return `<div class="ws-context-bar" aria-label="Weekly source context">${fields}${uploadOnly?'':`<span class="ws-status ws-status--${escapeHtml(workspace.context.cycle_tone)}">${escapeHtml(workspace.context.cycle_state)}</span>`}</div>`;
+    return `<div class="ws-context-bar" aria-label="Weekly source context">${fields}${uploadOnly?'':`<span class="ws-status ws-status--${escapeHtml(workspace.context.cycle_tone)}">${escapeHtml(displayedCycleState(workspace))}</span>`}</div>`;
   }
 
   function renderImports(workspace, state) {
