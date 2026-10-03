@@ -43,16 +43,14 @@ test('changing the upload client preserves the week without reusing another clie
   assert.equal(resolve(model,'b'),'client-a-cycle');
 });
 
-test('completed evidence remains visible after a checking upload and cannot be finalised again', () => {
+test('completed source work is absent from Finalise after a checking upload', () => {
   const model = workspace.normaliseWorkspace({ profile: { id: 'NHSP_PREFINAL_RELEASED_V1' },
     finalise: { prepared: false, active_list: 'complete',
       complete: { rows: [{ candidate: 'Completed worker', client: 'Trust A', finalised_at: '1 Oct 2026, 12:00', status: 'Finalised' }], total_count: 1 } } });
   const html = workspace.renderWorkspace(model, 'finalise', {});
-  assert.match(html, /Complete \(1\)/);
-  assert.match(html, /Completed worker/);
-  assert.match(html, /1 Oct 2026, 12:00/);
+  assert.match(html, /No finalisation report has been prepared/);
+  assert.doesNotMatch(html, /Complete \(1\)|Completed worker|1 Oct 2026, 12:00/);
   assert.doesNotMatch(html, /data-ws-finalise-confirm|data-ws-finalise>/);
-  assert.match(html, /class="ws-tab-empty">Ready \(0\)/);
 });
 
 test('checking files show no Ready or Blocked lists and retain Office checks in Queries', () => {
@@ -446,13 +444,10 @@ test('History defaults to the current pay cycle and exposes no technical detail 
   assert.doesNotMatch(html, /<th>Technical details<\/th>/i);
 });
 
-test('Finalisation tracker is calm and offers no selection controls', () => {
+test('import-authoritative Finalise has no duplicate finalisation tracker or selection controls', () => {
   const html = workspace.renderWorkspace(fixture(), 'finalise');
-  assert.match(html, /Finalisation progress/);
-  assert.match(html, /Week ending 13 Sep 2026/);
-  assert.match(html, /St Mary&#39;s NHS Trust/);
-  assert.match(html, /data-ws-tracker-cycle aria-label="Finalisation week"/);
-  assert.match(html, /value="cycle-older">Week ending 6 Sep 2026/);
+  assert.doesNotMatch(html, /Finalisation progress|data-ws-tracker-cycle/);
+  assert.match(html, /Ready \(282\)|Blocked \(1\)/);
   assert.doesNotMatch(html, /data-ws-context="cycle"/);
   assert.doesNotMatch(html, /data-ws-group-header|Select all|Unselect all/);
 });
@@ -694,17 +689,20 @@ test('unknown actions are refused instead of appearing in the interface', () => 
   assert.doesNotMatch(html, />Delete<\/button>/);
 });
 
-test('NHSP rate warnings are grouped before cutoff and final acceptance is sealed to visible warning keys', () => {
+test('NHSP final charge acceptance stays in Blocked and is sealed to visible warning keys', () => {
   const model = workspace.normaliseWorkspace({
     profile: { id: 'NHSP_FINAL_BACKING_V1', finalise_label: 'Finalise report' },
     finalise: {
-      ready: { rows: [], total_count: 262 }, blocked: { rows: [], total_count: 0 },
+      active_list: 'blocked', ready: { rows: [], total_count: 262 }, blocked: { rows: [
+        { row_key: 'source-row-1', candidate: 'Amara Patel', problem: 'Accept the final NHSP source charge' },
+        { row_key: 'source-row-2', candidate: 'Elliot James', problem: 'Accept the final NHSP source charge' }
+      ], total_count: 2 },
       rate_warnings: {
         contract: 'NHSP_RATE_WARNING_WORKSPACE_V1', phase: 'FINAL_AWAITING_ACCEPTANCE', total_count: 24,
         notice: { title: 'Possible Trust rate card issue', body: '23 shifts have a £0 source charge. Check the Trust rate card in NHSP before accepting.' },
         rows: [
-          { warning_key: 'trust-zero', candidate: '23 affected candidates', day_date: 'Multiple shifts', source_charge: '£0.00', warning: 'Possible NHSP rate card issue', accept_eligible: true, detail_rows: [{ candidate: 'Amara Patel', day_date: 'Mon 14 Sep 2026', source_charge: '£0.00', warning: 'Possible NHSP rate card issue' }] },
-          { warning_key: 'elliot-mismatch', candidate: 'Elliot James', day_date: 'Sat 6 Sep 2026', source_charge: '£248.00', warning: 'Rate card expired or wrong Contract rate', accept_eligible: true }
+          { warning_key: 'trust-zero', source_row_id: 'source-row-1', candidate: 'Amara Patel', day_date: 'Mon 14 Sep 2026', source_charge: '£0.00', warning: 'Possible NHSP rate card issue', accept_eligible: true },
+          { warning_key: 'elliot-mismatch', source_row_id: 'source-row-2', candidate: 'Elliot James', day_date: 'Sat 6 Sep 2026', source_charge: '£248.00', warning: 'Rate card expired or wrong Contract rate', accept_eligible: true }
         ],
         acceptance: {
           enabled: true, action: 'ACCEPT_NHSP_SOURCE_CHARGES',
@@ -719,12 +717,12 @@ test('NHSP rate warnings are grouped before cutoff and final acceptance is seale
   });
   const acceptance = workspace.buildRateWarningAcceptancePayload(model.finalise.rate_warnings, ['trust-zero', 'not-a-server-warning']);
 
-  assert.match(html, /Possible Trust rate card issue/);
-  assert.match(html, /Rate card expired or wrong Contract rate/);
-  assert.match(html, /Possible NHSP rate card issue/);
+  assert.match(html, /Blocked \(2\)/);
+  assert.match(html, /Accept the final NHSP source charge/);
   assert.match(html, /data-ws-rate-warning-header/);
+  assert.doesNotMatch(html, /Rate warnings to accept/);
   assert.match(html, /Accept selected source charges/);
-  assert.match(html, /I have checked the warnings shown\./);
+  assert.match(html, /I have checked the selected NHSP charges\./);
   assert.doesNotMatch(html, />\s*Select all\s*</i);
   assert.doesNotMatch(html, />\s*Unselect all\s*</i);
   assert.deepEqual(acceptance, {

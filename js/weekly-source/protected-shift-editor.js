@@ -11,6 +11,13 @@
   const escape = (value) => text(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
   const uuid = (value) => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(text(value));
+  const ukToday = () => {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(new Date());
+    const value = (type) => parts.find((part) => part.type === type)?.value;
+    return `${value('year')}-${value('month')}-${value('day')}`;
+  };
   const ACTIONS = Object.freeze({
     approve: 'APPROVE_PROTECTED_HOURS', amend: 'AMEND_PROTECTED_HOURS',
     wait: 'WAIT_FOR_SOURCE', reconcile: 'ACCEPT_SOURCE_AND_RECONCILE'
@@ -42,6 +49,31 @@
     return eligible.length === 1 ? eligible[0].id : '';
   }
 
+  function overlappingEvents(context, values) {
+    const start = text(values.start), end = text(values.end);
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start)
+        || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(end) || start === end) return [];
+    const minutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+    const proposedStart = minutes(start), proposedEnd = minutes(end) + (end <= start ? 1440 : 0);
+    return (Array.isArray(context?.events) ? context.events : []).flatMap((event) => {
+      if (event.work_event_id === values.shift_choice) return [];
+      const intervals = [
+        ['Protected hours', event.protected_start, event.protected_end],
+        ['Imported source', event.source_start, event.source_end],
+        ['Candidate hours', event.candidate_start, event.candidate_end],
+        ['Recorded shift', event.start, event.end]
+      ];
+      const match = intervals.find(([, rawStart, rawEnd]) => {
+        const existingStart = text(rawStart), existingEnd = text(rawEnd);
+        if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(existingStart)
+            || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(existingEnd) || existingStart === existingEnd) return false;
+        const first = minutes(existingStart), last = minutes(existingEnd) + (existingEnd <= existingStart ? 1440 : 0);
+        return first < proposedEnd && proposedStart < last;
+      });
+      return match ? [{ ...event, overlap_kind: match[0], overlap_start: match[1], overlap_end: match[2] }] : [];
+    });
+  }
+
   // Only factual schedule/identity intent crosses this boundary. Rates, money,
   // signature claims and imported facts are never copied from form state.
   function request(context, values, idempotencyKey, mode = 'approve') {
@@ -54,11 +86,15 @@
       reason, idempotency_key: idempotencyKey };
     if (mode === 'approve' || mode === 'amend') {
       const checked = schedule(values);
+      if (checked.work_date > ukToday()) throw new Error('Choose today or an earlier work date. Future shifts cannot be protected.');
       const { net_minutes, ...factual } = checked;
       Object.assign(payload, factual);
     }
     if (mode === 'approve') {
-      if (context.events?.length && !values.shift_choice) throw new Error('Choose the existing shift, or confirm this is a separate new shift.');
+      if (!context.work_event_id && overlappingEvents(context, values).length) {
+        throw new Error('These hours overlap an existing shift. Open that shift or change the times.');
+      }
+      if (context.work_event_id && values.shift_choice !== context.work_event_id) throw new Error('The selected shift changed. Recheck before continuing.');
       if (values.shift_choice && values.shift_choice !== 'NEW' && values.shift_choice !== context.work_event_id) throw new Error('The selected shift changed. Recheck before continuing.');
       if (context.family_id && context.protected_state === 'WAIT') throw new Error('This shift already has protected pay. Use Change protected shift.');
       const contractId = contractChoice(context.contracts, values.contract_id);
@@ -98,11 +134,13 @@
     try { const result = schedule(values); net = `${Math.floor(result.net_minutes / 60)} hours ${result.net_minutes % 60} minutes`; } catch (_) {}
     const selected = contractChoice(context.contracts, values.contract_id);
     const contracts = (context.contracts || []).map((item) => `<option value="${escape(item.id)}"${selected === item.id ? ' selected' : ''}>${escape(item.label)}</option>`).join('');
-    const shiftChoices = !state.lockedIdentity && state.mode !== 'amend' && context.events?.length
-      ? `<label>Shift<select data-protected-field="shift_choice"${state.busy ? ' disabled' : ''}><option value="">Choose shift</option>${context.events.map((item) => `<option value="${escape(item.work_event_id)}"${values.shift_choice === item.work_event_id ? ' selected' : ''}>${escape(item.source_hours || item.candidate_hours || `${item.start || ''}–${item.end || ''} · ${item.break_minutes ?? ''} min break`)}${item.protected_state === 'WAIT' ? ' — already protected' : ''}</option>`).join('')}<option value="NEW"${values.shift_choice === 'NEW' ? ' selected' : ''}>A separate new shift</option></select></label>` : '';
+    const chosenExistingShift = !state.lockedIdentity && values.shift_choice && values.shift_choice !== 'NEW'
+      ? (context.events || []).find((item) => item.work_event_id === values.shift_choice) : null;
+    const shiftChoices = chosenExistingShift
+      ? `<p><strong>Existing shift:</strong> ${escape(chosenExistingShift.source_hours || chosenExistingShift.candidate_hours || `${chosenExistingShift.start || ''}–${chosenExistingShift.end || ''} · ${chosenExistingShift.break_minutes ?? ''} min break`)}</p>` : '';
     const input = (label, name, type, extra = '') => `<label>${label}<input data-protected-field="${name}" type="${type}" value="${escape(values[name])}" ${extra}${state.busy ? ' disabled' : ''}></label>`;
     return `<div class="ws-child" data-protected-editor><div class="ws-child-context"><div><span>Client</span><strong>${escape(context.client || 'Choose client')}</strong>${state.lockedIdentity?'':`<button type="button" class="btn btn-outline" data-protected-choose="client"${state.busy || state.mode === 'amend' ? ' disabled' : ''}>Choose client</button>`}</div><div><span>Candidate</span><strong>${escape(context.candidate || 'Choose candidate')}</strong>${state.lockedIdentity?'':`<button type="button" class="btn btn-outline" data-protected-choose="candidate"${state.busy || state.mode === 'amend' ? ' disabled' : ''}>Choose candidate</button>`}</div></div>
-      <div class="ws-child-fields">${input('Work date', 'work_date', 'date', state.mode === 'amend' || state.lockedIdentity ? 'readonly data-ctms-intentional-lock="1" ' : '')}<label>Contract<select data-protected-field="contract_id"${state.busy || state.mode === 'amend' || state.lockedIdentity ? ' disabled' : ''}${state.mode === 'amend' || state.lockedIdentity ? ' data-ctms-intentional-lock="1"' : ''}><option value="">Choose contract</option>${contracts}</select></label>${input('Start', 'start', 'time')}${input('Finish', 'end', 'time')}${input('Break (minutes)', 'break_minutes', 'number', 'min="0" step="1" required ')}<label>Reason<textarea data-protected-field="reason" maxlength="1000" required${state.busy ? ' disabled' : ''}>${escape(values.reason)}</textarea></label></div>
+      <div class="ws-child-fields">${input('Work date', 'work_date', 'date', `max="${ukToday()}" ${state.mode === 'amend' || state.lockedIdentity ? 'readonly data-ctms-intentional-lock="1" ' : ''}`)}<label>Contract<select data-protected-field="contract_id"${state.busy || state.mode === 'amend' || state.lockedIdentity ? ' disabled' : ''}${state.mode === 'amend' || state.lockedIdentity ? ' data-ctms-intentional-lock="1"' : ''}><option value="">Choose contract</option>${contracts}</select></label>${input('Start', 'start', 'time')}${input('Finish', 'end', 'time')}${input('Break (minutes)', 'break_minutes', 'number', 'min="0" step="1" required ')}<label>Reason<textarea data-protected-field="reason" maxlength="1000" required${state.busy ? ' disabled' : ''}>${escape(values.reason)}</textarea></label></div>
       ${shiftChoices}${state.lockedIdentity?`<p><strong>Imported ${escape(context.source_family === 'NHSP' ? 'NHSP' : 'Roster')} Shift:</strong> ${escape(context.source_hours || 'Current imported shift')}</p>`:''}<p><strong>Hours approved for pay: <output data-protected-net>${escape(net)}</output></strong></p>
       <div class="ws-child-context"><div><span>Candidate submission</span><strong>${escape(context.candidate_hours || 'Choose the client, candidate and date to check')}</strong></div><div><span>Imported hours</span><strong>${escape(context.source_hours || 'Choose the client, candidate and date to check')}</strong></div></div>
       <p>This changes the candidate’s pay position. It does not change the client source or invoice.</p>
@@ -137,5 +175,5 @@
       ${state.error ? `<div class="ws-notice ws-notice--danger" role="alert">${escape(state.error)}</div>` : ''}
       <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-review-close${state.busy ? ' disabled' : ''}>Close</button><button type="button" class="btn btn-outline" data-protected-review-action="wait"${disabled ? ' disabled' : ''}>Wait</button><button type="button" class="btn primary" data-protected-review-action="reconcile"${disabled || !context.can_reconcile ? ' disabled' : ''}>Accept system hours and reconcile</button>${state.pending && !state.busy ? '<button type="button" class="btn btn-outline" data-protected-review-recover>Check saved result</button>' : ''}</div></div>`;
   }
-  return Object.freeze({ schedule, contractChoice, request, render, renderReview });
+  return Object.freeze({ schedule, contractChoice, overlappingEvents, request, render, renderReview });
 });

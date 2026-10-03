@@ -252,6 +252,7 @@
       heading: asText(raw.heading || raw.title),
       contract_id: asText(raw.contract_id),
       body: plainMessage(raw.body || raw.message || raw.guidance, ''),
+      chargeGuidance: label === 'Open charge details' ? 'If the contract rates are wrong, correct the contract or create the appropriate one. If the NHSP charge is wrong, request a correction in NHSP. If it is still wrong in the final backing report, you can accept the final source charge in Finalise without holding candidate pay. A later corrected complete backing report creates separate invoice correction movements; it does not rewrite an issued invoice.' : '',
       fields: [...fields, ...chargeFields],
       accept_group: asObject(payload.accept_group),
       shifts: asArray(raw.shifts).map((row) => ({
@@ -272,7 +273,7 @@
     const replyRows=model.shifts.filter(row=>row.candidate_response||row.manager_response).map(row=>`<tr><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.candidate_response||'No reply recorded')}<span class="ws-status-sub">${escapeHtml(row.candidate_responded_at)}</span></td><td>${escapeHtml(row.manager_response||'No reply recorded')}<span class="ws-status-sub">${escapeHtml(row.manager_responded_at)}</span>${row.manager_intended_hours?`<p>${escapeHtml(row.manager_intended_hours)}</p>`:''}</td></tr>`).join('');
     const replies=replyRows?`<h3>Recorded replies</h3><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Day/date</th><th>Candidate reply</th><th>Manager reply</th></tr></thead><tbody>${replyRows}</tbody></table></div>`:'';
     const shifts = model.shifts.length ? `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr>${eligible.size?'<th>Select</th>':''}<th>Day/date</th><th>Candidate says they worked</th><th>System hours</th><th>Issue and status</th></tr></thead><tbody>${model.shifts.map((row) => `<tr>${eligible.size?`<td>${eligible.has(row.incident_id)?`<input type="checkbox" data-wsa-accept-incident="${escapeHtml(row.incident_id)}" aria-label="Select system hours for ${escapeHtml(row.day_date)}">`:''}</td>`:''}<td>${escapeHtml(row.day_date || '—')}</td><td>${escapeHtml(row.candidate_hours || '—')}</td><td>${escapeHtml(row.system_hours || '—')}</td><td>${escapeHtml([row.issue, row.status].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
-    return `<div class="ws-child" data-wsa-screen="details">${model.heading ? `<h3>${escapeHtml(model.heading)}</h3>` : ''}${model.body ? `<p>${escapeHtml(model.body)}</p>` : ''}${fields ? `<div class="ws-child-context">${fields}</div>` : ''}${shifts}${replies}<div class="ws-child-actions">${eligible.size?'<button type="button" class="btn btn-outline" data-wsa-accept-selected disabled>Accept selected system hours</button>':''}${model.contract_id ? '<button type="button" class="btn btn-outline" data-wsa-review-contract>Review contract</button>' : ''}<button type="button" class="btn primary" data-wsa-close>Close</button></div></div>`;
+    return `<div class="ws-child" data-wsa-screen="details">${model.heading ? `<h3>${escapeHtml(model.heading)}</h3>` : ''}${model.body ? `<p>${escapeHtml(model.body)}</p>` : ''}${fields ? `<div class="ws-child-context">${fields}</div>` : ''}${model.chargeGuidance ? `<p class="ws-charge-guidance">${escapeHtml(model.chargeGuidance)}</p>` : ''}${shifts}${replies}<div class="ws-child-actions">${eligible.size?'<button type="button" class="btn btn-outline" data-wsa-accept-selected disabled>Accept selected system hours</button>':''}${model.contract_id ? '<button type="button" class="btn btn-outline" data-wsa-review-contract>Review contract</button>' : ''}<button type="button" class="btn primary" data-wsa-close>Close</button></div></div>`;
   }
 
   function normaliseContractChooser(payload) {
@@ -865,7 +866,7 @@
       const labels = [['candidate','Candidate'],['client','Client'],['day_date','Day/date'],
         ['source_reference','Source worker reference'],['booking_reference','Booking reference'],
         ['system_hours','Source hours / break'],['status','Status'],['issue','Issue']];
-      const rows = asArray(model?.shifts).map(row => `<tr>${labels.map(([key,label])=>`<td data-label="${escapeHtml(label)}">${escapeHtml(row[key]||'—')}</td>`).join('')}<td data-label="Action">${row.source_row_id?`<button class="btn btn-outline" data-wsa-file-query="${escapeHtml(row.source_row_id)}">Send back to Queries</button>`:''}</td></tr>`).join('');
+      const rows = asArray(model?.shifts).map(row => `<tr>${labels.map(([key,label])=>`<td data-label="${escapeHtml(label)}">${escapeHtml(row[key]||'—')}</td>`).join('')}<td data-label="Action">${row.source_row_id && row.pay_query_open!==true?`<button class="btn btn-outline" data-wsa-file-query="${escapeHtml(row.source_row_id)}">Send to Pay Queries</button>`:''}</td></tr>`).join('');
       const refusal = model?.reason_code ? `<div class="ws-notice ws-notice--warning"><strong>Why this file was refused</strong><span>${escapeHtml(plainMessage(model.reason_code, 'The saved attempt was refused. Quote the reference below when requesting an investigation.'))}</span><span>Reference: ${escapeHtml(model.reason_code)}</span></div>` : '';
       return `<div class="ws-child" data-wsa-screen="upload-detail">${model?`<h3>${escapeHtml(model.file)}</h3><div class="ws-child-context">${[['purpose','Purpose'],['uploaded','Uploaded'],['coverage','Coverage'],['status','File status'],['rows','Source rows'],['final_source','Finalisation']].map(([key,label])=>`<div><span>${label}</span><strong>${escapeHtml(model[key])}</strong></div>`).join('')}</div>${refusal}<div class="ws-child-scroll" data-wsr-table><table class="grid mini ws-grid"><thead><tr>${labels.map(([,label])=>`<th>${label}</th>`).join('')}<th>Action</th></tr></thead><tbody>${rows||'<tr><td colspan="9">No source rows recorded.</td></tr>'}</tbody></table></div>`:'<p role="status">Loading file details…</p>'}${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions">${model?.has_more?`<button class="btn btn-outline" data-wsa-file-more${state.busy?' disabled':''}>Load more shifts</button>`:''}${state.error&&!model?'<button class="btn btn-outline" data-wsa-file-retry>Retry</button>':''}<button class="btn primary" data-wsa-close>Close</button></div></div>`;
     };
@@ -904,7 +905,7 @@
     if(!sourceRowId)return openDetail({detail:{problem:'This imported shift is not available for manual review. Recheck the report.'}},'View details');
     const state={reason:'',busy:false,error:''};
     const kind='weekly-source-manual-review-v1';
-    const render=()=>`<div class="ws-child" data-wsa-screen="manual-review"><h3>Send back to Queries</h3><p>${escapeHtml(payload.candidate||'Selected candidate')} · ${escapeHtml(payload.client||'Selected client')} · ${escapeHtml(payload.day_date||'Imported shift')}</p><p>This holds the existing Timesheet at first authorisation until Office accepts the current source hours or protects pay. It does not contact the candidate or create another shift.</p><label>Reason<textarea data-wsa-manual-reason maxlength="1000" required${state.busy?' disabled':''}>${escapeHtml(state.reason)}</textarea></label>${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions"><button class="btn btn-outline" data-wsa-manual-cancel${state.busy?' disabled':''}>Cancel</button><button class="btn primary" data-wsa-manual-submit${state.busy?' disabled':''}>Send back to Queries</button></div></div>`;
+    const render=()=>`<div class="ws-child" data-wsa-screen="manual-review"><h3>Send to Pay Queries</h3><p>${escapeHtml(payload.candidate||'Selected candidate')} · ${escapeHtml(payload.client||'Selected client')} · ${escapeHtml(payload.day_date||'Imported shift')}</p><p>This holds the existing Timesheet at first authorisation until Office accepts the current source hours or protects pay. It does not block finalisation of the weekly report. It does not contact the candidate or create another shift.</p><label>Reason<textarea data-wsa-manual-reason maxlength="1000" required${state.busy?' disabled':''}>${escapeHtml(state.reason)}</textarea></label>${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions"><button class="btn btn-outline" data-wsa-manual-cancel${state.busy?' disabled':''}>Cancel</button><button class="btn primary" data-wsa-manual-submit${state.busy?' disabled':''}>Send to Pay Queries</button></div></div>`;
     const wire=()=>{
       const host=root.document?.querySelector('[data-wsa-screen="manual-review"]');
       if(!host||host.dataset.wsaWired==='1')return;
@@ -921,7 +922,7 @@
         }catch(error){state.error=plainMessage(error?.message,'The query could not be saved.');state.busy=false;rerender(kind);}
       });
     };
-    return openChild({title:'Send back to Queries',kind,render,wire});
+    return openChild({title:'Send to Pay Queries',kind,render,wire});
   }
 
   function openProtectedReview(payloadValue) {
@@ -999,7 +1000,7 @@
       end: asText(initial.end || initial.end_at_local), break_minutes: initial.break_minutes ?? '',
       contract_id: asText(initial.contract_id), shift_choice: asText(initial.work_event_id), reason: '' };
     const state = { mode, busy: false, error: '', pending: null, idempotencyKey: null,
-      protectedSaved: false };
+      protectedSaved: false, userChanged: false, lastOverlapSignature: '' };
     let readSequence = 0;
     const kind = 'weekly-source-protected-shift-v1';
     const selection = () => ({ client_id: context.client_id, candidate_id: context.candidate_id,
@@ -1020,17 +1021,65 @@
         values.contract_id = editor.contractChoice(context.contracts, context.shift_contract_id || values.contract_id);
         if (mode === 'amend' && context.current_schedule) Object.assign(values, context.current_schedule);
       } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
-      finally { if (sequence === readSequence) { state.busy = false; rerender(kind); } }
+      finally { if (sequence === readSequence) { state.busy = false; rerender(kind); setTimeout(() => warnIfOverlapping(), 30); } }
     };
     const render = () => editor.render(context, values, { ...state,
       lockedIdentity: !!initial.work_event_id, busy: state.busy || !!state.pending })
       + (state.pending && !state.busy ? '<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-check-result>Check saved result</button></div><p>The outcome is not yet confirmed. Keep these details unchanged while checking; do not add this shift again.</p>' : '')
       + (!state.busy && !state.pending && context.allowed && !context.contracts.length
         ? '<p>No eligible contract covers this date.</p><button type="button" class="btn btn-outline" data-protected-create-contract>Create contract</button><button type="button" class="btn btn-outline" data-protected-recheck>Recheck contracts</button>' : '');
+    const routeLabel = (event) => event.pay_query_open ? 'Open Pay Queries'
+      : event.final_report_key ? 'Open in History'
+      : event.finalise_source_cycle_id ? 'Open unfinalised report' : '';
+    const warnIfOverlapping = (force = false) => {
+      if (mode !== 'approve' || initial.work_event_id || state.busy || state.pending || !currentChild(kind)) return false;
+      const overlaps = editor.overlappingEvents(context, values);
+      if (!overlaps.length) { state.lastOverlapSignature = ''; return false; }
+      const signature = [context.client_id, context.candidate_id, values.work_date,
+        values.start, values.end, ...overlaps.map(item => item.work_event_id)].join('|');
+      if (!force && signature === state.lastOverlapSignature) return true;
+      state.lastOverlapSignature = signature;
+      const noticeKind = 'weekly-source-existing-shift-overlap-v1';
+      const notice = { confirm: null, busy: false };
+      const navigate = async (event) => {
+        const warning = currentChild(noticeKind);
+        if (warning) { warning.isDirty = false; closeChild(); }
+        const form = currentChild(kind);
+        if (form) { form.isDirty = false; form._snapshot = null; closeChild(); }
+        try {
+          const opened = await workspaceApi()?.navigateToExistingShift?.({ ...event,
+            source_group_id: context.source_group_id, client_id: context.client_id,
+            candidate: context.candidate });
+          if (!opened) throw new Error('The existing shift could not be opened. Recheck the source work.');
+        } catch (error) { root.__toast?.(plainMessage(error?.message, 'The existing shift could not be opened.')); }
+      };
+      const choose = async (event) => {
+        if (!routeLabel(event)) {
+          closeChild(); values.shift_choice = event.work_event_id; await reload(); return;
+        }
+        const form = (root.__modalStack || []).find(frame => frame.kind === kind);
+        if (state.userChanged || form?.isDirty) { notice.confirm = event; rerender(noticeKind); return; }
+        await navigate(event);
+      };
+      const noticeRender = () => notice.confirm
+        ? `<div class="ws-child" data-wsa-screen="existing-shift"><h3>Leave this protected shift draft?</h3><p>The details entered here have not been saved. Discard them and ${escapeHtml(routeLabel(notice.confirm).toLowerCase())}?</p><div class="ws-child-actions"><button class="btn btn-outline" data-wsa-overlap-back>Keep editing</button><button class="btn primary" data-wsa-overlap-confirm>Discard draft and open</button></div></div>`
+        : `<div class="ws-child" data-wsa-screen="existing-shift"><h3>Shift hours overlap</h3><p>${escapeHtml(context.candidate || 'This candidate')} already has a recorded shift during these hours${context.work_date ? ` on ${escapeHtml(context.work_date)}` : ''}. Protect the existing shift through its source work; do not create a second payable copy for the same work.</p><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Recorded shift</th><th>Where to go</th></tr></thead><tbody>${overlaps.map((event, index) => `<tr><td>${escapeHtml(event.overlap_kind)}: ${escapeHtml(event.overlap_start)}–${escapeHtml(event.overlap_end)}${event.booking_reference ? ` · ${escapeHtml(event.booking_reference)}` : ''}</td><td><button class="btn btn-outline" data-wsa-overlap-route="${index}">${escapeHtml(routeLabel(event) || 'Use existing shift')}</button></td></tr>`).join('')}</tbody></table></div><p>If this is separate work, change its times so they do not overlap.</p><div class="ws-child-actions"><button class="btn primary" data-wsa-overlap-back>Edit times</button></div></div>`;
+      const noticeWire = () => {
+        const host = root.document?.querySelector('[data-wsa-screen="existing-shift"]');
+        if (!host || host.dataset.wsaWired) return;
+        host.dataset.wsaWired = '1';
+        host.querySelector('[data-wsa-overlap-back]')?.addEventListener('click', () => { notice.confirm = null; closeChild(); });
+        host.querySelector('[data-wsa-overlap-confirm]')?.addEventListener('click', () => navigate(notice.confirm));
+        host.querySelectorAll('[data-wsa-overlap-route]').forEach(button => button.addEventListener('click', () => choose(overlaps[Number(button.dataset.wsaOverlapRoute)])));
+      };
+      openChild({ title: 'Shift hours overlap', kind: noticeKind, render: noticeRender, wire: noticeWire });
+      return true;
+    };
     const submit = async () => {
       if (state.busy) return;
       state.error = '';
       try {
+        if (warnIfOverlapping(true)) return;
         // Validate all user-entered intent before cycle preparation. The exact
         // qualified contract and source period are checked again server-side.
         editor.schedule(values);
@@ -1075,12 +1124,14 @@
       host.querySelector('[data-protected-cancel]')?.addEventListener('click', closeChild);
       host.querySelectorAll('[data-protected-field]').forEach((input) => input.addEventListener('change', async () => {
         values[input.dataset.protectedField] = input.value;
+        state.userChanged = true;
         if (input.dataset.protectedField === 'work_date') { values.shift_choice = ''; await reload(); }
         else if (input.dataset.protectedField === 'shift_choice') await reload();
         else {
           const output = host.querySelector('[data-protected-net]');
           try { const item = editor.schedule(values); output.textContent = `${Math.floor(item.net_minutes / 60)} hours ${item.net_minutes % 60} minutes`; }
           catch (error) { output.textContent = error.message; }
+          if (input.dataset.protectedField === 'start' || input.dataset.protectedField === 'end') warnIfOverlapping();
         }
       }));
       host.querySelectorAll('[data-protected-choose]').forEach((button) => button.addEventListener('click', () => {
@@ -1090,6 +1141,7 @@
         picker(async ({ id, label }) => {
           context[`${field}_id`] = id;
           context[field] = asText(label);
+          state.userChanged = true;
           values.contract_id = '';
           values.shift_choice = '';
           if (field === 'client') delete context.source_group_id;
@@ -1111,7 +1163,7 @@
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
-    if(label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
+    if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
     if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
     if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);
     if (label === 'Review protected pay') return openProtectedReview(detail.payload);

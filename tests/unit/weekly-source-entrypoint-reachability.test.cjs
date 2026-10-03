@@ -18,7 +18,7 @@ test('the public Imports route reaches Weekly Source and the legacy review canno
   assert.match(main, /async function openImportsModal\(\) \{\s*if \(window\.CloudTMSWeeklySourceImportWorkspaceV1\?\.open\) \{\s*return window\.CloudTMSWeeklySourceImportWorkspaceV1\.open\(\)/);
   assert.doesNotMatch(legacyReview, /global\.openImportsModal\s*=\s*openImportsModalV1/);
   assert.match(legacyReview, /global\.CloudTmsImportReviewV1\s*=\s*Object\.freeze\([\s\S]*openImportsModal:\s*openImportsModalV1/);
-  assert.match(workspaceActions, /root\.CloudTmsImportReviewV1\?\.openImportsModal[\s\S]*root\.CloudTmsImportReviewV1\.openImportsModal\(\)/);
+  assert.doesNotMatch(workspaceActions, /CloudTmsImportReviewV1\.openImportsModal\(\)/);
 });
 
 test('all Weekly Source modules receive the canonical backend API route after load', () => {

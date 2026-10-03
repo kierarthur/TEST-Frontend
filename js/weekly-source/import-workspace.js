@@ -33,7 +33,7 @@
     imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager']),
     queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet']),
     shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay']),
-    finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send back to Queries']),
+    finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),
     tracker: new Set(['No shifts to import', 'View'])
   });
   const TONES = new Set(['neutral', 'info', 'warning', 'positive', 'danger']);
@@ -53,7 +53,7 @@
     'Review', 'Review pricing', 'Correct final source', 'Remind candidate', 'Accept system hours',
     'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band',
     'Review overlapping shift', 'Upload corrected source', 'Protect pay', 'No shifts to import', 'Confirm shift match',
-    'Accept current source hours', 'Send back to Queries'
+    'Accept current source hours', 'Send to Pay Queries', 'Send back to Queries'
   ]);
   const asText = (value) => String(value == null ? '' : value).trim();
   const asArray = (value) => Array.isArray(value) ? value : [];
@@ -686,7 +686,7 @@
       const detail = { candidate: row.candidate, client: row.client, day_date: row.day_date, system_hours: row.system_hours,
         source_reference: row.source_reference, booking_reference: row.booking_reference, problem: row.problem };
       const actions = withFallbackDetail(normaliseActions(row.actions, ACTIONS.finalise), detail);
-      return `<tr>${['candidate','source_reference','client','booking_reference','day_date','system_hours','problem'].map(key => `<td>${escapeHtml(row[key] || '—')}</td>`).join('')}<td class="ws-actions">${renderActions(actions, checks.stale, row.row_key)}</td></tr>`;
+      return `<tr class="${row.pay_blocking===true?'ws-query-hold':'ws-query-nonblocking'}">${['candidate','source_reference','client','booking_reference','day_date','system_hours','problem'].map(key => `<td>${escapeHtml(row[key] || '—')}</td>`).join('')}<td class="ws-actions">${renderActions(actions, checks.stale, row.row_key)}</td></tr>`;
     }).join('')}</tbody></table></div></section>` : '';
     const addProtected = workspace.queries.protected_pay_enabled
       ? `<div class="ws-child-actions"><button type="button" class="btn btn-outline ws-row-action" data-ws-action="Add protected shift" data-ws-payload="${escapeHtml(JSON.stringify({ source_group_id: workspace.selected.source_group_id, client_id: workspace.selected.client_id }))}">Add protected shift</button></div>` : '';
@@ -1092,7 +1092,7 @@
     host.querySelectorAll('[data-wsr-manual-review]').forEach(button=>button.addEventListener('click',()=>{
       const shift=(state.reportDetail?.shifts||[]).find(item=>item.source_row_id===button.dataset.wsrManualReview);
       if(shift)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:{
-        label:'Send back to Queries',payload:{source_row_id:shift.source_row_id,
+        label:'Send to Pay Queries',payload:{source_row_id:shift.source_row_id,
           candidate:shift.candidate,client:state.reportDetail.report.client,day_date:shift.day_date}
       }}));
     }));
@@ -1158,6 +1158,16 @@
       }}));
     }));
     host.querySelector('[data-wsr-add-protected]')?.addEventListener('click',()=>root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:{label:'Add protected shift',payload:{source_group_id:state.filters.source_group_id||undefined,client_id:state.filters.client_id||undefined}}})));
+    if (tab === 'queries' && state.targetWorkEventId) {
+      const group = model.rows.find(row => asArray(row.children).some(child =>
+        child.protected_pay_seed?.work_event_id === state.targetWorkEventId));
+      const element = [...host.querySelectorAll('[data-wsr-group]')].find(item => item.dataset.wsrGroup === group?.combined_key);
+      if (element) {
+        element.nextElementSibling?.querySelector('details')?.setAttribute('open', '');
+        element.scrollIntoView?.({ block: 'center' });
+        state.targetWorkEventId = '';
+      }
+    }
     const table=host.querySelector('[data-wsr-table]');
     if(table){table.scrollTop=session.scrollByTab[tab]||0;table.addEventListener('scroll',()=>{session.scrollByTab[tab]=table.scrollTop;},{passive:true});}
     table?.addEventListener('keydown',event=>{
@@ -1732,12 +1742,57 @@
     if (tab !== 'imports') await currentFrame()?.setTab?.(tab);
   }
 
+  async function navigateToExistingShift(target) {
+    if (!currentFrame() || !target?.client_id || !target?.source_group_id) return false;
+    const kind = target.pay_query_open ? 'queries'
+      : target.final_report_key ? 'history'
+      : target.finalise_source_cycle_id ? 'finalise' : '';
+    if (!kind) return false;
+    session.error = '';
+    if (kind === 'finalise') {
+      session.combined.singleScope = true;
+      session.workspace.combined_source_workspace = false;
+      session.workspace.selected = { source_group_id: target.source_group_id,
+        source_cycle_id: target.finalise_source_cycle_id, client_id: target.client_id,
+        report_scope_id: target.finalise_report_scope_id || undefined };
+      await currentFrame()?.setTab?.('finalise');
+      await loadWorkspace('finalise');
+      return true;
+    }
+    session.reviewSingleScope = false;
+    session.workspace.combined_source_workspace = true;
+    const period = kind === 'queries' ? target.query_week_ending : target.final_report_week_ending;
+    session.sourceFilters = { source_group_id: target.source_group_id,
+      client_id: target.client_id, ...(period ? { week_ending: period } : {}) };
+    const state = session.reviews[kind] ||= { filters: {}, section: 'questions', sort: '', direction: 'asc', seek: '' };
+    if (kind === 'queries') {
+      state.section = 'questions'; state.sort = 'candidate'; state.direction = 'asc';
+      state.filterIdentity = JSON.stringify(session.sourceFilters);
+      state.seek = asText(target.candidate_sort || target.candidate).toLocaleLowerCase('en-GB');
+      state.targetWorkEventId = asText(target.work_event_id);
+    } else {
+      state.historyDates = {};
+      state.reportDetail = null;
+    }
+    await currentFrame()?.setTab?.(kind);
+    await loadCombinedReview(kind);
+    if (kind === 'history') {
+      const detail = await issueCommand('COMBINED_REVIEW_WORKSPACE', {
+        ...session.sourceFilters, tab: 'history', report_key: target.final_report_key, limit: 50
+      });
+      if (detail?.contract !== 'WEEKLY_SOURCE_COMPLETED_REPORT_V1') throw new Error('The completed report could not be opened.');
+      state.reportDetail = detail;
+      await repaint();
+    }
+    return true;
+  }
+
   return Object.freeze({
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
     normaliseBulkActions, normaliseRateWarnings, buildRateWarningAcceptancePayload, buildOutreachRequest,
     open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     acceptSystemShiftSelectionPayload,
-    refresh: (tab = session.activeTab) => loadWorkspace(tab),
+    refresh: (tab = session.activeTab) => loadWorkspace(tab), navigateToExistingShift,
     clearShiftSelections: () => { session.shiftSelections.clear(); },
     _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload, acceptSingleSystemShiftPayload, friendlyWorkspaceError, cycleForClientChange, queryFor }),
     _session: session

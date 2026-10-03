@@ -21,6 +21,28 @@ test('new unsigned, unimported shift needs a qualified contract, not a booking r
   assert.ok(!('booking_reference' in result.payload));
   assert.ok(!('pay' in editor.request(context, { ...values, pay: 123 }, 'protected-editor-test-001').payload));
 });
+test('future work dates are unavailable in the calendar and rejected if typed', () => {
+  const future = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  assert.match(editor.render(context, values), /data-protected-field="work_date" type="date"[^>]+max="\d{4}-\d{2}-\d{2}"/);
+  assert.throws(() => editor.request({ ...context, work_date: future },
+    { ...values, work_date: future }, 'protected-editor-test-future'), /Future shifts cannot be protected/);
+});
+test('a same-day second shift is warned only when its times actually overlap', () => {
+  const existing = { work_event_id: id(7), start: '09:00', end: '16:00' };
+  const selected = { ...context, events: [existing] };
+  assert.deepEqual(editor.overlappingEvents(selected, { start: '16:00', end: '18:00' }), []);
+  assert.equal(editor.request(selected, { ...values, start: '16:00', end: '18:00' },
+    'protected-editor-test-second').payload.work_event_id, null);
+  assert.deepEqual(editor.overlappingEvents(selected, { start: '15:45', end: '18:00' }).map(item => item.work_event_id), [id(7)]);
+  assert.throws(() => editor.request(selected, { ...values, start: '15:45', end: '18:00' },
+    'protected-editor-test-overlap'), /overlap an existing shift/);
+  assert.deepEqual(editor.overlappingEvents(selected, { start: '15:45', end: '18:00', shift_choice: id(7) }), []);
+  assert.deepEqual(editor.overlappingEvents(selected, { start: '15:', end: '18:00' }), []);
+  assert.deepEqual(editor.overlappingEvents({ events: [{ ...existing, start: '22:00', end: '06:00' }] },
+    { start: '23:00', end: '07:00' }).map(item => item.work_event_id), [id(7)]);
+  assert.equal(editor.overlappingEvents({ events: [{ ...existing, candidate_start: '09:00', candidate_end: '16:00',
+    source_start: '09:00', source_end: '17:00' }] }, { start: '16:00', end: '18:00' })[0].overlap_kind, 'Imported source');
+});
 test('multiple contracts never default; changed context is stale', () => {
   const many = { ...context, contracts: [...context.contracts, { id: id(5), week_ending_date: '2026-09-27' }] };
   assert.equal(editor.contractChoice(many.contracts, ''), '');
@@ -80,7 +102,7 @@ test('review history uses recorded actors, reasons and before/after schedules sa
 
 test('existing same-day shifts require an explicit identity and protect cannot silently amend', () => {
   const current = { ...context, events: [{ work_event_id: id(7) }], work_event_id: id(7), shift_contract_id: id(4) };
-  assert.throws(() => editor.request(current, values, 'protected-editor-test-004'), /Choose the existing shift/);
+  assert.throws(() => editor.request(current, values, 'protected-editor-test-004'), /selected shift changed/);
   const selected = { ...values, shift_choice: id(7) };
   assert.equal(editor.request(current, selected, 'protected-editor-test-004').payload.work_event_id, id(7));
   assert.throws(() => editor.request({ ...current, family_id: id(6), protected_state: 'WAIT' }, selected, 'protected-editor-test-004'), /already has protected pay/);

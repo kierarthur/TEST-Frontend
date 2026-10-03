@@ -71,6 +71,13 @@ test('NHSP guidance uses the server source family, not a display name',()=>{
   const row={source:'NHSP',source_family:'ROSTER',children:[{issue:'Hours differ',candidate_response:'My hours are correct'}]};
   assert.equal(view.questionSummary(row).next,'Review response');
 });
+test('Office checks distinguish pay-blocking identity work from charge decisions',()=>{
+  const rows=[{...model.rows[0],combined_key:'identity',pay_blocking:true},
+    {...model.rows[0],combined_key:'charge',candidate:'Kier',problem:'Accept final charge',pay_blocking:false}];
+  const html=view.render({...model,rows});
+  assert.match(html,/<tr data-wsr-group="identity" class="ws-query-hold">[^]*&lt;Baljit&gt;/);
+  assert.match(html,/<tr data-wsr-group="charge" class="ws-query-nonblocking">[^]*Accept final charge/);
+});
 
 test('manual query Problem shows Office author, UK time and a short escaped reason, retaining full context on hover',()=>{
   const reason='Should be an extra hour here and please double check the manager approval <script> before accepting source';

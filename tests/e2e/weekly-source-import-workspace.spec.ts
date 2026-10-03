@@ -367,6 +367,54 @@ test('new protected shift retains client and candidate selected through the real
   await expect(page.locator('[data-protected-editor] .ws-child-context strong').nth(1)).toHaveText('Arthur, Kier');
 });
 
+test('new protected shift interrupts only when entered times overlap recorded work', async ({ page }) => {
+  await loadOfficeFoundation(page);
+  await page.evaluate(() => {
+    const win = window as any;
+    const original = win.authFetch;
+    win.authFetch = async (url: string, options: any = {}) => {
+      if (!url.includes('/weekly-source/v1/commands')) return original(url, options);
+      const request = JSON.parse(options.body);
+      win.__requests.push(request);
+      return { ok: true, json: async () => ({ contract: 'WEEKLY_PROTECTED_EDITOR_V1', allowed: true,
+        source_cycle_id: '44444444-4444-4444-8444-444444444444',
+        source_group_id: '55555555-5555-4555-8555-555555555555',
+        client_id: '11111111-1111-4111-8111-111111111111',
+        candidate_id: '22222222-2222-4222-8222-222222222222',
+        client: 'Example Trust', candidate: 'Kier Arthur', work_date: '2026-09-21',
+        contracts: [{ id: '33333333-3333-4333-8333-333333333333',
+          label: 'Band 6', week_ending_date: '2026-09-27' }],
+        events: [{ work_event_id: '66666666-6666-4666-8666-666666666666',
+          start: '09:00', end: '16:00', break_minutes: 30, source_hours: '09:00–16:00 · 30 min break',
+          pay_query_open: true, query_week_ending: '2026-09-27' }] }) };
+    };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Add protected shift', payload: {
+      client_id: '11111111-1111-4111-8111-111111111111',
+      candidate_id: '22222222-2222-4222-8222-222222222222', work_date: '2026-09-21'
+    } });
+  });
+  await expect(page.locator('[data-protected-field="contract_id"]')).toContainText('Band 6');
+  await expect(page.locator('[data-protected-field="shift_choice"]')).toHaveCount(0);
+  await expect(page.locator('[data-wsa-screen="existing-shift"]')).toHaveCount(0);
+  await page.locator('[data-protected-field="start"]').fill('16:00');
+  await page.locator('[data-protected-field="end"]').fill('18:00');
+  await page.locator('[data-protected-field="end"]').blur();
+  await expect(page.locator('[data-wsa-screen="existing-shift"]')).toHaveCount(0);
+  await page.locator('[data-protected-field="start"]').fill('15:45');
+  await expect(page.getByRole('heading', { name: 'Shift hours overlap' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Pay Queries' })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit times' }).click();
+  await expect(page.locator('[data-protected-field="start"]')).toHaveValue('15:45');
+  await page.locator('[data-protected-field="start"]').fill('16:00');
+  await page.locator('[data-protected-field="start"]').blur();
+  await expect(page.locator('[data-wsa-screen="existing-shift"]')).toHaveCount(0);
+  await page.locator('[data-protected-field="start"]').fill('15:45');
+  await page.getByRole('button', { name: 'Open Pay Queries' }).click();
+  await expect(page.getByRole('heading', { name: 'Leave this protected shift draft?' })).toBeVisible();
+  await page.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(page.locator('[data-protected-field="start"]')).toHaveValue('15:45');
+});
+
 test('protecting an existing imported shift locks its identity while Add protected shift remains separate', async ({ page }) => {
   await loadFoundation(page);
   const result = await page.evaluate(() => {
@@ -387,7 +435,7 @@ test('protecting an existing imported shift locks its identity while Add protect
   expect(result.existing).toMatch(/data-protected-field="work_date"[^>]*data-ctms-intentional-lock="1"/);
   expect(result.existing).toMatch(/data-protected-field="contract_id" disabled data-ctms-intentional-lock="1"/);
   expect(result.missing).toContain('Choose candidate');
-  expect(result.missing).toContain('A separate new shift');
+  expect(result.missing).not.toContain('A separate new shift');
 });
 
 test('an overdue open cycle says cutoff passed in report detail without changing finalisation authority', async ({ page }) => {
@@ -529,6 +577,7 @@ test('contract review loads the complete current contract and fails safely witho
       detail: { candidate: 'Example worker', contract_id: 'contract-1', problem: 'Charge does not match' }
     } });
   });
+  await expect(page.getByText('A later corrected complete backing report creates separate invoice correction movements', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Review contract', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__contractOpens)).toEqual([{
     data: { contract: { id: 'contract-1', client_id: 'client', candidate_id: 'candidate' }, counts: { weeks: 2 } },
@@ -890,7 +939,7 @@ test('NHSP final report keeps the row action visible at Office desktop widths', 
       candidate: 'Kier Arthur', day_date: 'Tue 8 Sep 2026', actual_hours: '01:00-04:00 (30 min break)',
       movement: 'Positive', commission: '£50.00', total_cost: '£50.00', invoice_charge: '£100.00',
       status: { text: 'Ready', tone: 'positive' },
-      actions: [{ label: 'Send back to Queries', enabled: true, payload: { source_row_id: 'row-1' } }]
+      actions: [{ label: 'Send to Pay Queries', enabled: true, payload: { source_row_id: 'row-1' } }]
     }] };
     const api = (window as any).CloudTMSWeeklySourceImportWorkspaceV1;
     await api.open();
@@ -899,9 +948,11 @@ test('NHSP final report keeps the row action visible at Office desktop widths', 
     await (window as any).__modalStack.at(-1).setTab('finalise');
   }, fixtures.workspace);
   const table = page.locator('.ws-source-finalise-grid');
-  await expect(table.getByRole('button', { name: 'Send back to Queries' })).toBeVisible();
+  await expect(table.getByRole('button', { name: 'Send to Pay Queries' })).toBeVisible();
   const overflow = await page.locator('[data-ws-scroll]').evaluate(region => region.scrollWidth - region.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+  await table.getByRole('button', { name: 'Send to Pay Queries' }).click();
+  await expect(page.getByText('It does not block finalisation of the weekly report.', { exact: false })).toBeVisible();
 });
 
 test('one selection reviews separate NHSP backing reports and accepts each exact Trust scope', async ({ page }, testInfo) => {
