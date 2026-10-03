@@ -681,6 +681,11 @@
 [data-wsr-table] .ws-query-expansion summary { cursor: pointer; padding: 4px 0; }
 [data-wsr-table] .ws-query-shifts { width: 100%; table-layout: fixed; margin-top: 8px; }
 [data-wsr-table] .ws-query-shifts :is(th, td) { padding: 8px 10px; vertical-align: middle; }
+[data-wsr-table] .ws-query-problem { display: flex; flex-direction: column; gap: 2px; min-width: 0; line-height: 1.3; }
+[data-wsr-table] .ws-query-problem strong { font-weight: 650; }
+[data-wsr-table] .ws-query-problem small { color: var(--ws-muted-text, #94a3b8); font-size: 11px; }
+[data-wsr-table] .ws-query-reason { overflow-wrap: anywhere; cursor: help; }
+[data-wsr-table] .ws-query-reason:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 [data-wsr-table] tr.ws-query-hold > td { background: rgba(180, 48, 64, .15); }
 [data-wsr-table] tr.ws-query-nonblocking > td { background: rgba(31, 148, 94, .13); }
 [data-wsr-table] tr.ws-query-hold > td:first-child { box-shadow: inset 3px 0 #d35a69; }

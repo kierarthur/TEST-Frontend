@@ -50,17 +50,19 @@ test('questions have one compact entry point and aligned shifts, retaining exact
 });
 
 test('query summary distinguishes problems and recorded replies from contact alone',()=>{
-  const base={source:'A named trust group',source_family:'NHSP',candidate_asked:true,manager_informed:true,status:{text:'Manager informed'},children:[{issue:'Hours differ'}]};
-  assert.deepEqual(view.questionSummary(base),{problem:'Mismatch',progress:'Manager informed',next:'Await manager reply'});
+  const base={source:'A named trust group',source_family:'NHSP',children:[{issue:'Hours differ',candidate_contacted_at:'1 Sep 2026, 14:30',manager_contacted_at:'1 Sep 2026, 14:35'}]};
+  assert.equal(view.questionSummary(base).problem,'Mismatch');
+  assert.equal(view.questionSummary(base).candidate,'Candidate contacted');
+  assert.equal(view.questionSummary(base).manager,'Manager contacted');
+  assert.equal(view.questionSummary(base).next,'Await manager reply');
   base.children.push({issue:'Timesheet missing'});
   assert.equal(view.questionSummary(base).problem,'Multiple');
   base.children[0].candidate_response='My hours are correct';
-  assert.equal(view.questionSummary(base).next,'Review / query in NHSP');
+  assert.equal(view.questionSummary(base).next,'Query in NHSP');
   base.children[0].manager_response='Reported a source correction';
-  assert.equal(view.questionSummary(base).next,'Review manager reply');
-  assert.match(view.questionSummary(base).progress,/1\/2 replied/);
+  assert.equal(view.questionSummary(base).next,'Import corrected source');
   base.children[1].manager_response='Reported a source correction';
-  assert.equal(view.questionSummary(base).next,'Import corrected hours');
+  assert.equal(view.questionSummary(base).next,'Import corrected source');
   const html=view.render({...model,section:'questions',rows:[base]});
   assert.match(html,/Next action/);assert.doesNotMatch(html,/Candidate asked|Manager informed<\/th>/);
 });
@@ -68,6 +70,28 @@ test('query summary distinguishes problems and recorded replies from contact alo
 test('NHSP guidance uses the server source family, not a display name',()=>{
   const row={source:'NHSP',source_family:'ROSTER',children:[{issue:'Hours differ',candidate_response:'My hours are correct'}]};
   assert.equal(view.questionSummary(row).next,'Review response');
+});
+
+test('manual query Problem shows Office author, UK time and a short escaped reason, retaining full context on hover',()=>{
+  const reason='Should be an extra hour here and please double check the manager approval <script> before accepting source';
+  const child={day_date:'8 Sep 2026',issue:'Manually queried',manual_query:{opened_by:'Kier Arthur',opened_at_uk:'1 Sep 2026, 14:30',reason},actions:[]};
+  const html=view.render({...model,section:'questions',rows:[{combined_key:'manual',candidate:'Worker',client:'Trust A',children:[child],actions:[]}]});
+  assert.match(html,/Manually queried/);
+  assert.match(html,/Kier Arthur · 1 Sep 2026, 14:30/);
+  assert.match(html,/“Should be an extra hour here and please double check…/);
+  assert.match(html,/title="Kier Arthur queried this on 1 Sep 2026, 14:30 because/);
+  assert.match(html,/&lt;script&gt;/);
+  assert.doesNotMatch(html,/<script>/);
+  assert.equal((html.match(/class="ws-query-problem"/g)||[]).length,2);
+});
+
+test('several manual queries keep individual reasons on expanded shifts without attributing one to the whole group',()=>{
+  const children=[{issue:'Manually queried',manual_query:{opened_by:'Kier Arthur',opened_at_uk:'1 Sep 2026, 14:30',reason:'First reason'}},
+    {issue:'Manually queried',manual_query:{opened_by:'Alex Office',opened_at_uk:'2 Sep 2026, 09:00',reason:'Second reason'}}];
+  const html=view.render({...model,section:'questions',rows:[{combined_key:'manuals',candidate:'Worker',children,actions:[]}]});
+  assert.match(html,/Manual queries \(2\)/);
+  assert.match(html,/First reason/);
+  assert.match(html,/Second reason/);
 });
 
 test('History lists completed reports and actual periods without an upload archive or cycle counters',()=>{
