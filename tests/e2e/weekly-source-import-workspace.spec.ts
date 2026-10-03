@@ -304,7 +304,8 @@ test('protecting an existing imported shift locks its identity while Add protect
   expect(result.existing).not.toContain('Choose candidate');
   expect(result.existing).not.toContain('Choose client');
   expect(result.existing).not.toContain('A separate new shift');
-  expect(result.existing).toMatch(/data-protected-field="contract_id" disabled/);
+  expect(result.existing).toMatch(/data-protected-field="work_date"[^>]*data-ctms-intentional-lock="1"/);
+  expect(result.existing).toMatch(/data-protected-field="contract_id" disabled data-ctms-intentional-lock="1"/);
   expect(result.missing).toContain('Choose candidate');
   expect(result.missing).toContain('A separate new shift');
 });
