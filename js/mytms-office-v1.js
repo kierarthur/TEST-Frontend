@@ -1081,7 +1081,7 @@
     };
     if (state === 'INELIGIBLE' && reason === 'CANDIDATE_INACTIVE') return {
       label: 'Candidate inactive', tone: 'warning',
-      copy: 'Activate the Candidate record before sending a MyTMS invitation.'
+      copy: 'To activate this CloudTMS Candidate, use Candidate status in Main Details: click Edit, change the status, then Save. MyTMS access is separate.'
     };
     if (state === 'INELIGIBLE' && reason === 'CANDIDATE_EMAIL_INVALID') return {
       label: 'Valid email required', tone: 'warning',

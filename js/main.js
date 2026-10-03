@@ -276657,6 +276657,7 @@ function renderCandidateTab(key, row = {}) {
     const optSms = !!row.opt_in_sms;
     const optWa = !!row.opt_in_whatsapp;
     const optAll = optEmail && optSms && optWa;
+    const candidateActive = row.active !== false && row.active !== 'false';
 
     const displayNameRaw = (row && typeof row.display_name !== 'undefined') ? row.display_name : '';
     const displayNameStr = String(displayNameRaw == null ? '' : displayNameRaw);
@@ -276786,6 +276787,21 @@ function renderCandidateTab(key, row = {}) {
         </div>
 
         ${displayNameRow}
+
+        <div class="row">
+          <label>Candidate status</label>
+          <div class="controls">
+            <input type="hidden" name="active" value="${candidateActive ? 'true' : 'false'}">
+            <button type="button"
+                    class="candidate-agency-status ${candidateActive ? 'candidate-agency-status--active' : 'candidate-agency-status--inactive'}"
+                    data-candidate-active-toggle
+                    aria-pressed="${candidateActive ? 'true' : 'false'}">
+              Candidate ${candidateActive ? 'active' : 'inactive'}
+            </button>
+            <span class="candidate-agency-status__pending" data-candidate-active-pending hidden>Not saved yet</span>
+            <div class="hint">This is the CloudTMS Candidate status, separate from MyTMS app access. In Edit mode, click to change it, then Save.</div>
+          </div>
+        </div>
 
         <!-- New: NI / DOB / Gender -->
         ${input('ni_number','National Insurance Number', row.ni_number)}
@@ -280277,6 +280293,10 @@ async function openCandidate(row) {
           const s = String(v).trim().toLowerCase();
           return (s === 'on' || s === 'true' || s === '1' || s === 'yes' || s === 'y');
         };
+
+        if (Object.prototype.hasOwnProperty.call(payload, 'active')) {
+          payload.active = coerceBool(payload.active);
+        }
 
         const ensureOpt = (key) => {
           const present =
@@ -351871,6 +351891,30 @@ function bindCandidateMainFormEvents(container, model) {
       window.dispatchEvent(new Event('modal-dirty'));
     } catch {}
   };
+
+  const statusButton = q('[data-candidate-active-toggle]');
+  const statusInput = q('input[name="active"]');
+  if (statusButton && statusInput) {
+    const pending = q('[data-candidate-active-pending]');
+    const savedActive = window.modalCtx?.data?.active !== false;
+    const updatePending = () => {
+      if (pending) pending.hidden = (statusInput.value === 'true') === savedActive;
+    };
+    updatePending();
+    statusButton.addEventListener('click', () => {
+      const frame = window.__getModalFrame?.();
+      if (statusButton.disabled || (frame?.mode !== 'edit' && frame?.mode !== 'create')) return;
+      const active = statusInput.value !== 'true';
+      statusInput.value = active ? 'true' : 'false';
+      statusButton.textContent = `Candidate ${active ? 'active' : 'inactive'}`;
+      statusButton.classList.toggle('candidate-agency-status--active', active);
+      statusButton.classList.toggle('candidate-agency-status--inactive', !active);
+      statusButton.setAttribute('aria-pressed', String(active));
+      model.active = active;
+      updatePending();
+      markDirty();
+    });
+  }
 
   // Bind text-like inputs WITHOUT clobbering staged DOM values.
   // Rule:
