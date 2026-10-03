@@ -1302,18 +1302,24 @@ test('before cutoff deliberately locks finalisation against the shared modal con
   await expect(action).toBeDisabled();
 });
 
-test('final NHSP rate warnings use the far-left header selection and require explicit acceptance', async ({ page }, testInfo) => {
+test('final NHSP charge decisions live once in Blocked with inline review and explicit acceptance', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);
   await page.evaluate(async (workspaceFixture) => {
     const win = window as any;
     const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.finalise.ready = { total_count: 0, rows: [] };
+    payload.finalise.blocked = { total_count: 2, rows: [
+      { row_key: 'zero-row', candidate: 'Amara Patel', day_date: 'Mon 14 Sep 2026', problem: 'Accept the final NHSP source charge', issue_count: 1, charge_warning_key: 'charge-check:zero-row', actions: [] },
+      { row_key: 'different-row', candidate: 'Elliot James', day_date: 'Tue 15 Sep 2026', problem: 'Accept the final NHSP source charge', issue_count: 1, charge_warning_key: 'charge-check:different-row', actions: [] }
+    ] };
+    payload.finalise.active_list = 'blocked';
     payload.finalise.rate_warnings = {
       contract: 'NHSP_RATE_WARNING_WORKSPACE_V1', phase: 'FINAL_AWAITING_ACCEPTANCE', total_count: 2,
       notice: { title: 'Possible Trust rate card issue', body: 'One shift has a £0 source charge. Check the Trust rate card in NHSP before accepting.' },
       rows: [
-        { warning_key: 'zero-row', candidate: 'Amara Patel', day_date: 'Mon 14 Sep 2026', source_charge: '£0.00', warning: 'Possible NHSP rate card issue', accept_eligible: true, detail_rows: [{ candidate: 'Amara Patel', day_date: 'Mon 14 Sep 2026', source_charge: '£0.00', warning: 'Possible NHSP rate card issue' }] },
-        { warning_key: 'different-row', candidate: 'Elliot James', day_date: 'Tue 15 Sep 2026', source_charge: '£248.00', warning: 'Rate card expired or wrong Contract rate', accept_eligible: true }
+        { warning_key: 'charge-check:zero-row', source_row_id: 'zero-row', candidate: 'Amara Patel', day_date: 'Mon 14 Sep 2026', source_charge: '£0.00', commission: '£0.00', total_cost: '£0.00', calculated_charge: '£200.00', difference: '-£200.00', contract: 'Band 6 · Ward A', warning: 'Possible NHSP rate card issue', accept_eligible: true },
+        { warning_key: 'charge-check:different-row', source_row_id: 'different-row', candidate: 'Elliot James', day_date: 'Tue 15 Sep 2026', source_charge: '£248.00', commission: '£48.00', total_cost: '£200.00', calculated_charge: '£250.00', difference: '-£2.00', contract: 'Band 6 · Ward B', warning: 'Rate card expired or wrong Contract rate', accept_eligible: true }
       ],
       acceptance: {
         enabled: true, action: 'ACCEPT_NHSP_SOURCE_CHARGES',
@@ -1329,18 +1335,22 @@ test('final NHSP rate warnings use the far-left header selection and require exp
   }, fixtures.workspace);
   await page.waitForTimeout(50);
 
-  await expect(page.getByText('Possible Trust rate card issue')).toBeVisible();
+  await expect(page.locator('[data-ws-finalise-row]')).toHaveCount(2);
+  await expect(page.locator('.ws-rate-warnings')).toHaveCount(0);
+  await page.locator('[data-ws-finalise-row="different-row"] [data-ws-rate-expand]').click();
   await expect(page.getByText('Rate card expired or wrong Contract rate')).toBeVisible();
+  await expect(page.getByText('£48.00')).toBeVisible();
+  await expect(page.getByText('-£2.00')).toBeVisible();
   await expect(page.getByRole('button', { name: /select all|unselect all/i })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('weekly-source-nhsp-final-rate-warnings.png'), fullPage: true });
-  const header = page.getByRole('checkbox', { name: 'Select visible rate warnings' });
+  const header = page.getByRole('checkbox', { name: 'Select all eligible charges' });
   await expect(header).toHaveCount(1);
   await header.check();
-  await expect(page.getByLabel('Select Amara Patel')).toBeChecked();
-  await expect(page.getByLabel('Select Elliot James')).toBeChecked();
+  await expect(page.getByLabel('Select charge for Amara Patel on Mon 14 Sep 2026')).toBeChecked();
+  await expect(page.getByLabel('Select charge for Elliot James on Tue 15 Sep 2026')).toBeChecked();
   const accept = page.getByRole('button', { name: 'Accept selected source charges' });
   await expect(accept).toBeDisabled();
-  await page.getByLabel('I have checked the warnings shown.').check();
+  await page.getByLabel('I have checked the selected NHSP charges.').check();
   await expect(accept).toBeEnabled();
   await accept.click();
   await page.waitForTimeout(50);
@@ -1350,18 +1360,21 @@ test('final NHSP rate warnings use the far-left header selection and require exp
     payload: {
       source_cycle_id: '22222222-2222-4222-8222-222222222222',
       projection_publication_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      warning_keys: ['zero-row', 'different-row'],
+      warning_keys: ['charge-check:zero-row', 'charge-check:different-row'],
       selection_proof: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
     }
   });
 });
 
-test('pre-final NHSP rate warnings explain the issue without blocking the checking journey', async ({ page }, testInfo) => {
+test('pre-final NHSP warnings stay in Queries and never offer final-charge acceptance', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1120, height: 900 });
   await loadFoundation(page);
   await page.evaluate(async (workspaceFixture) => {
     const win = window as any;
     const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.profile.id = 'NHSP_PREFINAL_RELEASED_V1';
+    payload.finalise.prepared = false;
+    payload.queries.office_checks = { total_count: 1, rows: [{ row_key: 'warning-1', candidate: 'Elliot James', day_date: 'Tue 15 Sep 2026', client: "St Mary's NHS Trust", source_reference: 'CCR-001', booking_reference: 'BK-1', system_hours: '09:00–17:00', problem: 'Check the charge for this shift', actions: [] }] };
     payload.finalise.rate_warnings = {
       contract: 'NHSP_RATE_WARNING_WORKSPACE_V1', phase: 'PREFINAL', total_count: 2,
       notice: { title: 'Possible Trust rate card issue', body: 'One shift has a £0 source charge. Check the Trust rate card in NHSP.' },
@@ -1379,10 +1392,47 @@ test('pre-final NHSP rate warnings explain the issue without blocking the checki
   }, fixtures.workspace);
   await page.waitForTimeout(50);
 
-  await expect(page.getByText('Possible Trust rate card issue')).toBeVisible();
-  await expect(page.getByText('Rate card expired or wrong Contract rate')).toBeVisible();
+  await expect(page.getByText('No finalisation report has been prepared')).toBeVisible();
+  await page.evaluate(async () => {
+    const win = window as any;
+    win.CloudTMSWeeklySourceImportWorkspaceV1._session.loadedTab = 'queries';
+    await win.__modalStack.at(-1).setTab('queries');
+  });
+  await expect(page.getByText('Check the charge for this shift')).toBeVisible();
+  await expect(page.locator('.ws-rate-warnings')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Accept selected source charges' })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('nhsp-prefinal-rate-warnings.png'), fullPage: true });
+});
+
+test('a shift with mapping and charge issues is one Blocked row until mapping is resolved', async ({ page }) => {
+  await loadFoundation(page);
+  await page.evaluate(async (workspaceFixture) => {
+    const win = window as any;
+    const payload = JSON.parse(JSON.stringify(workspaceFixture));
+    payload.finalise.active_list = 'blocked';
+    payload.finalise.ready = { total_count: 0, rows: [] };
+    payload.finalise.blocked = { total_count: 1, rows: [{
+      row_key: 'both-issues', candidate: 'Amara Patel', day_date: 'Mon 14 Sep 2026',
+      problem: 'Review the source row matching', issue_count: 2,
+      charge_warning_key: 'charge-check:both-issues', actions: [{ label: 'Link candidate', enabled: true }]
+    }] };
+    payload.finalise.rate_warnings = {
+      contract: 'NHSP_RATE_WARNING_WORKSPACE_V1', phase: 'FINAL_AWAITING_ACCEPTANCE',
+      rows: [{ warning_key: 'charge-check:both-issues', source_row_id: 'both-issues',
+        candidate: 'Amara Patel', warning: 'Rate card expired or wrong Contract rate', accept_eligible: true }],
+      acceptance: { enabled: true, action: 'ACCEPT_NHSP_SOURCE_CHARGES', payload: {},
+        selection: { key: 'warning_keys', proof_key: 'selection_proof', proof: 'e'.repeat(64) } }
+    };
+    const api = win.CloudTMSWeeklySourceImportWorkspaceV1;
+    await api.open();
+    api._session.workspace = api.normaliseWorkspace(payload);
+    api._session.loadedTab = 'finalise';
+    await win.__modalStack.at(-1).setTab('finalise');
+  }, fixtures.workspace);
+  await expect(page.locator('[data-ws-finalise-row]')).toHaveCount(1);
+  await expect(page.getByText('2 issues')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review charge' })).toHaveCount(0);
+  await expect(page.locator('[data-ws-rate-warning-select]')).toHaveCount(0);
 });
 
 test('HealthRoster finalisation uses the same simple finalise workspace with the client source label', async ({ page }, testInfo) => {

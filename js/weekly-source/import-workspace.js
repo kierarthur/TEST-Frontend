@@ -206,8 +206,12 @@
       // acceptance candidate, so a missing key is intentionally not rendered
       // as selectable (and disables the whole acceptance request below).
       warning_key: key,
+      source_row_id: asText(raw.source_row_id),
       candidate: asText(raw.candidate), day_date: asText(raw.day_date),
       source_charge: asText(raw.source_charge), warning: asText(raw.warning),
+      commission: asText(raw.commission), total_cost: asText(raw.total_cost),
+      calculated_charge: asText(raw.calculated_charge), difference: asText(raw.difference),
+      contract: asText(raw.contract),
       warning_tone: tone(raw.warning_tone || raw.tone, 'warning'),
       action_label: asText(raw.action_label) || (detailRows.length ? 'View affected shifts' : 'Review rate warning'),
       accept_eligible: raw.accept_eligible === true,
@@ -722,24 +726,43 @@
   }
 
   function renderFinaliseTable(workspace, page, blocked, state) {
+    const rateWarnings = workspace.finalise.rate_warnings;
+    const chargeDecisionRows = blocked && page === workspace.finalise.blocked
+      && workspace.profile.id === 'NHSP_FINAL_BACKING_V1'
+      && rateWarnings.phase === 'FINAL_AWAITING_ACCEPTANCE';
+    const warningsBySourceRow = new Map(rateWarnings.rows.filter((warning) => warning.source_row_id)
+      .map((warning) => [warning.source_row_id, warning]));
+    const selectable = chargeDecisionRows ? page.rows.filter((row) => {
+      const warning = warningsBySourceRow.get(asText(row.row_key));
+      return warning?.accept_eligible && row.problem === 'Accept the final NHSP source charge';
+    }).map((row) => warningsBySourceRow.get(asText(row.row_key)).warning_key) : [];
+    const selected = state.rateWarningSelection || new Set();
     const columns = page === workspace.finalise.complete
       ? [['Candidate','candidate'], ...(!workspace.selected.client_id ? [['Client','client']] : []), ['Day/date','day_date'], ['System hours','system_hours'], ['Finalised','finalised_at'], ['Status','status']]
-      : finaliseColumns(workspace, blocked);
+      : [...(selectable.length ? [['Select','charge_select']] : []), ...finaliseColumns(workspace, blocked)];
     const sort = state.sort?.finalise || {};
     const rows = page.rows.map((rowValue) => {
       const row = asObject(rowValue);
-      return `<tr>${columns.map(([label, key]) => {
+      const warning = warningsBySourceRow.get(asText(row.row_key));
+      const canReviewCharge = !!warning && chargeDecisionRows && row.problem === 'Accept the final NHSP source charge';
+      const cells = columns.map(([label, key]) => {
+        if (key === 'charge_select') return `<td data-label="Select"><input type="checkbox" data-ws-rate-warning-select value="${escapeHtml(warning?.warning_key || '')}" aria-label="Select charge for ${escapeHtml(row.candidate || 'shift')} on ${escapeHtml(row.day_date || '')}"${canReviewCharge && warning.accept_eligible ? '' : ' disabled'}${selected.has(warning?.warning_key) ? ' checked' : ''}></td>`;
         if (key === 'actions') {
+          if (canReviewCharge) return `<td data-label="${escapeHtml(label)}" class="ws-actions"><button type="button" class="btn btn-outline ws-charge-review" data-ws-rate-expand="${escapeHtml(warning.warning_key)}" aria-expanded="${state.expandedRateWarning === warning.warning_key}">Review charge</button></td>`;
           const detail = { candidate: asText(row.candidate), day_date: asText(row.day_date), problem: asText(row.problem), guidance: asText(row.guidance || row.next_step) };
           const actions = withFallbackDetail(normaliseActions(row.actions, ACTIONS.finalise), detail);
           return `<td data-label="${escapeHtml(label)}" class="ws-actions">${renderActions(actions, page.stale, asText(row.row_key || `${row.candidate}-${row.day_date}`))}</td>`;
         }
         if (key === 'status') return `<td data-label="${escapeHtml(label)}">${renderStatus(row.status)}</td>`;
+        if (key === 'problem') return `<td data-label="${escapeHtml(label)}">${integer(row.issue_count) > 1 ? `<span class="ws-issue-count">${integer(row.issue_count)} issues</span>` : ''}${escapeHtml(asText(row.problem) || '—')}</td>`;
         return `<td data-label="${escapeHtml(label)}">${escapeHtml(asText(row[key]) || '—')}</td>`;
-      }).join('')}</tr>`;
+      }).join('');
+      const expanded = canReviewCharge && state.expandedRateWarning === warning.warning_key;
+      const detail = expanded ? `<tr class="ws-charge-detail-row"><td colspan="${columns.length}"><div class="ws-charge-detail"><div><strong>${escapeHtml(warning.warning)}</strong><span>${escapeHtml(warning.contract || 'Selected contract')}</span></div><dl><div><dt>NHSP Commission</dt><dd>${escapeHtml(warning.commission || '—')}</dd></div><div><dt>NHSP Total Cost</dt><dd>${escapeHtml(warning.total_cost || '—')}</dd></div><div><dt>NHSP charge</dt><dd>${escapeHtml(warning.source_charge || '—')}</dd></div><div><dt>Calculated charge</dt><dd>${escapeHtml(warning.calculated_charge || '—')}</dd></div><div><dt>Difference</dt><dd>${escapeHtml(warning.difference || '—')}</dd></div></dl><p>Accepting keeps the NHSP invoice charge. It does not change candidate pay.</p></div></td></tr>` : '';
+      return `<tr data-ws-finalise-row="${escapeHtml(asText(row.row_key))}">${cells}</tr>${detail}`;
     }).join('');
     const sourceAuthorityClass = workspace.imports.journey.authority_mode === 'SOURCE_AUTHORITY' ? ' ws-source-finalise-grid' : '';
-    return `<table class="grid mini ws-grid${sourceAuthorityClass}"><thead><tr>${columns.map(([label, key]) => key === 'actions' ? `<th>${label}</th>` : renderSortHeader(label, key, sort)).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${columns.length}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table>`;
+    return `<table class="grid mini ws-grid${sourceAuthorityClass}"><thead><tr>${columns.map(([label, key]) => key === 'charge_select' ? `<th><input type="checkbox" data-ws-rate-warning-header aria-label="Select all eligible charges"${selectable.every((key) => selected.has(key)) ? ' checked' : ''}></th>` : key === 'actions' ? `<th>${label}</th>` : renderSortHeader(label, key, sort)).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${columns.length}" class="ws-empty">Nothing matches the current filters.</td></tr>`}</tbody></table>`;
   }
 
   function renderFinalisationTracker(workspace) {
@@ -831,6 +854,16 @@
     return `<section class="ws-rate-warnings" data-ws-rate-warning-phase="${escapeHtml(rateWarnings.phase.toLowerCase())}"><div class="ws-rate-warning-heading"><div><h3>${heading}</h3><p>${intro}</p></div><span class="ws-status ws-status--warning">${rateWarnings.total_count} warning${rateWarnings.total_count === 1 ? '' : 's'}</span></div>${notice}<div class="ws-inner-scroll"><table class="grid mini ws-inner-grid ws-rate-warning-grid${accepting ? ' ws-rate-warning-grid--selectable' : ''}"><thead><tr>${headerSelect}<th>Candidate</th><th>Day/date</th><th>Source charge</th><th>Warning</th><th>Action</th></tr></thead><tbody>${renderRateWarningRows(rateWarnings, viewState) || `<tr><td colspan="${accepting ? 6 : 5}" class="ws-empty">No rate warnings are currently shown.</td></tr>`}</tbody></table></div>${confirmation}</section>`;
   }
 
+  function renderChargeAcceptanceControls(finalise, viewState) {
+    if (finalise.active_list !== 'blocked' || finalise.rate_warnings.phase !== 'FINAL_AWAITING_ACCEPTANCE') return '';
+    const eligibleRows = new Set(finalise.blocked.rows.filter((row) => row.problem === 'Accept the final NHSP source charge')
+      .map((row) => asText(row.row_key)));
+    const eligible = finalise.rate_warnings.rows.filter((row) => row.accept_eligible && eligibleRows.has(row.source_row_id));
+    if (!eligible.length) return '';
+    const selected = [...(viewState.rateWarningSelection || new Set())].filter((key) => eligible.some((row) => row.warning_key === key));
+    return `<div class="ws-charge-accept-controls"><span data-ws-rate-warning-summary>${selected.length} charge${selected.length === 1 ? '' : 's'} selected</span><label><input type="checkbox" data-ws-rate-warning-confirm${selected.length ? '' : ' disabled'}> I have checked the selected NHSP charges.</label><button type="button" class="btn primary" data-ws-rate-warning-accept disabled>Accept selected source charges</button></div>`;
+  }
+
   function renderFinalise(workspace, viewState) {
     const finalise = workspace.finalise;
     const signedTimesheetJourney = workspace.imports.journey.authority_mode === 'TIMESHEET_AUTHORITY';
@@ -858,7 +891,7 @@
     const intentionalActionLock = finaliseReady && confirmationChecked ? '' : ' disabled data-ctms-intentional-lock="1"';
     const staleNotice = stale ? '<div class="ws-notice ws-notice--warning" role="status"><span>This information has changed. Recheck before continuing.</span></div>' : '';
     const excluded = finalise.exclusion_confirmation ? `<section><h3>Not included as finalised shifts</h3>${renderFinaliseTable(workspace, { rows: finalise.excluded_rows, stale }, true, viewState)}<label class="ws-confirm"><input type="checkbox" data-ws-exclusion-confirm><span>${escapeHtml(finalise.exclusion_confirmation)}</span></label></section>` : '';
-    return `${signedTimesheetJourney ? renderFinalisationTracker(workspace) : ''}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current report')}</div>${renderRateWarnings(finalise.rate_warnings, viewState)}${excluded}${tabs}${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div><label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${confirmationChecked ? ' checked' : ''}${intentionalConfirmationLock}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.phase === 'READY' ? `${finalise.rate_warnings.accepted_count} rate warnings accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise${intentionalActionLock}>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
+    return `${signedTimesheetJourney ? renderFinalisationTracker(workspace) : ''}${renderApprovedHoursFollowUp(finalise, viewState)}${staleNotice}<div class="ws-source-summary">${escapeHtml(finalise.source_summary || 'Current report')}</div>${excluded}${tabs}${renderMobileSort(sortable, viewState.sort?.finalise || {})}<div class="ws-scroll" data-ws-scroll>${renderFinaliseTable(workspace, page, active === 'blocked', viewState)}<div data-ws-sentinel></div></div>${renderChargeAcceptanceControls(finalise, viewState)}<label class="ws-confirm"><input type="checkbox" data-ws-finalise-confirm${confirmationChecked ? ' checked' : ''}${intentionalConfirmationLock}><span>${escapeHtml(finalise.confirmation_text || 'I confirm this source is complete for the period shown.')}</span></label><div class="ws-sticky-footer"><span>${ready} ready · ${finalise.rate_warnings.accepted_count ? `${finalise.rate_warnings.accepted_count} source charges accepted · ` : ''}${blocked} blocked</span><div><button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button><button type="button" class="btn primary" data-ws-finalise${intentionalActionLock}>${escapeHtml(workspace.profile.finalise_label)}</button></div></div>`;
   }
 
   function renderHistory(workspace, state) {
@@ -1582,39 +1615,41 @@
       } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
     });
     const warnings = session.workspace.finalise.rate_warnings;
-    const updateRateWarningSelection = () => {
-      const eligible = warnings.rows.filter((row) => row.accept_eligible);
-      const selected = session.rateWarningSelection;
-      const allSelected = eligible.length > 0 && eligible.every((row) => selected.has(row.warning_key));
-      const someSelected = eligible.some((row) => selected.has(row.warning_key));
+    const updateRateWarningSelection = (resetConfirmation = false) => {
+      const eligible = [...host.querySelectorAll('[data-ws-rate-warning-select]:not(:disabled)')].map((input) => input.value);
+      const selected = new Set(eligible.filter((key) => session.rateWarningSelection.has(key)));
+      const allSelected = eligible.length > 0 && eligible.every((key) => selected.has(key));
+      const someSelected = eligible.some((key) => selected.has(key));
       const header = host.querySelector('[data-ws-rate-warning-header]');
       if (header) {
         header.checked = allSelected;
         header.indeterminate = someSelected && !allSelected;
         header.setAttribute('aria-checked', header.indeterminate ? 'mixed' : (allSelected ? 'true' : 'false'));
-        header.setAttribute('aria-label', allSelected ? 'Clear visible rate warnings' : 'Select visible rate warnings');
+        header.setAttribute('aria-label', allSelected ? 'Clear eligible charges' : 'Select all eligible charges');
       }
       const summary = host.querySelector('[data-ws-rate-warning-summary]');
-      if (summary) summary.textContent = `${selected.size} warning row${selected.size === 1 ? '' : 's'} selected`;
+      if (summary) summary.textContent = `${selected.size} charge${selected.size === 1 ? '' : 's'} selected`;
       const accept = host.querySelector('[data-ws-rate-warning-accept]');
       const confirmation = host.querySelector('[data-ws-rate-warning-confirm]');
+      if (resetConfirmation && confirmation) confirmation.checked = false;
       if (confirmation) confirmation.disabled = selected.size === 0;
       const checked = confirmation?.checked === true;
       if (accept) accept.disabled = !checked || !buildRateWarningAcceptancePayload(warnings, [...selected]);
     };
     host.querySelector('[data-ws-rate-warning-header]')?.addEventListener('change', (event) => {
-      const eligible = warnings.rows.filter((row) => row.accept_eligible).map((row) => row.warning_key);
+      const eligible = [...host.querySelectorAll('[data-ws-rate-warning-select]:not(:disabled)')].map((input) => input.value);
       session.rateWarningSelection = new Set(event.target.checked ? eligible : []);
       host.querySelectorAll('[data-ws-rate-warning-select]').forEach((input) => { input.checked = event.target.checked && !input.disabled; });
-      updateRateWarningSelection();
+      updateRateWarningSelection(true);
     });
     host.querySelectorAll('[data-ws-rate-warning-select]').forEach((input) => input.addEventListener('change', () => {
       input.checked ? session.rateWarningSelection.add(input.value) : session.rateWarningSelection.delete(input.value);
-      updateRateWarningSelection();
+      updateRateWarningSelection(true);
     }));
-    host.querySelector('[data-ws-rate-warning-confirm]')?.addEventListener('change', updateRateWarningSelection);
+    host.querySelector('[data-ws-rate-warning-confirm]')?.addEventListener('change', () => updateRateWarningSelection());
     host.querySelector('[data-ws-rate-warning-accept]')?.addEventListener('click', async (event) => {
-      const request = buildRateWarningAcceptancePayload(warnings, [...session.rateWarningSelection]);
+      const visibleSelected = [...host.querySelectorAll('[data-ws-rate-warning-select]:not(:disabled):checked')].map((input) => input.value);
+      const request = buildRateWarningAcceptancePayload(warnings, visibleSelected);
       if (!request) return;
       event.currentTarget.disabled = true;
       try {
