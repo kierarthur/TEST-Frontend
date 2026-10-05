@@ -323,3 +323,49 @@ protocol or partial NEXT activation. Immediate native contact/frozen-Draft proof
 is retained separately; genuine deferred-release acceptance remains outstanding.
 The exact minimum approved activation prerequisites have been requested directly
 from HANDOVER 2. No unsupported financial path or hosted feature is claimed.
+
+## Later 5 October: closed census regression and exact Source attribution
+
+The inherited Source writer-census test still asserted the hosted physical database
+name, although the committed verifier also permits the audited provider-mapped
+definition in a qualified local TEST release. The independent Sol6.1 Extra High
+critic reproduced the two hashes: removing only the literal provider-specific
+`plpgsql_check.mode` setting from the frozen `49fb...` definition yields exactly
+`0449...`. The financial body is unchanged. The managed expected-database,
+connected-database and target/local-preflight checks retain physical target
+authority; this is not permission to use an arbitrary TEST-labelled database.
+
+Only the static test was changed in the Source worktree. Its replacement compares
+the complete unique exception condition, preserves every exact conjunct and closing
+guard, rejects fifteen mutations (including internal AND-to-OR and missing
+TEST/signature/hash/configuration guards), and checks the independent managed-target
+preflight. The critic accepted the exact test SHA256
+`24FA1CF788BBE0A283FD3F22C07E4720AD010930D9EE51EE791A44DA82DABCB6`.
+The seventeen census tests and thirty-three existing release-system tests passed
+50/50 (2326c1, exit0). No SQL or financial function body changed in this correction.
+
+The broader Source rerun with the actual MyTMS companion root reports 369 tests:
+356 passed, zero failed and thirteen skipped (43f092, exit0). The skips require
+explicit local runtime/database settings; they are not runtime passes. Source
+integrity also passed with 262 migrations and 714 repeatables (9e8348).
+
+HANDOVER 2 then genuinely executed the census on its existing original-owner NEW8
+installation. All thirty-one classified routine pins matched, but the separate
+dynamic-SQL inventory check found new helpers and changed legacy projections not
+yet explicitly acknowledged in that inventory. Source independently compared and
+acknowledged only its four exact helpers: candidate HEAD hours, inventory approval
+basis, NEXT owner discrimination and the bounded Office paid-evidence wrapper.
+The three containing SQL files are byte-identical between Source and Banking, and
+the four exported definition hashes agree with HANDOVER 2's original-owner catalogue.
+Their dynamic operations are fixed SELECT statements with bound identities and
+the fixed Banking paid-evidence reader delegation, not caller-supplied SQL or
+financial mutation. This attribution is not a prefix waiver or full census PASS.
+The exact inventory successor and complete managed release remain H2-owned gates.
+
+Fresh read-only TEST evidence confirms the exact Kier acceptance Timesheet exists,
+is current and is neither first-authorised nor archived. This permits consideration
+of genuine pre-first-authorisation Save acceptance after verified compatible
+installation; it does not qualify later financial activation. Play still shows
+version28 as an unpublished Internal testing draft and version26 as published.
+The USB phone was checked again and still has Play-installed version24. No hosted
+Save, publication, phone update or complete deployment is claimed here.
