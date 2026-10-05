@@ -122,6 +122,7 @@ test('mode changes rebuild the header control and its colours override generic m
   assert.equal(main.includes("renderCandidateActiveHeader(byId('modalTitle'), top)"), true);
   assert.match(styles, /#modal\.ctms-modern-modal #modalTitle \.candidate-agency-status--active/);
   assert.match(styles, /#modal\.ctms-modern-modal #modalTitle \.candidate-agency-status--inactive/);
+  assert.match(styles, /#modal\.ctms-modern-modal #modalTitle \.candidate-agency-status:disabled \{ opacity:1; filter:none; cursor:default; \}/);
   const fixture = headerFixture('view', false);
   fixture.frame.mode = 'edit';
   fixture.sandbox.renderCandidateActiveHeader(fixture.root, fixture.frame);

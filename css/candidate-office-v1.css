@@ -30,7 +30,7 @@
 .candidate-agency-status:not(:disabled) { cursor:pointer; }
 .candidate-agency-status:not(:disabled):hover,
 .candidate-agency-status:not(:disabled):focus-visible { outline:2px solid #75a7ff; outline-offset:2px; }
-.candidate-agency-status:disabled { opacity:1; cursor:default; }
+#modal.ctms-modern-modal #modalTitle .candidate-agency-status:disabled { opacity:1; filter:none; cursor:default; }
 #modal:has([data-candidate-office-slot="1"]) .modal-b { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; }
 #modal:has([data-candidate-office-dialog]) { width:min(1100px,calc(100vw - 24px)) !important; min-width:0 !important; max-width:calc(100vw - 24px) !important; }
 #modal:has([data-candidate-office-slot="1"]) .scrollable-evidence { max-width:100%; overflow:auto !important; }

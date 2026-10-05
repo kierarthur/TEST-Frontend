@@ -719,6 +719,8 @@ test('Candidate header status stages across tabs, discards, and saves only with 
   const badge = page.locator('#modalTitle [data-candidate-active-toggle]');
   await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Currently Working\s*Inactive$/);
   await expect(badge).toBeDisabled();
+  await expect(badge).toHaveCSS('opacity', '1');
+  await expect(badge).toHaveCSS('filter', 'none');
   await expect(page.locator('#modalBody')).not.toContainText('Additional details');
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(badge).toBeEnabled();
@@ -743,6 +745,8 @@ test('Candidate header status stages across tabs, discards, and saves only with 
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Currently Working\s*Active$/);
   await expect(badge).toBeDisabled();
+  await expect(badge).toHaveCSS('opacity', '1');
+  await expect(badge).toHaveCSS('filter', 'none');
   const data = await result(page);
   expect(data.writes).toHaveLength(1);
   expect(data.writes[0].body.active).toBe(true);
