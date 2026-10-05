@@ -277,3 +277,49 @@ read-only comparison adds exactly two intended service-only Office readers, with
 zero browser-role execution and no removed/changed existing entries. Review of
 the seal and remaining native verification are still in progress. There is no
 reviewed joined release commit or complete managed deployment receipt yet.
+
+## Later 5 October: corrected Play bundle completed, saved and previewed
+
+The protected version28 build completed successfully (59327, exit0), including
+the actual final archive/manifest and upload-certificate guards. The independent
+final archive check confirms TEST package `net.cloudtms.mytms.test`, version28,
+name0.1.0 and all four complete native runtimes: armeabi-v7a, arm64-v8a, x86 and
+x86_64. The final AAB is `C:/tmp/MyTMS-TEST-internal-0.1.0-28-final-8c0b332.aab`,
+90,436,061 bytes, SHA256
+`11DEB620920E479DCE3F41FA345C9A4E389940694199ACCBA216270CC6C64CED`.
+Its accepted TEST upload-certificate SHA256 is
+`A0:8D:21:FE:08:8C:15:CB:6C:43:E4:5C:E7:9C:6F:52:B5:C3:4B:87:EE:E8:E0:E5:39:9D:90:BB:AC:9B:E2:72`.
+
+Using the existing MyTMS Test Internal testing draft only, the unpublished
+restricted version27 artifact was removed from that draft through Google's
+recoverable artifact-library action. It remains in the artifact library and
+its local archive is retained. Version28 was uploaded, Google completed its
+processing, and Save as draft visibly confirmed that the changes were saved.
+The Preview and confirm page now reports zero previously supported devices
+lost in every form factor: phones12,251, tablets6,455, TV4, Chromebook10 and
+AndroidXR1 remain supported. The only warning is the existing missing
+deobfuscation-file warning. No tester membership or closed-testing track changed.
+Screenshot: `C:/tmp/MyTMS-TEST-v28-internal-draft-zero-device-loss.jpg`.
+Save and publish was not selected. This is not Play publication or USB update.
+
+Fresh read-only Cloudflare checks returned HTTP200 for all four exact TEST
+Worker triggers, active deployments and corresponding successful Git builds.
+The normal backend trigger remains `5e1207d4-e550-4a74-8135-15d68b2060fa`,
+branch `deploy/cloudflare/test-cloudtms-backend`, repository
+`kierarthur/cloudtms-backend`, root `/`, command
+`npx wrangler deploy --env test`, and the existing managed build-token name.
+Both private Workers and the broker retain their separate ordered deployment
+branches. All four currently serve commit
+`44aa2056e32da3a7e7d11a13b0c5ca5bda6d85f3` at100percent; this verifies current
+connections, not a deployment of the pending joined release. Final commit-bound
+connection evidence must be refreshed when that reviewed commit exists.
+
+HANDOVER 2 identified a finite feature-activation distinction: a genuinely frozen
+Local protected decision may park before the canonical producer, but effective
+publication/release through the winning0556 Local-origin branch requires the
+compatible NEXT module and capture helpers and refuses the legacy financial
+owner. Source explicitly confirmed no retired G01/V8 revival, second financial
+protocol or partial NEXT activation. Immediate native contact/frozen-Draft proof
+is retained separately; genuine deferred-release acceptance remains outstanding.
+The exact minimum approved activation prerequisites have been requested directly
+from HANDOVER 2. No unsupported financial path or hosted feature is claimed.
