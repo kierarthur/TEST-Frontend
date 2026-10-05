@@ -114522,6 +114522,11 @@ function populateSearchFormFromFilters(filters={}, formSel='#searchForm'){
     const el = form.querySelector(`[name="${k}"]`);
     if (!el) continue;
 
+    if ((k === 'stage' || k === 'tools_stage') && String(v || '').trim().toUpperCase() === 'ARCHIVED') {
+      el.value = 'WITHDRAWN';
+      continue;
+    }
+
     const isDateField = dateFields.includes(k);
     if (isDateField && typeof v === 'string') {
       const uk = (typeof formatIsoToUk === 'function') ? formatIsoToUk(v) : v;
@@ -116521,7 +116526,8 @@ const TIMESHEET_PROCESSING_STATUS_BADGE_TONES = Object.freeze({
   FAILED: 'attention',
   ERROR: 'attention',
   BLOCKED: 'attention',
-  ARCHIVED: 'archived'
+  ARCHIVED: 'archived',
+  WITHDRAWN: 'archived'
 });
 
 const TIMESHEET_PROCESSING_STATUS_FRIENDLY_LABELS = Object.freeze({
@@ -116559,7 +116565,8 @@ const TIMESHEET_PROCESSING_STATUS_FRIENDLY_LABELS = Object.freeze({
   FAILED: 'Failed',
   ERROR: 'Error',
   BLOCKED: 'Blocked',
-  ARCHIVED: 'Archived'
+  ARCHIVED: 'Withdrawn',
+  WITHDRAWN: 'Withdrawn'
 });
 
 function normaliseTimesheetProcessingStatusToken(value) {
@@ -116591,6 +116598,8 @@ function timesheetProcessingStatusBadgeTone(row, displayText) {
 
 function friendlyTimesheetProcessingStatusLabel(row, displayText) {
   const existing = String(row?.processing_status_display ?? displayText ?? '').trim();
+  if (['ARCHIVED', 'WITHDRAWN'].includes(normaliseTimesheetProcessingStatusToken(row?.tools_stage))
+      || normaliseTimesheetProcessingStatusToken(existing) === 'ARCHIVED') return 'Withdrawn';
   const looksLikeRawToken = !!existing && (
     existing.includes('_') || (/[A-Z]/.test(existing) && existing === existing.toUpperCase())
   );
@@ -116632,11 +116641,13 @@ function paintTimesheetProcessingStatusCell(td, row, displayText) {
   const text = String(displayText ?? '').trim();
   const badge = buildTimesheetProcessingStatusBadge(row, text);
   const weeklyDelayReason = 'Candidate payment is waiting for final weekly source validation.';
+  const invoiceDelayReason = row?.weekly_source_operational_category?.presentation_category === 'PROCESSING_DELAYED'
+    ? String(row.weekly_source_operational_category.processing_reason || '').trim() : '';
   const issueCodes = [
     ...(Array.isArray(row?.issue_codes) ? row.issue_codes : []),
     ...(Array.isArray(row?.business_issue_codes) ? row.business_issue_codes : [])
   ].map((value) => String(value || '').trim());
-  const weeklySourceDelayed = row?.office_pre_source_candidate_hours !== true && (
+  const weeklySourceDelayed = !invoiceDelayReason && row?.office_pre_source_candidate_hours !== true && (
     row?.weekly_source_pay_delayed === true || issueCodes.includes(weeklyDelayReason)
   );
   const invoicePaid = row && (
@@ -116645,6 +116656,8 @@ function paintTimesheetProcessingStatusCell(td, row, displayText) {
   const stageNow = String(row?.tools_stage || '').trim().toUpperCase();
 
   td.textContent = '';
+  td.removeAttribute('title');
+  td.removeAttribute('aria-label');
   let target = td;
   if (invoicePaid && stageNow === 'INVOICED' && text) {
     const wrap = document.createElement('div');
@@ -116660,7 +116673,10 @@ function paintTimesheetProcessingStatusCell(td, row, displayText) {
     td.appendChild(badge);
   }
 
-  if (weeklySourceDelayed) {
+  if (invoiceDelayReason) {
+    td.title = invoiceDelayReason;
+    td.setAttribute('aria-label', `${badge.textContent}. ${invoiceDelayReason}`);
+  } else if (weeklySourceDelayed) {
     const mainAlreadySaysDelayed = normaliseTimesheetProcessingStatusToken(text) === 'PROCESSING_DELAYED'
       || badge.textContent === 'Processing Delayed';
     td.title = weeklyDelayReason;
@@ -146689,7 +146705,7 @@ async function openSearchModal(opts = {}) {
           <option value="PROCESSED">Processed</option>
           <option value="AUTHORISED_FOR_INVOICING">Authorised for Invoicing</option>
           <option value="INVOICED">Invoiced</option>
-          <option value="ARCHIVED">Archived</option>
+          <option value="WITHDRAWN">Withdrawn</option>
         </select>`),
       row('Issues', `
         <select name="issues_filter">
@@ -167759,12 +167775,13 @@ function renderTools(){
       ['PROCESSED',              'Processed'],
       ['AUTHORISED_FOR_INVOICING','Authorised for Invoicing'],
       ['INVOICED',               'Invoiced'],
-      ['ARCHIVED',               'Archived']
+      ['WITHDRAWN',              'Withdrawn']
     ];
 
     const allowedStages = new Set(stageOpts.map(x => x[0]));
     const configuredStage = String((filters.tools_stage || 'ALL')).toUpperCase();
-    const curStage = configuredStage === 'AWAITING_AUTHORISATION' ? 'PROCESSED' : configuredStage;
+    const curStage = configuredStage === 'ARCHIVED' ? 'WITHDRAWN'
+      : configuredStage === 'AWAITING_AUTHORISATION' ? 'PROCESSED' : configuredStage;
     const curStageSafe = allowedStages.has(curStage) ? curStage : 'ALL';
 
     stageOpts.forEach(([v, label]) => {
@@ -173301,6 +173318,9 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
       'bulk_authorise_classification',
       'weekly_source_category',
       'weekly_source_presentation',
+      'weekly_source_operational_category',
+      'weekly_source_processing_reason',
+      'weekly_source_root_version',
       'bulk_authorise_section',
       'has_timesheet',
       'is_contract_week_only',
@@ -173621,7 +173641,7 @@ async function fetchBulkAuthoriseDataset(filters, options = {}) {
     if (isArchived) {
       out.summary_stage = 'ARCHIVED';
       out.tools_stage = 'ARCHIVED';
-      out.processing_status_display = 'Archived';
+    out.processing_status_display = 'Withdrawn';
       out.can_bulk_authorise = false;
       out.can_bulk_unauthorise = false;
       out.can_unprocess = false;
@@ -177416,7 +177436,7 @@ async function fetchBulkProcessDataset(filters, options = {}) {
     if (isArchived) {
       out.summary_stage = 'ARCHIVED';
       out.tools_stage = 'ARCHIVED';
-      out.processing_status_display = 'Archived';
+    out.processing_status_display = 'Withdrawn';
       out.can_save = false;
       out.can_process = false;
       out.can_unprocess = false;
@@ -276788,20 +276808,7 @@ function renderCandidateTab(key, row = {}) {
 
         ${displayNameRow}
 
-        <div class="row">
-          <label>Candidate status</label>
-          <div class="controls">
-            <input type="hidden" name="active" value="${candidateActive ? 'true' : 'false'}">
-            <button type="button"
-                    class="candidate-agency-status ${candidateActive ? 'candidate-agency-status--active' : 'candidate-agency-status--inactive'}"
-                    data-candidate-active-toggle
-                    aria-pressed="${candidateActive ? 'true' : 'false'}">
-              Candidate ${candidateActive ? 'active' : 'inactive'}
-            </button>
-            <span class="candidate-agency-status__pending" data-candidate-active-pending hidden>Not saved yet</span>
-            <div class="hint">This is the CloudTMS Candidate status, separate from MyTMS app access. In Edit mode, click to change it, then Save.</div>
-          </div>
-        </div>
+        <input type="hidden" name="active" value="${candidateActive ? 'true' : 'false'}">
 
         <!-- New: NI / DOB / Gender -->
         ${input('ni_number','National Insurance Number', row.ni_number)}
@@ -279954,6 +279961,7 @@ async function openCandidate(row) {
       email:            toStr(src.email),
       phone:            toStr(src.phone),
       display_name:     toStr(src.display_name),
+      active:           src.active !== false && src.active !== 'false',
 
       // ✅ NEW: Candidate title + band + opt-ins (for staging + binder)
       title:            toStr(src.title),
@@ -280253,6 +280261,11 @@ async function openCandidate(row) {
       const roles     = normaliseRolesForSave(window.modalCtx.rolesState || window.modalCtx.data?.roles || []);
 
       let payload   = { ...stateMain, ...statePay, ...main, ...pay, roles };
+      // The header control remains staged even when Save is pressed on another tab.
+      const stagedCandidate = window.modalCtx?.candidateMainModel;
+      if (stagedCandidate && Object.prototype.hasOwnProperty.call(stagedCandidate, 'active')) {
+        payload.active = stagedCandidate.active;
+      }
 
       // Strip internal-only fields before logging / sending to backend
       for (const k of Object.keys(payload)) {
@@ -325183,6 +325196,56 @@ function hasTrustedTimesheetLifecycleSignature(modalCtxInput, options) {
 }
 
 
+// Candidate rate deletions are a Set. Preserve that shape through Discard's
+// snapshot/restore, rather than JSON-cloning it into a non-iterable object.
+function cloneCandidateRateOverrideStage(overrides) {
+  const source = overrides || { existing: [], stagedNew: [], stagedEdits: {}, stagedDeletes: [] };
+  const deletes = source.stagedDeletes;
+  if (deletes != null && !(deletes instanceof Set) && !Array.isArray(deletes)) {
+    throw new TypeError('Candidate rate override deletion stage is invalid');
+  }
+  const copy = JSON.parse(JSON.stringify({ ...source, stagedDeletes: [] }));
+  copy.stagedDeletes = new Set(deletes || []);
+  return copy;
+}
+
+function renderCandidateActiveHeader(titleRoot, frame) {
+  if (!titleRoot || frame?.entity !== 'candidates' || frame.kind) return;
+  titleRoot.querySelector('[data-candidate-active-toggle]')?.remove();
+  const context = frame._ctxRef;
+  if (!context) return;
+  const model = context.candidateMainModel;
+  const staged = model && Object.prototype.hasOwnProperty.call(model, 'active')
+    ? model.active : context.formState?.main?.active ?? context.data?.active;
+  let active = staged !== false && staged !== 'false';
+  const badge = document.createElement('button');
+  badge.type = 'button';
+  badge.dataset.candidateActiveToggle = '';
+  const repaint = () => {
+    badge.textContent = active ? 'Active' : 'Inactive';
+    badge.className = `candidate-agency-status candidate-agency-status--${active ? 'active' : 'inactive'}`;
+    badge.setAttribute('aria-label', `Candidate ${active ? 'active' : 'inactive'}`);
+    badge.setAttribute('aria-pressed', String(active));
+    badge.disabled = frame._saving === true || !['edit', 'create'].includes(frame.mode);
+  };
+  repaint();
+  badge.addEventListener('click', () => {
+    if (badge.disabled || frame._saving || !['edit', 'create'].includes(frame.mode)) return;
+    active = !active;
+    (context.candidateMainModel ||= {}).active = active;
+    const state = (context.formState ||= {});
+    (state.main ||= {}).active = active;
+    document.querySelectorAll('#modal input[name="active"]').forEach(input => {
+      input.value = String(active);
+    });
+    repaint();
+    frame.isDirty = true;
+    frame._updateButtons?.();
+    window.dispatchEvent(new Event('modal-dirty'));
+  });
+  titleRoot.appendChild(badge);
+}
+
 function showModal(title, tabs, renderTab, onSave, hasId, onReturn, options) {
 
   const LOG = (typeof window.__LOG_MODAL === 'boolean') ? window.__LOG_MODAL : true;
@@ -332339,6 +332402,7 @@ function renderTop() {
         if (String(tip || '').trim()) pill.title = String(tip).trim();
         mt.appendChild(pill);
       });
+      renderCandidateActiveHeader(mt, top);
     }
   } catch {}
 
@@ -333124,6 +333188,7 @@ top._updateButtons = ()=> {
       const resolvedTitle = resolveRecordModalTitle(top);
       const titleText = byId('modalTitle')?.querySelector('span');
       if (titleText) titleText.textContent = resolvedTitle;
+      renderCandidateActiveHeader(byId('modalTitle'), top);
       byId('modalTabs')?.setAttribute('aria-label', `${resolvedTitle} sections`);
     }
   } catch {}
@@ -334056,7 +334121,7 @@ try {
     archivedPill = document.createElement('span');
     archivedPill.id = 'timesheetArchivedPill';
     archivedPill.className = 'pill pill-warn';
-    archivedPill.textContent = 'Archived';
+    archivedPill.textContent = 'Withdrawn';
     archivedPill.style.marginLeft = '8px';
     header.appendChild(archivedPill);
   }
@@ -335961,7 +336026,7 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
     ratesState         : deep(window.modalCtx?.ratesState || null),
     hospitalsState     : deep(window.modalCtx?.hospitalsState || null),
     clientSettingsState: deep(window.modalCtx?.clientSettingsState || null),
-    overrides          : deep(window.modalCtx?.overrides || { existing:[], stagedNew:[], stagedEdits:{}, stagedDeletes:[] }),
+    overrides          : top.entity === 'candidates' ? cloneCandidateRateOverrideStage(window.modalCtx?.overrides) : deep(window.modalCtx?.overrides || { existing:[], stagedNew:[], stagedEdits:{}, stagedDeletes:[] }),
     candidateMainModel : deep(window.modalCtx?.candidateMainModel || null),
 
     // ✅ NEW: snapshot PAYE entry draft state when stored outside data/formState
@@ -336002,7 +336067,7 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
     window.modalCtx.ratesState          = deep(fr._snapshot.ratesState);
     window.modalCtx.hospitalsState      = deep(fr._snapshot.hospitalsState);
     window.modalCtx.clientSettingsState = deep(fr._snapshot.clientSettingsState);
-    if (fr._snapshot.overrides) window.modalCtx.overrides = deep(fr._snapshot.overrides);
+    if (fr._snapshot.overrides) window.modalCtx.overrides = fr.entity === 'candidates' ? cloneCandidateRateOverrideStage(fr._snapshot.overrides) : deep(fr._snapshot.overrides);
     window.modalCtx.candidateMainModel  = deep(fr._snapshot.candidateMainModel || null);
     window.modalCtx.timesheetState      = deep(fr._snapshot.timesheetState || null);
     window.modalCtx.invoiceDetail       = deep(fr._snapshot.invoiceDetail || null);
@@ -336436,7 +336501,7 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
     window.modalCtx.ratesState          = deep(top._snapshot.ratesState);
     window.modalCtx.hospitalsState      = deep(top._snapshot.hospitalsState);
     window.modalCtx.clientSettingsState = deep(top._snapshot.clientSettingsState);
-    if (top._snapshot.overrides)         window.modalCtx.overrides          = deep(top._snapshot.overrides);
+    if (top._snapshot.overrides)         window.modalCtx.overrides          = top.entity === 'candidates' ? cloneCandidateRateOverrideStage(top._snapshot.overrides) : deep(top._snapshot.overrides);
     window.modalCtx.candidateMainModel  = deep(top._snapshot.candidateMainModel || null);
 
     // NEW: restore timesheetState so staged Lines/Issues state is rolled back
@@ -336505,7 +336570,7 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
   window.modalCtx.ratesState          = deep(top._snapshot.ratesState);
   window.modalCtx.hospitalsState      = deep(top._snapshot.hospitalsState);
   window.modalCtx.clientSettingsState = deep(top._snapshot.clientSettingsState);
-  if (top._snapshot.overrides) window.modalCtx.overrides = deep(top._snapshot.overrides);
+  if (top._snapshot.overrides) window.modalCtx.overrides = top.entity === 'candidates' ? cloneCandidateRateOverrideStage(top._snapshot.overrides) : deep(top._snapshot.overrides);
   // 🔹 restore candidateMainModel as well so job titles (and primary) roll back
   window.modalCtx.candidateMainModel  = deep(top._snapshot.candidateMainModel || null);
 
@@ -336949,7 +337014,7 @@ async function saveForFrame(fr) {
       ratesState         : deep(window.modalCtx?.ratesState || null),
       hospitalsState     : deep(window.modalCtx?.hospitalsState || null),
       clientSettingsState: deep(window.modalCtx?.clientSettingsState || null),
-      overrides          : deep(window.modalCtx?.overrides || { existing: [], stagedNew: [], stagedEdits: {}, stagedDeletes: [] }),
+      overrides          : fr.entity === 'candidates' ? cloneCandidateRateOverrideStage(window.modalCtx?.overrides) : deep(window.modalCtx?.overrides || { existing: [], stagedNew: [], stagedEdits: {}, stagedDeletes: [] }),
       candidateMainModel : deep(window.modalCtx?.candidateMainModel || null),
       timesheetState     : deep(window.modalCtx?.timesheetState || null),
       invoiceDetail      : deep(window.modalCtx?.invoiceDetail || null),
@@ -338417,8 +338482,13 @@ function applyTimesheetLifecyclePatchToModal(modalCtxInput, lifecyclePatchInput,
       : (explicitArchivedAt.present
           ? !(explicitArchivedAt.value === null || trimStr(explicitArchivedAt.value) === '')
           : existingArchivedState === true);
-    const explicitUnarchive = explicitArchivedState === false || (
-      explicitArchivedAt.present && (explicitArchivedAt.value === null || trimStr(explicitArchivedAt.value) === '')
+    // False/null describes lifecycle truth on an ordinary or category-only
+    // Withdrawn row. Only a genuine previously archived row can transition
+    // through this Unarchive patch path; presentation alone grants no action.
+    const explicitUnarchive = existingArchivedState === true && (
+      explicitArchivedState === false || (
+        explicitArchivedAt.present && (explicitArchivedAt.value === null || trimStr(explicitArchivedAt.value) === '')
+      )
     );
     const explicitCanUnarchive = permissionBool(
       safePatch.can_unarchive,
@@ -339184,7 +339254,7 @@ function refreshSimpleTimesheetOverviewLifecycleBadgesIfVisible(options = {}) {
         archivedPill.style.fontWeight = '700';
         controls.insertBefore(archivedPill, controls.firstChild || null);
       }
-      archivedPill.textContent = 'Archived';
+      archivedPill.textContent = 'Withdrawn';
       archivedPill.className = 'pill pill-bad';
       archivedPill.setAttribute('title', 'This timesheet is archived and must be unarchived before lifecycle actions are available.');
       return true;
@@ -351892,30 +351962,6 @@ function bindCandidateMainFormEvents(container, model) {
     } catch {}
   };
 
-  const statusButton = q('[data-candidate-active-toggle]');
-  const statusInput = q('input[name="active"]');
-  if (statusButton && statusInput) {
-    const pending = q('[data-candidate-active-pending]');
-    const savedActive = window.modalCtx?.data?.active !== false;
-    const updatePending = () => {
-      if (pending) pending.hidden = (statusInput.value === 'true') === savedActive;
-    };
-    updatePending();
-    statusButton.addEventListener('click', () => {
-      const frame = window.__getModalFrame?.();
-      if (statusButton.disabled || (frame?.mode !== 'edit' && frame?.mode !== 'create')) return;
-      const active = statusInput.value !== 'true';
-      statusInput.value = active ? 'true' : 'false';
-      statusButton.textContent = `Candidate ${active ? 'active' : 'inactive'}`;
-      statusButton.classList.toggle('candidate-agency-status--active', active);
-      statusButton.classList.toggle('candidate-agency-status--inactive', !active);
-      statusButton.setAttribute('aria-pressed', String(active));
-      model.active = active;
-      updatePending();
-      markDirty();
-    });
-  }
-
   // Bind text-like inputs WITHOUT clobbering staged DOM values.
   // Rule:
   //  - If model has a non-empty value → write it to DOM
@@ -358745,6 +358791,8 @@ async function fetchTimesheetDetails(timesheetId) {
     weekly_source_presentation: (json.weekly_source_presentation && typeof json.weekly_source_presentation === 'object')
       ? json.weekly_source_presentation
       : null,
+    weekly_source_operational_category: json.weekly_source_operational_category || null,
+    weekly_source_processing_reason: json.weekly_source_processing_reason || null,
 
     // ✅ Authoritative payment-state payload for Overview + Financials tabs.
     // Do not reconstruct or fall back to summary-cache economics here.
@@ -364055,7 +364103,7 @@ function renderTimesheetOverviewTab(ctx) {
   const stageAllowedWhenArchived = (label) => {
     if (!isArchivedOverview) return true;
     const key = String(label || '').trim().toUpperCase();
-    return key === 'ARCHIVED' || archivedFinancialStageLabels.has(key);
+    return key === 'ARCHIVED' || key === 'WITHDRAWN' || archivedFinancialStageLabels.has(key);
   };
 
   const addStage = (label, cls, title) => {
@@ -364072,12 +364120,12 @@ function renderTimesheetOverviewTab(ctx) {
     if (seenStage.has(key)) return;
     seenStage.add(key);
     const html = makeStageBadgeHtml(key, cls, title);
-    if (isArchivedOverview && key.toUpperCase() !== 'ARCHIVED') stageBadges.push(html);
+    if (isArchivedOverview && !['ARCHIVED', 'WITHDRAWN'].includes(key.toUpperCase())) stageBadges.push(html);
     else stageBadges.unshift(html);
   };
 
   if (isArchivedOverview) {
-    prependStage('Archived', 'pill-bad', 'This timesheet is archived. Operational lifecycle actions are unavailable until it is unarchived.');
+    prependStage('Withdrawn', 'pill-bad', 'This timesheet is archived. Operational lifecycle actions are unavailable until it is unarchived.');
   }
 
   if (showAuthorisedForPaymentStageBadge) {

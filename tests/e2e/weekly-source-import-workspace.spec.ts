@@ -13,6 +13,75 @@ const fixtures = JSON.parse(readFileSync(
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
+test('Queries attention summary keeps three tabs, counts genuine decisions and opens actionable-first work',async({page},testInfo)=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any,workspace={...fixture,combined_source_workspace:true};
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>workspace};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action!=='COMBINED_REVIEW_WORKSPACE')throw new Error('Unexpected mutation');
+      return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',
+        section:request.payload.section,sort_key:request.payload.sort_key,sort_direction:request.payload.sort_direction,
+        attention_kind:request.payload.attention_kind||'',
+        counts:{questions:7,checks:2,protected:12},attention:{complete:true,missing_source:2,questions:1,checks:2,protected:1,total:6},
+        owners:[],scope_options:[],rows:request.payload.section==='protected'?[
+          {combined_key:'protected-one',candidate:'Example Worker',client:'Example Trust',
+            source:'NHSP',period:'Awaiting source period',day_date:'8 Sep 2026',protected_hours:'09:00–17:00 · 30 min break',
+            status:{text:'Ready to reconcile'},requires_attention:true,actions:[{label:'Review and reconcile',enabled:true,payload:{}}]},
+          {combined_key:'waiting-one',candidate:'Waiting Worker',client:'Example Trust',status:{text:'Protected pay — awaiting source'},
+            requires_attention:false,actions:[]}
+        ].filter(row=>!request.payload.attention_kind||row.requires_attention):request.payload.section==='questions'?[
+          {combined_key:'missing',candidate:'Missing Worker',client:'Example Trust',children:[
+            {day_date:'8 Sep 2026',issue:'Missing or not yet authorised',candidate_shift_absent_from_import:true,actions:[]}],actions:[]},
+          {combined_key:'different',candidate:'Different Worker',client:'Example Trust',children:[
+            {day_date:'9 Sep 2026',issue:'Hours differ',actions:[]}],actions:[]},
+          {combined_key:'no-sheet',candidate:'Unsigned Worker',client:'Example Trust',children:[
+            {day_date:'10 Sep 2026',issue:'Timesheet missing',actions:[]}],actions:[]}
+        ].filter(row=>!request.payload.attention_kind||row.combined_key==='missing'):[],has_more:false})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  const summary=page.getByRole('complementary',{name:'Outstanding Office decisions'});
+  await expect(summary).toBeVisible();
+  await expect(summary.getByRole('button')).toHaveCount(4);
+  await expect(page.locator('.ws-inner-tabs [data-wsr-section]')).toHaveCount(3);
+  await expect(page.locator('.ws-inner-tabs')).toContainText('Protected shifts (12)');
+  for(const width of [1700,768,390,280]){
+    await page.setViewportSize({width,height:1000});
+    expect(await summary.evaluate(element=>element.scrollWidth-element.clientWidth)).toBe(0);
+    if(width<=720)expect(await page.locator('.ws-workspace > .ws-toolbar').first().evaluate(element=>
+      element.getBoundingClientRect().height)).toBeLessThan(350);
+    await page.locator('#modal').screenshot({path:testInfo.outputPath(`queries-attention-${width}.png`)});
+  }
+  await expect(summary.getByRole('button',{name:'Shift missing 2'})).toHaveAttribute('title',/no matching row in the import/);
+  await summary.getByRole('button',{name:'Shift missing 2'}).click();
+  await expect(page.getByText('Missing Worker',{exact:true}).first()).toBeVisible();
+  await expect(page.getByText('Different Worker',{exact:true})).toHaveCount(0);
+  await expect(page.getByText('Unsigned Worker',{exact:true})).toHaveCount(0);
+  await expect(page.locator('[data-wsr-select],[data-wsr-outreach]')).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__requests.at(-1).payload.attention_kind)).toBe('missing_source');
+  expect(await page.evaluate(()=>(window as any).__requests.at(-1).payload.section)).toBe('questions');
+  await page.locator('.ws-inner-tabs [data-wsr-section="questions"]').click();
+  await expect(page.getByText('Different Worker',{exact:true}).first()).toBeVisible();
+  await expect(page.getByText('Unsigned Worker',{exact:true}).first()).toBeVisible();
+  await expect(page.locator('[data-wsr-select]')).toHaveCount(3);
+  await expect(page.locator('[data-wsr-outreach]')).toHaveCount(2);
+  await summary.getByRole('button',{name:'Protected shifts ready to reconcile 1'}).click();
+  await expect(page.getByRole('button',{name:'Review and reconcile',exact:true})).toBeVisible();
+  await expect(page.getByText('Protected pay — awaiting source',{exact:true})).toHaveCount(0);
+  const requests=await page.evaluate(()=>(window as any).__requests);
+  expect(requests.at(-1).payload.section).toBe('protected');
+  expect(requests.at(-1).payload.attention_first).toBe(true);
+  await page.locator('.ws-inner-tabs [data-wsr-section="protected"]').click();
+  await expect(page.getByText('Protected pay — awaiting source',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__requests.at(-1).payload.attention_kind)).toBeUndefined();
+  await page.setViewportSize({width:1700,height:1000});
+  await page.locator('[data-wsr-sort="candidate"]').click();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__requests.at(-1).payload.attention_first)).toBe(false);
+  expect(externalRequests(page)).toEqual([]);
+});
+
 test('History opens a completed report and loads its immutable detail pages without a mutation',async({page},testInfo)=>{
   await loadOfficeFoundation(page);
   await page.evaluate(async fixture=>{
@@ -291,6 +360,35 @@ async function loadOfficeFoundation(page: import('@playwright/test').Page) {
   await page.evaluate(()=>{(window as any).__requests=[];});
 }
 
+test('manual query retry retains one command and explains existing payments are unchanged', async ({page}) => {
+  await loadOfficeFoundation(page);
+  await page.evaluate(() => {
+    const win=window as any, original=win.authFetch;
+    let attempts=0;
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/weekly-source/v1/commands'))return original(url,options);
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action!=='OPEN_MANUAL_REVIEW')throw new Error('Unexpected command');
+      if(++attempts===1)throw new Error('Connection interrupted');
+      return {ok:true,json:async()=>({ok:true,review_id:'query-one',idempotent_replay:true})};
+    };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({label:'Send to Pay Queries',payload:{
+      source_row_id:'00000000-0000-4000-8000-000000000101',candidate:'Kier Arthur',
+      client:'Test Trust',day_date:'8 Sep 2026'}});
+  });
+  await expect(page.getByText(/It does not undo an existing payment or change invoices/)).toBeVisible();
+  await expect(page.getByText(/It does not block report finalisation/)).toBeVisible();
+  await page.locator('[data-wsa-manual-reason]').fill('Should be an extra hour here');
+  await page.locator('[data-wsa-manual-submit]').click();
+  await expect(page.locator('[data-wsa-manual-reason]')).toBeDisabled();
+  await page.locator('[data-wsa-manual-submit]').click();
+  await expect(page.locator('[data-wsa-screen="manual-review"]')).toHaveCount(0);
+  const requests=await page.evaluate(()=>(window as any).__requests);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toEqual(requests[0]);
+  expect(requests[0].payload.command_id).toMatch(/^[0-9a-f-]{36}$/);
+});
+
 test('protected shift editor uses the real Office modal at desktop and phone widths',async({page},testInfo)=>{
   await loadOfficeFoundation(page);
   await page.evaluate(()=>{
@@ -393,7 +491,6 @@ test('one protected-pay click recovers a transient result and closes the manual 
         }) };
         return { ok: true, json: async () => ({ ok: true, outcome: 'PUBLISHED' }) };
       }
-      if (request.action === 'RESOLVE_MANUAL_REVIEW') return { ok: true, json: async () => ({ ok: true }) };
       throw new Error(`Unexpected command ${request.action}`);
     };
     win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Protect pay', payload: {
@@ -410,14 +507,14 @@ test('one protected-pay click recovers a transient result and closes the manual 
   expect(requests.map((request: any) => request.action)).toEqual([
     'PROTECTED_EDITOR_CONTEXT', 'PREPARE_PROTECTED_EDITOR',
     'APPROVE_PROTECTED_HOURS', 'APPROVE_PROTECTED_HOURS',
-    'APPROVE_PROTECTED_HOURS', 'RESOLVE_MANUAL_REVIEW'
+    'APPROVE_PROTECTED_HOURS'
   ]);
   const approvals = requests.filter((request: any) => request.action === 'APPROVE_PROTECTED_HOURS');
   expect(new Set(approvals.map((request: any) => request.payload.idempotency_key)).size).toBe(1);
   expect(approvals.map((request: any) => request.payload.recover_unknown_outcome)).toEqual([
     undefined, true, undefined
   ]);
-  expect(requests.at(-1).payload.resolution_kind).toBe('PROTECTED_PAY');
+  expect(requests.some((request: any) => request.action === 'RESOLVE_MANUAL_REVIEW')).toBe(false);
 });
 
 test('a definite protected-pay refusal stops Saving without offering a result-check button', async ({ page }) => {
@@ -1053,7 +1150,7 @@ test('NHSP final report keeps the row action visible at Office desktop widths', 
   const overflow = await page.locator('[data-ws-scroll]').evaluate(region => region.scrollWidth - region.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   await table.getByRole('button', { name: 'Send to Pay Queries' }).click();
-  await expect(page.getByText('It does not block finalisation of the weekly report.', { exact: false })).toBeVisible();
+  await expect(page.getByText('It does not block report finalisation', { exact: false })).toBeVisible();
 });
 
 test('one selection reviews separate NHSP backing reports and accepts each exact Trust scope', async ({ page }, testInfo) => {

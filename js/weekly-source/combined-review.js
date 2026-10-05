@@ -6,6 +6,26 @@
   'use strict';
   const e=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
   const a=value=>Array.isArray(value)?value:[];
+  function attentionSummary(model,state){
+    if(model.tab!=='queries')return '';
+    const attention=model.attention;
+    const sections=[['missing_source','Shift missing','questions',
+      'The candidate reported working this shift, but it has no matching row in the import. Review it and decide whether to protect pay.'],
+      ['questions','Hours don’t agree','questions',
+        'Candidate and imported hours disagree, or the pay question is unresolved. Office needs to accept imported hours or protect pay.'],
+      ['checks','Office checks','checks',
+        'Complete outstanding candidate or contract links, charge decisions, or approved-hours updates. A charge decision does not hold candidate pay.'],
+      ['protected','Protected shifts ready to reconcile','protected',
+        'A finalised import is available to compare with the protected payment. Review the shift and decide whether to reconcile it or keep the protection.']];
+    const verified=attention?.complete===true&&sections.every(([key])=>
+      Number.isSafeInteger(attention[key])&&attention[key]>=0)
+      &&Number.isSafeInteger(attention.total)&&attention.total===sections.reduce((sum,[key])=>sum+attention[key],0);
+    if(!verified)return '<aside class="ws-attention ws-attention--unavailable" role="status"><strong>Needs attention</strong><span>Refresh to verify outstanding work.</span></aside>';
+    if(attention.total===0)return '<aside class="ws-attention ws-attention--clear" role="status"><strong>No decisions outstanding</strong><span>Waiting items remain in the tabs below.</span></aside>';
+    const buttons=sections.filter(([key])=>attention[key]>0).map(([key,label,section,hint])=>
+      `<button type="button" class="ws-attention__link" title="${e(hint)}" aria-pressed="${model.attention_kind===key}" data-wsr-section="${section}" data-wsr-attention="${key}"${state.busy?' disabled':''}><span>${label}</span><strong>${attention[key]}</strong></button>`).join('');
+    return `<aside class="ws-attention" aria-label="Outstanding Office decisions"><div class="ws-attention__heading"><strong>Needs attention</strong><span>Review the outstanding work below.</span></div><div class="ws-attention__links">${buttons}</div></aside>`;
+  }
   function manualProblem(child){
     const query=child?.manual_query;
     if(child?.issue!=='Manually queried'||!query?.reason)return e(child?.issue||'Review');
@@ -48,7 +68,8 @@
       next:row.candidate_app_available===false?'Check candidate contact':'Await Timesheet',
       candidateHint:'',managerHint:''
     };
-    const disagree=children.some(child=>child.candidate_response==='My hours are correct'&&child.manager_response==='System hours are correct');
+    const disagree=children.some(child=>child.candidate_response==='My hours are correct'&&
+      ['System hours are correct','Candidate did not work'].includes(child.manager_response));
     const corrected=children.some(child=>child.manager_response==='Reported a source correction');
     const next=disagree?'Speak to candidate':corrected?'Import corrected source':problem==='Manually queried'?'Accept source or protect pay':
       children.some(child=>child.candidate_response==='My hours are correct')?(row.source_family==='NHSP'?'Query in NHSP':'Review response'):
@@ -70,10 +91,18 @@
     const columns=model.tab==='imports'
       ? [...(!filters.client_id?[['Client','client']]:[]),['File','file'],['Uploaded','uploaded'],['Coverage','coverage'],['Purpose','purpose_label'],['Status','status'],['Actions','actions']]
       : [...(!filters.client_id?[['Client','client']]:[]),['Candidate','candidate'],...(model.section==='questions'?[['Problem','question_problem'],['Candidate','question_candidate'],['Manager','question_manager'],['Next action','question_next']]:[['Day/date','day_date'],['Hours / break',model.section==='protected'?'protected_hours':'system_hours'],['Status / problem','status']]),['Actions','actions']];
-    if(model.section==='questions')columns.unshift(['Select','selection']);
+    const cohortContacts=model.section==='questions'&&!model.attention_kind;
+    if(cohortContacts)columns.unshift(['Select','selection']);
     const head=columns.map(([label,key])=>['client','candidate','day_date','status','file','uploaded'].includes(key)?`<th><button class="ws-sort" data-wsr-sort="${key}">${label}${model.sort_key===key?(model.sort_direction==='desc'?' ↓':' ↑'):''}</button></th>`:`<th>${label}</th>`).join('');
     const selected=state.selected||new Set();
     const actionButtons=(row,actions,childIndex,filter=()=>true)=>{
+      // Contact commands belong to the whole candidate cohort. In a narrowed
+      // attention view, show only per-shift actions and the narrowed Open view.
+      // The normal Hours questions tab retains its existing contact controls.
+      if(model.section==='questions'&&model.attention_kind&&childIndex===undefined){
+        const requestedFilter=filter;
+        filter=action=>requestedFilter(action)&&action.label==='Open';
+      }
       const buttons=a(actions).map((action,index)=>filter(action)?`<button class="btn btn-outline" data-wsr-row="${e(row.combined_key)}"${childIndex===undefined?'':` data-wsr-child="${childIndex}"`} data-wsr-action="${index}"${action.enabled===false?' disabled':''}>${e(action.label)}</button>`:'').join('');
       const accept=row.accept_system_hours_action;
       const canAccept=childIndex!==undefined && accept?.enabled===true
@@ -97,9 +126,10 @@
       if(key==='purpose_label')return `<td data-label="${e(label)}">${e(row.purpose_label||'Not recorded')}</td>`;
       return `<td data-label="${e(label)}">${e(row[key]??'—')}${key===(filters.client_id?'candidate':'client')?`<span class="ws-status-sub">${e(row.source)} · ${e(row.period)}</span>`:''}</td>`;
     }).join('')}</tr>${model.section==='questions'?`<tr class="ws-query-expansion"><td colspan="${columns.length}"><details><summary>Shifts for ${e(row.candidate)}</summary><div class="ws-query-contact-actions">${actionButtons(row,row.actions,undefined,action=>action.label!=='Open')}</div><table class="grid mini ws-query-shifts"><thead><tr><th>Day/date</th><th>Candidate hours</th><th>Client hours</th><th>Problem</th><th>Actions</th></tr></thead><tbody>${a(row.children).map((child,childIndex)=>`<tr class="${child.issue==='Timesheet missing'?'ws-query-nonblocking':'ws-query-hold'}"><td data-label="Day/date">${e(child.day_date)}</td><td data-label="Candidate hours">${e(child.candidate_hours||'Not submitted')}</td><td data-label="Client hours">${e(child.system_hours||'Not recorded')}</td><td data-label="Problem">${manualProblem(child)}</td><td data-label="Actions" class="ws-actions">${actionButtons(row,child.actions,childIndex)}</td></tr>`).join('')}</tbody></table></details></td></tr>`:''}`).join('');
-    const outreach=model.section==='questions'?`<div class="ws-toolbar"><span>${selected.size} selected</span><button class="btn btn-outline" data-wsr-outreach="ASK_CANDIDATES"${!selected.size||state.busy?' disabled':''}>Ask selected candidates</button><button class="btn btn-outline" data-wsr-outreach="SEND_MANAGER_NOW"${!selected.size||state.busy?' disabled':''}>Send selected to manager now</button></div>`:'';
+    const outreach=cohortContacts?`<div class="ws-toolbar"><span>${selected.size} selected</span><button class="btn btn-outline" data-wsr-outreach="ASK_CANDIDATES"${!selected.size||state.busy?' disabled':''}>Ask selected candidates</button><button class="btn btn-outline" data-wsr-outreach="SEND_MANAGER_NOW"${!selected.size||state.busy?' disabled':''}>Send selected to manager now</button></div>`:'';
     const add=model.tab==='queries'&&a(model.owners).some(owner=>owner.protected_pay_enabled)?'<button class="btn btn-outline" data-wsr-add-protected>Add protected shift</button>':'';
-    return `<div class="ws-toolbar">${select('Source','source_group_id','source_group_id','source','All sources')}${select('Client','client_id','client_id','client','All clients')}${select('Period','week_ending','week_ending','period','All periods')}<button class="btn btn-outline" data-wsr-refresh>Refresh list</button>${add}</div><div class="ws-inner-tabs">${tabs.map(([key,label])=>`<button class="btn btn-outline${model.counts?.[key]?'':' ws-tab-empty'}" data-wsr-section="${key}" aria-selected="${model.section===key}">${label} (${Number(model.counts?.[key]||0)})</button>`).join('')}</div>${outreach}<div class="ws-scroll" data-wsr-table tabindex="0" aria-label="Source work. Type to jump in the sorted column."><table class="grid mini ws-grid"><thead><tr>${head}</tr></thead><tbody>${rows||`<tr><td colspan="${columns.length}">No matching work.</td></tr>`}</tbody></table>${model.has_more?'<button class="btn btn-outline" data-wsr-more>Load more</button>':''}</div>`;
+    const attention=attentionSummary(model,state);
+    return `<div class="ws-toolbar">${select('Source','source_group_id','source_group_id','source','All sources')}${select('Client','client_id','client_id','client','All clients')}${select('Period','week_ending','week_ending','period','All periods')}<button class="btn btn-outline" data-wsr-refresh>Refresh list</button>${add}</div>${attention}<div class="ws-inner-tabs">${tabs.map(([key,label])=>`<button class="btn btn-outline${model.counts?.[key]?'':' ws-tab-empty'}" data-wsr-section="${key}" aria-selected="${model.section===key}">${label} (${Number(model.counts?.[key]||0)})</button>`).join('')}</div>${outreach}<div class="ws-scroll" data-wsr-table tabindex="0" aria-label="Source work. Type to jump in the sorted column."><table class="grid mini ws-grid"><thead><tr>${head}</tr></thead><tbody>${rows||`<tr><td colspan="${columns.length}">No matching work.</td></tr>`}</tbody></table>${model.has_more?'<button class="btn btn-outline" data-wsr-more>Load more</button>':''}</div>`;
   }
   function renderHistory(model,state={}){
     const filters=state.filters||{}, options=a(state.options||model.scope_options);
@@ -121,5 +151,5 @@
     const actions=detail?a(detail.actions).map((action,index)=>`<button class="btn btn-outline" data-wsr-report-action="${index}"${action.enabled===false?' disabled':''}>${e(action.label)}</button>`).join(''):'';
     return `${detailView?detailView+actions:`<div class="ws-toolbar">${select('Source','source_group_id','source_group_id','source','All sources')}${select('Client','client_id','client_id','client','All clients')}${select('Period','week_ending','week_ending','period','All completed periods')}<label>Finalised from<input type="date" data-wsr-filter="date_from" value="${e(filters.date_from||'')}"></label><label>To<input type="date" data-wsr-filter="date_to" value="${e(filters.date_to||'')}"></label><button class="btn btn-outline" data-wsr-refresh>Refresh list</button></div><div class="ws-scroll" data-wsr-table tabindex="0" aria-label="Completed reports. Type to jump in the sorted column."><table class="grid mini ws-grid"><thead><tr>${columns.map(([label,key])=>`<th>${['client','source','period','report','finalised_at'].includes(key)?`<button class="ws-sort" data-wsr-sort="${key}">${label}${model.sort_key===key?(model.sort_direction==='desc'?' ↓':' ↑'):''}</button>`:label}</th>`).join('')}</tr></thead><tbody>${rows||`<tr><td colspan="${columns.length}">No completed reports for this selection.</td></tr>`}</tbody></table>${model.has_more?'<button class="btn btn-outline" data-wsr-more>Load more</button>':''}</div>`}`;
   }
-  return Object.freeze({render,questionSummary,renderHistory});
+  return Object.freeze({render,questionSummary,renderHistory,attentionSummary});
 });

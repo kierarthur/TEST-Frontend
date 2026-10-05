@@ -32,7 +32,7 @@
   const ACTIONS = Object.freeze({
     imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager']),
     queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet']),
-    shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay']),
+    shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay', 'Review and reconcile']),
     finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),
     tracker: new Set(['No shifts to import', 'View'])
   });
@@ -1047,6 +1047,8 @@
     try {
       const model=await issueCommand('COMBINED_REVIEW_WORKSPACE',{...state.filters,tab,section:state.section,
         sort_key:state.sort||(state.filters.client_id?'candidate':'client'),sort_direction:state.direction,
+        ...(tab==='queries'?{attention_first:!state.sort&&!state.seek,
+          ...(state.attentionKind?{attention_kind:state.attentionKind}:{})}:{}),
         seek:state.seek,limit:50,...(append?{cursor:state.model?.next_cursor||''}:{})});
       if(sequence!==session.requestSequence)return;
       if(model?.contract!==(tab==='history'?'WEEKLY_SOURCE_REPORT_HISTORY_V1':'WEEKLY_SOURCE_COMBINED_REVIEW_V1'))throw new Error('The source work could not be verified.');
@@ -1108,7 +1110,7 @@
     host.querySelector('[data-wsr-report-more]')?.addEventListener('click',()=>loadReport(state.reportDetail.report.report_key,true));
     host.querySelectorAll('[data-wsr-select]').forEach(input=>input.addEventListener('change',()=>{input.checked?state.selected.add(input.dataset.wsrSelect):state.selected.delete(input.dataset.wsrSelect);repaint();}));
     host.querySelectorAll('[data-wsr-outreach]').forEach(button=>button.addEventListener('click',async()=>{
-      if(state.busy)return;
+      if(state.busy||model.attention_kind)return;
       const command=button.dataset.wsrOutreach,requests=[];
       for(const owner of model.owners){
         const rows=model.rows.filter(row=>row.scope_key===owner.key&&state.selected.has(row.combined_key));
@@ -1137,7 +1139,13 @@
       } else session.sourceFilters[input.dataset.wsrFilter]=input.value;
       state.sort=tab==='history'?'finalised_at':tab==='imports'?'uploaded':'';reload();
     }));
-    host.querySelectorAll('[data-wsr-section]').forEach(button=>button.addEventListener('click',()=>{state.section=button.dataset.wsrSection;reload();}));
+    host.querySelectorAll('[data-wsr-section]').forEach(button=>button.addEventListener('click',()=>{
+      state.section=button.dataset.wsrSection;
+      state.selected?.clear();
+      state.attentionKind=button.dataset.wsrAttention||'';
+      if(button.hasAttribute('data-wsr-attention')){state.sort='';state.seek='';state.direction='asc';}
+      reload();
+    }));
     host.querySelectorAll('[data-wsr-sort]').forEach(button=>button.addEventListener('click',()=>{const key=button.dataset.wsrSort;state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc';state.sort=key;reload();}));
     host.querySelectorAll('[data-wsr-action]').forEach(button=>button.addEventListener('click',()=>{
       const row=model.rows.find(item=>item.combined_key===button.dataset.wsrRow);

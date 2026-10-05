@@ -204,7 +204,9 @@
     // carries the component identity that makes an A-to-B move one line that
     // moves rather than a removal and an addition.
     WEEKLY_SOURCE_ENTITLEMENT_COMPOSER: 'COMPONENT',
-    WEEKLY_SOURCE_SETTLEMENT_ALLOCATION: 'SETTLEMENT'
+    WEEKLY_SOURCE_SETTLEMENT_ALLOCATION: 'SETTLEMENT',
+    // A certified whole-source zero is an aggregate, not a fabricated shift.
+    NEXT_ROOT_RETURN_ZERO: 'AGGREGATE_ZERO'
   });
 
   // A source this owner has never seen must not be silently rendered in the
@@ -508,8 +510,9 @@
   };
 
   const intOrNull = (value) => {
+    if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
     const numeric = Number(value);
-    return Number.isInteger(numeric) ? numeric : null;
+    return Number.isSafeInteger(numeric) ? numeric : null;
   };
 
   const stringArray = (value) => (
@@ -614,6 +617,14 @@
 
   const normaliseSchedule = (value, key) => {
     const envelope = isObject(value) ? value : {};
+    if (envelope.source === 'NEXT_ROOT_RETURN_ZERO') {
+      const keys = ['available', 'reason', 'source', 'total_hours', 'row_count', 'rows'];
+      const valid = Object.keys(envelope).length === keys.length && keys.every((field) => own(envelope, field))
+        && envelope.available === true && envelope.reason === null && envelope.total_hours === '0'
+        && envelope.row_count === 0 && Array.isArray(envelope.rows) && envelope.rows.length === 0
+        && (key === 'paid_to_date' || key === 'current_paid');
+      if (!valid) return normaliseSchedule({ available: false, reason: 'NEXT_PAID_CONTRACT_INVALID' }, key);
+    }
     // `available:false` means NOT KNOWN, never zero (N3.9.2).
     const available = envelope.available === true;
     const source = available ? (trim(envelope.source) || null) : null;
@@ -884,6 +895,13 @@
     if (trim(supplied.contract) !== LIFECYCLE_CONTRACT) {
       return failedLifecycle('LIFECYCLE_CONTRACT_MISMATCH', 'The lifecycle projection is not the contract this screen reads.');
     }
+    const info = supplied.informational;
+    const infoKeys = ['contract', 'read_only', 'approved_caption', 'paid_caption', 'processing_caption'];
+    const nextInformation = isObject(info) && Object.keys(info).length === infoKeys.length
+      && infoKeys.every((key) => own(info, key))
+      && info.contract === 'WEEKLY_SOURCE_OFFICE_NEXT_INFORMATION_V1' && info.read_only === true
+      && ['approved_caption', 'paid_caption', 'processing_caption'].every((key) => typeof info[key] === 'string' && info[key].length > 0)
+      ? { ...info } : null;
     if (supplied.ok !== true) {
       const errors = lifecycleErrors(supplied.errors);
       return deepFreeze({
@@ -905,7 +923,11 @@
         authorisation_state: 'UNKNOWN',
         withdrawn: false,
         current_head: null,
-        schedules: {},
+        // Independently verified informational facts do not invent a phase or
+        // actions. A missing/invalid separate NEXT contract retains the exact
+        // existing fail-closed lifecycle shell.
+        schedules: nextInformation ? normaliseSchedules(supplied.schedules) : {},
+        informational: nextInformation,
         settlement: null,
         payment: null,
         unauthorise: normaliseUnauthorise(actionState)
@@ -954,6 +976,7 @@
       settlement: isObject(supplied.settlement) ? supplied.settlement : null,
       payment: isObject(supplied.payment) ? supplied.payment : null,
       schedules: normaliseSchedules(supplied.schedules),
+      informational: nextInformation,
       unauthorise
     });
   };
@@ -1066,6 +1089,8 @@
     // payload and no renderer can be tempted to decide a heading for itself.
     const lifecycle = normaliseLifecycle(presentation, actionState);
     const proposal = normaliseProposal(presentation.proposal);
+    const independentProposalDecision = qualifyNextProposalDecision(presentation, lifecycle, proposal);
+    const independentWithdrawalRefusal = qualifyNextWithdrawalRefusal(presentation, lifecycle);
     const invoiceMovements = normaliseInvoiceMovements(presentation.invoice_movement_history);
 
     return deepFreeze({
@@ -1084,6 +1109,8 @@
       permitted_actions: lifecycle.permitted_actions,
       overlay_states: lifecycle.overlay_states,
       proposal,
+      independent_proposal_decision: independentProposalDecision,
+      independent_withdrawal_refusal: independentWithdrawalRefusal,
       invoice_movements: invoiceMovements,
       unauthorise: lifecycle.unauthorise,
       unauthorise_allowed: lifecycle.unauthorise ? lifecycle.unauthorise.allowed === true : false,
@@ -1382,10 +1409,13 @@
       ? lifecycle.errors
       : [{ code: 'LIFECYCLE_ABSENT', detail: '' }];
     const detail = trim(errors[0].detail);
+    const independentInformation = !!(lifecycle && lifecycle.informational);
     return `
       <div class="weekly-source-v1 weekly-source-v1__notice is-mismatch" role="status" data-weekly-source-lifecycle-error="1" data-weekly-source-error-code="${escapeHtml(errors[0].code)}">
-        <strong>This Timesheet cannot be shown</strong>
-        <span>${escapeHtml(detail || 'The server could not state where this week is in its pay life. Refresh before continuing.')}</span>
+        <strong>${independentInformation ? 'Timesheet status is unavailable' : 'This Timesheet cannot be shown'}</strong>
+        <span>${escapeHtml(detail || (independentInformation
+          ? 'Some status information is unavailable. Confirmed hours are shown separately below.'
+          : 'The server could not state where this week is in its pay life. Refresh before continuing.'))}</span>
       </div>`;
   };
 
@@ -1488,6 +1518,14 @@
     const opts = isObject(options) ? options : {};
     const caption = String(label == null ? '' : label);
     if (schedule.available !== true) return renderScheduleUnavailable(schedule, caption);
+    if (schedule.source === 'NEXT_ROOT_RETURN_ZERO') {
+      if (schedule.row_shape !== 'AGGREGATE_ZERO' || schedule.total_hours !== '0'
+          || schedule.row_count !== 0 || !Array.isArray(schedule.rows) || schedule.rows.length !== 0
+          || !['paid_to_date', 'current_paid'].includes(schedule.key)) return '';
+      return `<section class="weekly-source-v1__hours-card ${escapeHtml(trim(opts.tone_class))}" aria-label="${escapeHtml(caption)}" data-weekly-source-schedule="${escapeHtml(schedule.key)}" data-weekly-source-schedule-source="NEXT_ROOT_RETURN_ZERO">
+        <div class="weekly-source-v1__card-heading"><h3>${escapeHtml(caption)}</h3><span class="weekly-source-v1__authority">Total 0 hours</span></div>
+      </section>`;
+    }
     const shape = schedule.row_shape === 'COMPONENT' || schedule.row_shape === 'SETTLEMENT'
       ? schedule.row_shape
       : 'TIME';
@@ -1517,6 +1555,99 @@
     const lifecycle = lifecycleOf(viewModel);
     if (!lifecycle || lifecycle.ok !== true || !lifecycle.right_pane_status) return '';
     return `<div class="weekly-source-v1__phase-status" data-weekly-source-right-pane-status="1">${escapeHtml(lifecycle.right_pane_status)}</div>`;
+  };
+
+  const missingNextActivityOnly = (lifecycle) => !!(lifecycle
+    && lifecycle.ok !== true && lifecycle.informational?.read_only === true
+    && Array.isArray(lifecycle.errors) && lifecycle.errors.length > 0
+    && lifecycle.errors.every((error) => error.code === 'ROOT_ACTIVITY_NOT_INDEXED'));
+
+  // A Source proposal is a separately verified existing decision, not a
+  // paid/unpaid inference. The exception is narrower than the normal lifecycle
+  // path: exact current requested root, one verified member and the existing
+  // closed two-action command tuple. Banking page identities are not authority
+  // for this decision. Every other lifecycle error retains the action fence.
+  const qualifyNextProposalDecision = (source, lifecycle, proposal) => {
+    if (!missingNextActivityOnly(lifecycle)) return false;
+    const raw = source.proposal;
+    // Source bundle IDs are digest-derived PostgreSQL UUIDs, not necessarily
+    // RFC version/variant UUIDs. Retain their actual canonical UUID domain.
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const root = source.root_timesheet_id;
+    if (typeof root !== 'string' || !uuid.test(root) || !isObject(raw)
+        || raw.present !== true || raw.state !== 'PROPOSED'
+        || raw.request_digest_verified !== true || raw.bundle_kind !== 'SINGLE_ROOT'
+        || raw.member_count !== 1 || raw.primary_root_ordinal !== 1
+        || !Array.isArray(raw.members) || raw.members.length !== 1
+        || !isObject(raw.members[0]) || raw.members[0].root_ordinal !== 1
+        || raw.members[0].is_requested_root !== true || raw.members[0].root_timesheet_id !== root
+        || typeof raw.decision_bundle_id !== 'string' || !uuid.test(raw.decision_bundle_id)
+        || typeof raw.final_revision_id !== 'string' || !uuid.test(raw.final_revision_id)
+        || !Number.isSafeInteger(raw.bundle_revision) || raw.bundle_revision < 1
+        || !proposal.decision || proposal.members.length !== 1) return false;
+    const decision = raw.decision;
+    const exactKeys = (value, keys) => isObject(value) && Object.keys(value).length === keys.length
+      && keys.every((key) => own(value, key));
+    const schema = 'WEEKLY_SOURCE_LATER_CHANGE_DECISION_V1';
+    if (!exactKeys(decision, ['endpoint', 'owner', 'schema_version', 'actions', 'command_payload'])
+        || decision.endpoint !== '/api/weekly-source/v1/commands'
+        || decision.owner !== 'public.weekly_source_later_change_decide_atomic_v1'
+        || decision.schema_version !== schema
+        || !exactKeys(decision.command_payload, ['schema_version', 'decision_bundle_id',
+          'bundle_revision', 'root_timesheet_id', 'final_revision_id'])) return false;
+    const payload = decision.command_payload;
+    if (payload.schema_version !== schema || payload.root_timesheet_id !== root
+        || payload.decision_bundle_id !== raw.decision_bundle_id
+        || payload.bundle_revision !== raw.bundle_revision
+        || payload.final_revision_id !== raw.final_revision_id
+        || !Array.isArray(decision.actions) || decision.actions.length !== 2) return false;
+    const tokens = new Set();
+    for (const action of decision.actions) {
+      if (!exactKeys(action, ['action', 'label', 'reason_required'])
+          || !DECISION_ACTION_TOKENS.has(action.action) || typeof action.label !== 'string'
+          || !action.label.trim() || action.reason_required !== false || tokens.has(action.action)) return false;
+      tokens.add(action.action);
+    }
+    return tokens.size === 2;
+  };
+
+  const qualifyNextWithdrawalRefusal = (source, lifecycle) => {
+    if (!missingNextActivityOnly(lifecycle) || typeof source.root_timesheet_id !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(source.root_timesheet_id)) return false;
+    const state = source.action_state;
+    const answer = isObject(state) ? state.unauthorise : null;
+    if (!isObject(answer) || state.unauthorise_allowed !== false || answer.available !== false
+        || answer.authorisation_state !== 'AUTHORISED' || answer.withdrawn !== false) return false;
+    if (answer.availability_source === 'WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1') return true;
+    // An unavailable owner is only its existing integrity refusal. Never
+    // relabel it as a Banking-active or permanent financial refusal.
+    return ['OWNER_ABSENT', 'OWNER_ERROR'].includes(answer.availability_source)
+      && answer.refusal_code === 'WEEKLY_SOURCE_WITHDRAW_AVAILABILITY_UNAVAILABLE'
+      && answer.refusal_nature === 'INTEGRITY' && answer.permanent === false;
+  };
+
+  const renderNextInformation = (viewModel, options) => {
+    const lifecycle = lifecycleOf(viewModel);
+    if (!lifecycle || !lifecycle.informational || lifecycle.informational.read_only !== true) return '';
+    const schedules = lifecycle.schedules;
+    if (!isObject(schedules)) return '';
+    const simple = !isObject(options) || options.surface !== 'BULK_AUTHORISE';
+    // Only the explicitly informational failure may retain the separately
+    // version-qualified editor. Genuine Source integrity failures keep the
+    // existing action fence even when independently safe hours are present.
+    const missingActivityOnly = missingNextActivityOnly(lifecycle);
+    return `${lifecycle.ok === true ? '' : renderLifecycleError(viewModel)}
+    <div class="weekly-source-v1" data-weekly-source-informational="NEXT" data-weekly-source-read-only="1">
+      ${renderServerSchedule(schedules.currently_approved, lifecycle.informational.approved_caption, {})}
+      ${renderServerSchedule(schedules.current_paid, lifecycle.informational.paid_caption, {})}
+      ${renderServerSchedule(schedules.processing, lifecycle.informational.processing_caption, {})}
+    </div>
+    ${renderWithdrawalState(viewModel)}
+    ${renderLaterChangeDecision(viewModel, { surface: simple ? 'SIMPLE_TIMESHEET' : 'BULK_AUTHORISE' })}
+    ${simple ? renderSupportingComparison(viewModel) : ''}
+    ${renderSourceExpenseContext(viewModel)}
+    ${simple ? renderFourTotals(viewModel) : ''}
+    ${simple && missingActivityOnly ? renderManageApprovedHoursButton(viewModel) : ''}`;
   };
 
   // The one primary schedule the phase names, under the heading the server
@@ -1615,7 +1746,7 @@
     const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
     if (!vm.mount || vm.render_mode !== 'WEEKLY_SOURCE') return '';
     const lifecycle = lifecycleOf(vm);
-    if (!lifecycle || lifecycle.ok !== true) return '';
+    if (!lifecycle || (lifecycle.ok !== true && vm.independent_proposal_decision !== true)) return '';
     const proposal = isObject(vm.proposal) ? vm.proposal : null;
     if (!proposal || proposal.state === 'NONE') return '';
     const opts = isObject(options) ? options : {};
@@ -1767,7 +1898,8 @@
     const req = isObject(request) ? request : {};
     const proposal = isObject(vm.proposal) ? vm.proposal : null;
     const decision = proposal ? proposal.decision : null;
-    if (!vm.mount || vm.render_mode !== 'WEEKLY_SOURCE' || !decision) {
+    if (!vm.mount || vm.render_mode !== 'WEEKLY_SOURCE' || !decision
+        || (vm.lifecycle_ok !== true && vm.independent_proposal_decision !== true)) {
       throw new Error('That decision is no longer available. Refresh the Timesheet and try again.');
     }
     const action = upper(req.decision || req.action);
@@ -1804,7 +1936,7 @@
     const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
     if (!vm.mount || vm.render_mode !== 'WEEKLY_SOURCE') return '';
     const lifecycle = lifecycleOf(vm);
-    if (!lifecycle || lifecycle.ok !== true) return '';
+    if (!lifecycle || (lifecycle.ok !== true && vm.independent_withdrawal_refusal !== true)) return '';
     const unauthorise = isObject(vm.unauthorise) ? vm.unauthorise : null;
     // A refusal is only worth explaining where the control would otherwise be
     // offered.  On a week that is withdrawn or was never authorised the
@@ -1956,20 +2088,7 @@
     return model;
   };
 
-  const renderSimpleLines = (viewModel) => {
-    const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
-    if (vm.render_mode === 'UNAVAILABLE') return renderUnavailable(vm);
-    if (!vm.mount) return '';
-
-    // Gate 10.  `ok:false` is an explicit error state: no heading, no schedule
-    // and no action (N3.9.3).
-    if (vm.lifecycle_ok !== true) return renderLifecycleError(vm);
-
-    const principalRows = vm.approved_rows.length > 0
-      ? vm.approved_rows
-      : (vm.authority === 'SIGNED_TIMESHEET' ? vm.submitted_rows : vm.source_rows);
-    const protectedHoursPresent = principalRows.some((row) => row.state === 'PROTECTED');
-    const principalBadge = vm.authority === 'SIGNED_TIMESHEET' ? 'Used for pay and invoice' : 'Approved hours';
+  const renderSupportingComparison = (vm) => {
     let supportingMarkup = '';
 
     if (vm.authority === 'CLIENT_SYSTEM') {
@@ -1995,6 +2114,23 @@
     } else if (vm.comparison_state === 'WAITING_FOR_COMPLETE_TIMESHEET') {
       supportingMarkup = '<div class="weekly-source-v1__notice is-waiting"><strong>Waiting for completed Timesheet</strong><span>The Timesheet can be checked after the worker and manager have signed it.</span></div>';
     }
+    return supportingMarkup;
+  };
+
+  const renderSimpleLines = (viewModel) => {
+    const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
+    if (vm.render_mode === 'UNAVAILABLE') return renderUnavailable(vm);
+    if (!vm.mount) return '';
+
+    // No inferred phase or action. Independently qualified NEXT information
+    // and an exact existing Source decision retain their separate contracts.
+    if (vm.lifecycle_ok !== true) return renderNextInformation(vm, { surface: 'SIMPLE_TIMESHEET' }) || renderLifecycleError(vm);
+
+    const principalRows = vm.approved_rows.length > 0
+      ? vm.approved_rows
+      : (vm.authority === 'SIGNED_TIMESHEET' ? vm.submitted_rows : vm.source_rows);
+    const protectedHoursPresent = principalRows.some((row) => row.state === 'PROTECTED');
+    const principalBadge = vm.authority === 'SIGNED_TIMESHEET' ? 'Used for pay and invoice' : 'Approved hours';
 
     const protectedMarkup = protectedHoursPresent
       ? '<div class="weekly-source-v1__notice is-waiting"><strong>Office-approved hours included</strong><span>The approved schedule below shows the hours that will be authorised.</span></div>'
@@ -2006,7 +2142,7 @@
         ${renderPrimaryLifecycleBlock(vm, { badge: principalBadge })}
         ${renderWithdrawalState(vm)}
         ${renderLaterChangeDecision(vm, { surface: 'SIMPLE_TIMESHEET' })}
-        ${supportingMarkup}
+        ${renderSupportingComparison(vm)}
         ${renderSourceExpenseContext(vm)}
         ${renderFourTotals(vm)}
         ${renderManageApprovedHoursButton(vm)}
@@ -2021,7 +2157,7 @@
     const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
     if (vm.render_mode === 'UNAVAILABLE') return renderUnavailable(vm);
     if (!vm.mount) return '';
-    if (vm.lifecycle_ok !== true) return renderLifecycleError(vm);
+    if (vm.lifecycle_ok !== true) return renderNextInformation(vm, { surface: 'BULK_AUTHORISE' }) || renderLifecycleError(vm);
     return `<div class="weekly-source-v1" data-weekly-source-right-pane="1" data-weekly-source-ui-state="${escapeHtml(vm.ui_state || '')}" data-weekly-source-server-phase="${escapeHtml(vm.server_phase || '')}">${renderPrimaryLifecycleBlock(vm, {})}${renderWithdrawalState(vm)}${renderLaterChangeDecision(vm, { surface: 'BULK_AUTHORISE' })}${renderSourceExpenseContext(vm)}</div>`;
   };
 

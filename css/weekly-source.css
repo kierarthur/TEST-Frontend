@@ -204,6 +204,31 @@
 .ws-grid th:has(input[type="checkbox"]), .ws-grid td:has(input[type="checkbox"]) { width: 48px; text-align: center; }
 .ws-selection-summary, .ws-source-summary { padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--panel, #0f172a) 84%, transparent); }
 .ws-inner-tabs { display: flex; gap: 6px; }
+.ws-attention {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 16px; border: 1px solid rgba(228,175,74,.48);
+  border-left: 4px solid #e4af4a; border-radius: 10px;
+  background: linear-gradient(110deg,rgba(228,175,74,.12),rgba(228,175,74,.035));
+}
+.ws-attention__heading { display: grid; gap: 3px; }
+.ws-attention__heading > strong { font-size: 14px; }
+.ws-attention__heading > span, .ws-attention > span { color: var(--ws-muted-text,#94a3b8); font-size: 12px; }
+.ws-attention__links { display: flex; flex-wrap: wrap; gap: 8px; }
+.ws-attention__link {
+  display: inline-flex; align-items: center; gap: 10px; min-height: 40px;
+  padding: 8px 12px; border: 1px solid rgba(228,175,74,.42); border-radius: 8px;
+  background: var(--panel,#0f172a); color: inherit; font: inherit; font-size: 13px; cursor: pointer;
+}
+.ws-attention__link > strong { min-width: 20px; padding: 2px 6px; border-radius: 5px; background: rgba(228,175,74,.16); text-align: center; }
+.ws-attention__link:is(:hover,:focus-visible) { border-color: #e4af4a; outline: 2px solid rgba(228,175,74,.4); outline-offset: 2px; }
+.ws-attention__link:disabled { opacity: .6; cursor: wait; }
+.ws-attention--clear { border-color: var(--line,#334155); border-left-color: #58bd8a; background: rgba(31,148,94,.055); }
+.ws-attention--unavailable { background: transparent; }
+@media (max-width:720px) {
+  .ws-attention { align-items: stretch; padding: 12px; }
+  .ws-attention__links { width: 100%; }
+  .ws-attention__link { flex: 1 1 170px; justify-content: space-between; }
+}
 .ws-inner-tabs .ws-tab-empty:not([aria-selected="true"]) { opacity: .55; }
 .ws-inner-tabs button { min-height: 40px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
 .ws-inner-tabs button[aria-selected="true"] { border-color: var(--accent, #3b82f6); background: color-mix(in srgb, var(--accent, #3b82f6) 15%, transparent); }
@@ -650,6 +675,13 @@
 }
 .ws-workspace:has([data-wsr-table], [data-wsc-table]) > .ws-toolbar:first-child > label {
   flex: 0 1 230px; gap: 6px; color: var(--ws-muted-text, #94a3b8);
+}
+@media (max-width:720px) {
+  /* Desktop width basis must not become a 230px label HEIGHT when the
+     existing mobile toolbar changes to a column. Keep attention reachable. */
+  .ws-workspace:has([data-wsr-table], [data-wsc-table]) > .ws-toolbar:first-child > label {
+    flex: 0 0 auto; min-width: 0;
+  }
 }
 .ws-workspace:has([data-wsc-table]) > .ws-notice {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 20px;

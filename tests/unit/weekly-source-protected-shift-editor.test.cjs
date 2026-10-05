@@ -93,8 +93,9 @@ test('an uncertain save retains the same action without a second result button',
   assert.doesNotMatch(pending, /Saving…/);
   assert.match(pending, /data-protected-field="start"[^>]* disabled/);
   assert.doesNotMatch(pending, /data-protected-cancel disabled/);
-  const saved = editor.render(context, values, { protectedSaved: true, finishManualReview: true });
-  assert.match(saved, /data-protected-submit[^>]*>Finish query<\/button>/);
+  const saved = editor.render(context, values, { protectedSaved: true });
+  assert.match(saved, /data-protected-submit[^>]*>Refresh result<\/button>/);
+  assert.doesNotMatch(saved, /Finish query|Check saved result/);
 });
 
 test('review history uses recorded actors, reasons and before/after schedules safely', () => {

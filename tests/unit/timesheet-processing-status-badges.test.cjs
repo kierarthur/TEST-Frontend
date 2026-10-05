@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..', '..');
 const main = fs.readFileSync(path.join(root, 'js', 'main.js'), 'utf8');
@@ -88,4 +89,49 @@ test('weekly source validation delay is secondary, filterable and never duplicat
   assert.match(main, /mainAlreadySaysDelayed[\s\S]*?if \(!mainAlreadySaysDelayed\)/);
   assert.match(main, /WEEKLY_SOURCE_PAY_WAITING/);
   assert.match(css, /\.ctms-weekly-source-delay-badge\{/);
+});
+
+function actualFunction(name) {
+  const start=main.indexOf('function '+name+'(');
+  assert.notEqual(start,-1);
+  const end=main.indexOf('\nfunction ',start+20);
+  const asyncEnd=main.indexOf('\nasync function ',start+20);
+  const candidates=[end,asyncEnd].filter(value=>value>start);
+  return main.slice(start,Math.min(...candidates));
+}
+
+test('actual status painter shows one invoice-delay badge and clears stale hints on refresh', () => {
+  function element() {
+    return { children:[],attributes:{},textContent:'',title:'',
+      appendChild(child){this.children.push(child);},
+      setAttribute(key,value){this.attributes[key]=value;},
+      removeAttribute(key){delete this.attributes[key];if(key==='title')this.title='';} };
+  }
+  const sandbox={document:{createElement:element},
+    buildTimesheetProcessingStatusBadge:()=>({...element(),textContent:'Processing Delayed'}),
+    normaliseTimesheetProcessingStatusToken:value=>String(value).toUpperCase().replaceAll(' ','_')};
+  vm.createContext(sandbox);
+  vm.runInContext(actualFunction('paintTimesheetProcessingStatusCell'),sandbox);
+  const td=element();
+  sandbox.paintTimesheetProcessingStatusCell(td,{tools_stage:'PROCESSING_DELAYED',
+    weekly_source_pay_delayed:true,weekly_source_operational_category:{
+      presentation_category:'PROCESSING_DELAYED',processing_reason:'Awaiting a valid import for invoicing'}},
+    'Processing Delayed');
+  assert.equal(td.children.length,1);
+  assert.equal(td.title,'Awaiting a valid import for invoicing');
+  assert.doesNotMatch(td.attributes['aria-label'],/Candidate payment/);
+  td.children=[];
+  sandbox.paintTimesheetProcessingStatusCell(td,{tools_stage:'PROCESSED'},'Processed');
+  assert.equal(td.title,'');
+  assert.equal(td.attributes['aria-label'],undefined);
+});
+
+test('actual saved-search form maps historical Archived tools_stage to Withdrawn', () => {
+  const select={tagName:'SELECT',value:''};
+  const sandbox={document:{querySelector:()=>({querySelector:selector=>
+    selector==='[name="tools_stage"]'?select:null})}};
+  vm.createContext(sandbox);
+  vm.runInContext(actualFunction('populateSearchFormFromFilters'),sandbox);
+  sandbox.populateSearchFormFromFilters({tools_stage:'ARCHIVED'});
+  assert.equal(select.value,'WITHDRAWN');
 });

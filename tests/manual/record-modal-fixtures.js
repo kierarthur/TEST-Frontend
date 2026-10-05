@@ -6,6 +6,10 @@
   if(location.search.includes('legacy-nhsp')) settings={...settings,weekly_mode:'NHSP',hr_weekly_behaviour:'',is_nhsp:true,requires_hr:false,autoprocess_hr:false,no_timesheet_required:true,candidate_expenses_require_separate_timesheet:false,candidate_expense_invoice_email:'expenses@example.invalid'};
   let candidate={id:candidateId,title:'Ms',first_name:'Alex',last_name:'Morgan',display_name:'Alex Morgan',email:'alex@example.invalid',phone:'07700000000',pay_method:'PAYE',address_line1:'14 Example Street',address_line2:'Flat 2',address_line3:'',town_city:'Reading',county:'Berkshire',postcode:'RG1 1AA',country:'UK',band:'6',ni_number:'AB123456C',date_of_birth:'1990-03-15',gender:'Female',prof_reg_number:'AB123',notes:'Existing notes',key_norm:'',opt_in_email:true,opt_in_sms:true,opt_in_whatsapp:true,roles:[],job_titles:[],account_holder:'Alex Morgan',bank_name:'Example bank',sort_code:'12-34-56',account_number:'12345678',remittance_overrides_enabled:false};
   let settingsVersion=1;
+  candidate.active = new URLSearchParams(location.search).get('candidate-status') !== 'inactive';
+  if (new URLSearchParams(location.search).get('candidate-working') === 'yes') {
+    candidate.__work_status = { is_currently_working: true };
+  }
   let simulateConflict=location.search.includes('conflict-test');
   const nextSettingsVersion=()=>new Date(Date.UTC(2026,7,28,12,0,settingsVersion++)).toISOString();
   settings.updated_at=nextSettingsVersion();
@@ -136,7 +140,7 @@
       read.completed=true;report();return response({items:rows.slice(offset,offset+limit)});
     }
     if(pathname===`/api/clients/${clientId}`)return response({client,client_settings:settings,has_e_history:false});
-    if(pathname===`/api/candidates/${candidateId}`)return response({candidate,job_titles:candidate.job_titles.map((j,i)=>typeof j==='string'?{job_title_id:j,is_primary:i===0}:j),hr_aliases:[],has_e_history:false});
+    if(pathname===`/api/candidates/${candidateId}`)return response({candidate,job_titles:candidate.job_titles.map((j,i)=>typeof j==='string'?{job_title_id:j,is_primary:i===0}:j),hr_aliases:[],has_e_history:false,work_status:candidate.__work_status || null});
     if(pathname==='/api/job-titles')return response({items:jobTitles});
     if(pathname===`/api/candidates/${candidateId}/pay-method-change-preview`) {
       const params=new URL(String(url),location.origin).searchParams,newMethod=params.get('new_method');

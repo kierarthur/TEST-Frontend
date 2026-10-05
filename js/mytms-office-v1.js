@@ -1081,7 +1081,7 @@
     };
     if (state === 'INELIGIBLE' && reason === 'CANDIDATE_INACTIVE') return {
       label: 'Candidate inactive', tone: 'warning',
-      copy: 'To activate this CloudTMS Candidate, use Candidate status in Main Details: click Edit, change the status, then Save. MyTMS access is separate.'
+      copy: ''
     };
     if (state === 'INELIGIBLE' && reason === 'CANDIDATE_EMAIL_INVALID') return {
       label: 'Valid email required', tone: 'warning',
@@ -1269,7 +1269,7 @@
         </div>
         <div class="mytms-candidate-section__body">
           <div class="mytms-candidate-section__copy">
-            <p>${escapeHtml(presented.copy)}</p>
+            ${presented.copy ? `<p>${escapeHtml(presented.copy)}</p>` : ''}
             ${anyActionEnabled || !actions.length ? '' : `<p class="mytms-candidate-section__reason">${escapeHtml(disabledReasonPresentation(status, actions[0]))}</p>`}
           </div>
           ${actions.length ? `<div class="mytms-candidate-section__actions">${actions.map((action, index) => {

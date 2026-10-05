@@ -113,7 +113,7 @@ test('rate client selection stages correct role band and amounts then survives p
   await page.locator('#modalTitle').click();
   await ratePickerVisual(page,info,'selected-client-rate');
   await page.getByRole('button',{name:'Apply',exact:true}).click();
-  await expect(page.locator('#modalTitle')).toHaveText('Edit Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^Edit Candidate\s*Active$/);
   await expect(page.locator('#modalBody')).toContainText('Zedland Integrated Care Partnership');
   expect((await result(page)).writes).toEqual([]);
   await tab(page,'Main Details').click();await tab(page,'Care Packages').click();
@@ -125,7 +125,7 @@ test('rate client selection stages correct role band and amounts then survives p
   await expect(page.locator('#pay_day')).toHaveValue('30.00');
   await page.getByRole('button',{name:'Close',exact:true}).click();
   await page.getByRole('button',{name:'Save',exact:true}).click();
-  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Active$/);
   const saved=(await result(page)).candidateRates;
   expect(saved).toHaveLength(1);
   expect(saved[0]).toMatchObject({client_id:'72000000-0000-4000-8000-000000000001',role:'Community Nurse',band:'7',rate_type:'PAYE',date_from:'2026-09-01',pay_day:30});
@@ -331,7 +331,7 @@ test('PAYE and Umbrella changes use confirmation, save the exact destination and
   await expect(page.getByRole('button', { name: 'Confirm change', exact: true })).toBeVisible();
   expect((await result(page)).writes).toEqual([]);
   await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Active$/);
   await tab(page, 'Payment details').click();
   await expect(field(page, 'pay_method')).toHaveValue('UMBRELLA');
   await expect(field(page, 'bank_name')).toHaveValue('Second fixture bank');
@@ -358,7 +358,7 @@ test('PAYE and Umbrella changes use confirmation, save the exact destination and
   await expect(field(page, 'bank_name')).toHaveValue('Personal fixture bank');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Active$/);
   await tab(page, 'Payment details').click();
   await expect(field(page, 'bank_name')).toHaveValue('Personal fixture bank');
   await expect(field(page, 'account_number')).toHaveValue('22334455');
@@ -390,7 +390,7 @@ test('discard restores the saved Umbrella destination and no bank changes are co
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
   await expect(page.locator('#modalTitle')).toContainText('Discard');
   await page.getByRole('button', { name: 'Discard', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Active$/);
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
   await tab(page, 'Payment details').click();
@@ -412,7 +412,7 @@ test('blank PAYE bank details stay blank through tab changes, confirmation and r
   }
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Active$/);
   await tab(page, 'Payment details').click();
   const data = await result(page);
   for (const key of ['account_holder', 'bank_name', 'sort_code', 'account_number']) {
@@ -687,7 +687,7 @@ test('moved Candidate work and payment fields and intentional address clears sur
   await tab(page, 'Payment details').click();
   await expect(field(page, 'bank_name')).toHaveValue('Updated example bank');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Active$/);
   const data = await result(page);
   expect(data.candidate.address_line2).toBe('');
   expect(data.candidate.band).toBe(7);
@@ -704,11 +704,66 @@ test('new Candidate keeps the existing defaults and can save from Payment detail
   await field(page, 'gender').selectOption('Female');
   await tab(page, 'Payment details').click();
   await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.locator('#modalTitle')).toHaveText('View Candidate');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Active$/);
   const write = (await result(page)).writes.find((w: any) => w.path === '/api/candidates');
   expect(write.method).toBe('POST');
   expect(write.body.first_name).toBe('Taylor');
   expect(write.body.pay_method).toBeNull(); // Existing API representation of Unknown.
   expect(write.body.opt_in_email).toBe(true);
   expect(write.body.remittance_overrides_enabled).toBe(false);
+});
+
+test('Candidate header status stages across tabs, discards, and saves only with the parent', async ({ page }, info) => {
+  await page.goto('/?candidate-status=inactive&candidate-working=yes');
+  await page.getByRole('button', { name: 'Existing candidate', exact: true }).click();
+  const badge = page.locator('#modalTitle [data-candidate-active-toggle]');
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Currently Working\s*Inactive$/);
+  await expect(badge).toBeDisabled();
+  await expect(page.locator('#modalBody')).not.toContainText('Additional details');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(badge).toBeEnabled();
+  await badge.click();
+  await expect(badge).toHaveText('Active');
+  await tab(page, 'Payment details').click();
+  await expect(badge).toHaveCount(1);
+  await expect(badge).toHaveText('Active');
+  expect((await result(page)).writes).toEqual([]);
+  expect((await result(page)).candidate.active).toBe(false);
+  await tab(page, 'Main Details').click();
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Discard changes?' })).toBeVisible();
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(badge).toHaveText('Inactive');
+  await expect(badge).toBeDisabled();
+  expect((await result(page)).writes).toEqual([]);
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await badge.click();
+  await tab(page, 'Payment details').click();
+  await expect(field(page, 'pay_method')).toBeEnabled();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Currently Working\s*Active$/);
+  await expect(badge).toBeDisabled();
+  const data = await result(page);
+  expect(data.writes).toHaveLength(1);
+  expect(data.writes[0].body.active).toBe(true);
+  expect(data.candidate.active).toBe(true);
+  await screenshotAndFit(page, info, 'Candidate active header');
+});
+
+test('new Candidate can stage Inactive in the title and commit it with Save', async ({ page }) => {
+  await open(page, 'New candidate');
+  const badge = page.locator('#modalTitle [data-candidate-active-toggle]');
+  await expect(badge).toBeEnabled();
+  await badge.click();
+  await expect(badge).toHaveText('Inactive');
+  await field(page, 'first_name').fill('Taylor');
+  await field(page, 'last_name').fill('Example');
+  await field(page, 'email').fill('taylor@example.invalid');
+  await field(page, 'phone').fill('07700000000');
+  await field(page, 'gender').selectOption('Female');
+  expect((await result(page)).writes).toEqual([]);
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#modalTitle')).toHaveText(/^View Candidate\s*Inactive$/);
+  const write = (await result(page)).writes.find((w: any) => w.path === '/api/candidates');
+  expect(write.body.active).toBe(false);
 });

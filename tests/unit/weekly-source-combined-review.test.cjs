@@ -6,6 +6,45 @@ const model={contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'
     source:'NHSP',period:'27 Sep 2026',day_date:'21 Sep 2026',system_hours:'09:00–17:00 · 30 min break',
     status:{text:'Needs action'},problem:'Choose the correct candidate.',
     actions:[{label:'Link candidate',enabled:true},{label:'Unavailable',enabled:false}]}]};
+test('attention uses the complete server census, not visible rows or tab totals',()=>{
+  const html=view.render({...model,counts:{questions:20,checks:10,protected:40},rows:[],
+    attention:{complete:true,missing_source:1,questions:1,checks:1,protected:3,total:6}});
+  assert.match(html,/Needs attention/);
+  assert.match(html,/data-wsr-section="questions" data-wsr-attention="missing_source"[^]*?Shift missing[^]*?<strong>1<\/strong>/);
+  assert.match(html,/data-wsr-section="questions" data-wsr-attention="questions"[^]*?Hours don’t agree[^]*?<strong>1<\/strong>/);
+  assert.match(html,/data-wsr-section="checks" data-wsr-attention[^]*?<strong>1<\/strong>/);
+  assert.match(html,/data-wsr-section="protected" data-wsr-attention[^]*?Protected shifts ready to reconcile[^]*?<strong>3<\/strong>/);
+  assert.match(html,/title="The candidate reported working this shift, but it has no matching row in the import/);
+  assert.match(html,/title="A finalised import is available to compare with the protected payment/);
+  assert.match(html,/Protected shifts \(40\)/);
+  assert.ok(html.indexOf('Needs attention')<html.indexOf('ws-inner-tabs'));
+});
+test('waiting-only protection and missing Timesheet are not invented attention items',()=>{
+  const html=view.attentionSummary({...model,counts:{questions:1,checks:0,protected:2},
+    attention:{complete:true,missing_source:0,questions:0,checks:0,protected:0,total:0}},{});
+  assert.match(html,/No decisions outstanding/);
+  assert.doesNotMatch(html,/data-wsr-attention/);
+});
+test('attention displays only positive outstanding categories without hiding normal tabs',()=>{
+  const html=view.render({...model,attention:{complete:true,missing_source:0,questions:0,checks:1,protected:0,total:1}});
+  assert.match(html,/data-wsr-section="checks" data-wsr-attention/);
+  assert.doesNotMatch(html,/data-wsr-section="questions" data-wsr-attention|data-wsr-section="protected" data-wsr-attention/);
+  assert.match(html,/Hours questions \(0\)|Protected shifts \(0\)/);
+});
+test('missing, partial, malformed or contradictory attention census is not reassuring zero',()=>{
+  for(const attention of [null,{complete:false},{complete:true,missing_source:0,questions:0,checks:0,protected:0,total:1},
+    {complete:true,missing_source:0,questions:'1',checks:0,protected:0,total:1},
+    {complete:true,missing_source:0,questions:-1,checks:1,protected:0,total:0},
+    {complete:true,questions:0,checks:0,protected:0,total:0}]){
+    const html=view.attentionSummary({...model,attention},{});
+    assert.match(html,/Refresh to verify/);assert.doesNotMatch(html,/No decisions outstanding|data-wsr-attention/);
+  }
+});
+test('attention links are disabled during mutations and absent from Imports and History',()=>{
+  assert.match(view.attentionSummary({...model,attention:{complete:true,missing_source:0,questions:1,checks:0,protected:0,total:1}},
+    {busy:true}),/data-wsr-attention="questions" disabled/);
+  for(const tab of ['imports','history'])assert.equal(view.attentionSummary({...model,tab},{}),'');
+});
 test('combined Office checks show identity, source, period, hours and exact indexed actions',()=>{
   const html=view.render(model);
   assert.match(html,/&lt;Baljit&gt;/);assert.match(html,/Trust A/);assert.match(html,/27 Sep 2026/);
@@ -47,6 +86,20 @@ test('questions have one compact entry point and aligned shifts, retaining exact
   assert.match(html,/ws-query-shifts/);
   assert.match(html,/data-label="Candidate hours">7 hours/);
   assert.match(html,/data-wsr-child="0" data-wsr-action="0">Protect pay/);
+});
+
+test('attention question view keeps exact shift actions without hidden whole-cohort contact commands',()=>{
+  const questions={...model,section:'questions',rows:[{combined_key:'missing',candidate:'Worker',
+    actions:[{label:'Remind candidate'},{label:'Remind missing Timesheet'},{label:'Open'}],
+    children:[{incident_id:'visible',issue:'Missing or not yet authorised',actions:[{label:'Protect pay'}]}]}]};
+  const narrowed=view.render({...questions,attention_kind:'missing_source'});
+  assert.doesNotMatch(narrowed,/data-wsr-select|data-wsr-outreach|Remind candidate|Remind missing Timesheet/);
+  assert.match(narrowed,/data-wsr-action="2">Open/);
+  assert.match(narrowed,/data-wsr-child="0" data-wsr-action="0">Protect pay/);
+  assert.match(narrowed,/data-wsr-section="questions"[^>]*>Hours questions/);
+  const full=view.render(questions);
+  assert.match(full,/data-wsr-select|data-wsr-outreach/);
+  assert.match(full,/Remind candidate/);
 });
 
 test('query summary distinguishes problems and recorded replies from contact alone',()=>{

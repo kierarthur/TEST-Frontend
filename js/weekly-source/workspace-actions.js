@@ -821,9 +821,11 @@
   }
 
   function openCommand(detail) {
-    const payload = asObject(detail.payload);
+    const payload = { ...asObject(detail.payload) };
     const command = commandFor(detail);
     if (!commandAuthorityAvailable(command, payload)) return openDetail({ detail: { problem: 'This action is not available yet.', guidance: 'Recheck the Weekly source screen and try again.' } }, 'View details');
+    // One modal keeps one exact command across connection-loss retries.
+    if (command === 'RESOLVE_MANUAL_REVIEW') payload.command_id = root.crypto.randomUUID();
     const model = commandModel(detail);
     const state = { confirmed: false, busy: false, failed: false, error: '' };
     const kind = 'weekly-source-command-confirm-v1';
@@ -927,9 +929,9 @@
     const payload=asObject(payloadValue);
     const sourceRowId=asText(payload.source_row_id);
     if(!sourceRowId)return openDetail({detail:{problem:'This imported shift is not available for manual review. Recheck the report.'}},'View details');
-    const state={reason:'',busy:false,error:''};
+    const state={reason:'',busy:false,error:'',pending:null};
     const kind='weekly-source-manual-review-v1';
-    const render=()=>`<div class="ws-child" data-wsa-screen="manual-review"><h3>Send to Pay Queries</h3><p>${escapeHtml(payload.candidate||'Selected candidate')} · ${escapeHtml(payload.client||'Selected client')} · ${escapeHtml(payload.day_date||'Imported shift')}</p><p>This holds the existing Timesheet at first authorisation until Office accepts the current source hours or protects pay. It does not block finalisation of the weekly report. It does not contact the candidate or create another shift.</p><label>Reason<textarea data-wsa-manual-reason maxlength="1000" required${state.busy?' disabled':''}>${escapeHtml(state.reason)}</textarea></label>${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions"><button class="btn btn-outline" data-wsa-manual-cancel${state.busy?' disabled':''}>Cancel</button><button class="btn primary" data-wsa-manual-submit${state.busy?' disabled':''}>Send to Pay Queries</button></div></div>`;
+    const render=()=>`<div class="ws-child" data-wsa-screen="manual-review"><h3>Send to Pay Queries</h3><p>${escapeHtml(payload.candidate||'Selected candidate')} · ${escapeHtml(payload.client||'Selected client')} · ${escapeHtml(payload.day_date||'Imported shift')}</p><p>This holds new payment for this shift until Office accepts source hours, protects pay, or finalises a later backing report containing the shift. It does not undo an existing payment or change invoices. It does not block report finalisation, contact the candidate or create another shift.</p><label>Reason<textarea data-wsa-manual-reason maxlength="1000" required${state.busy||state.pending?' disabled':''}>${escapeHtml(state.reason)}</textarea></label>${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions"><button class="btn btn-outline" data-wsa-manual-cancel${state.busy?' disabled':''}>Cancel</button><button class="btn primary" data-wsa-manual-submit${state.busy?' disabled':''}>Send to Pay Queries</button></div></div>`;
     const wire=()=>{
       const host=root.document?.querySelector('[data-wsa-screen="manual-review"]');
       if(!host||host.dataset.wsaWired==='1')return;
@@ -940,7 +942,9 @@
         if(state.busy)return;
         if(!state.reason.trim()){state.error='Enter a reason.';rerender(kind);return;}
         state.busy=true;state.error='';rerender(kind);
-        try{const result=await workspaceApi().issueCommand('OPEN_MANUAL_REVIEW',{source_row_id:sourceRowId,reason:state.reason.trim()});
+        try{
+          if(!state.pending)state.pending={source_row_id:sourceRowId,reason:state.reason.trim(),command_id:root.crypto.randomUUID()};
+          const result=await workspaceApi().issueCommand('OPEN_MANUAL_REVIEW',state.pending);
           if(result?.ok!==true)throw new Error('The query was not confirmed. Recheck this shift.');
           await finishAction();
         }catch(error){state.error=plainMessage(error?.message,'The query could not be saved.');state.busy=false;rerender(kind);}
@@ -1046,7 +1050,6 @@
       finally { if (sequence === readSequence) { state.busy = false; rerender(kind); setTimeout(() => warnIfOverlapping(), 30); } }
     };
     const render = () => editor.render(context, values, { ...state, mode,
-      finishManualReview: !!initial.manual_review_id,
       lockedIdentity: !!initial.work_event_id })
       + (!state.busy && !state.pending && context.allowed && !context.contracts.length
         ? '<p>No eligible contract covers this date.</p><button type="button" class="btn btn-outline" data-protected-create-contract>Create contract</button><button type="button" class="btn btn-outline" data-protected-recheck>Recheck contracts</button>' : '');
@@ -1119,12 +1122,8 @@
           if (result?.ok !== true) throw new Error('The protected-pay save has not completed.');
           state.pending = null; state.protectedSaved = true;
         }
-        if (initial.manual_review_id) {
-          const resolved = await workspaceApi().issueCommand('RESOLVE_MANUAL_REVIEW', {
-            review_id: initial.manual_review_id, resolution_kind: 'PROTECTED_PAY'
-          });
-          if (resolved?.ok !== true) throw new Error('The Office check did not close.');
-        }
+        // The server closes the matching manual query in the save transaction.
+        // A second browser command cannot qualify or repair a failed save.
         await finishAction();
       } catch (error) {
         // These exact refusals occur in the first transactional family prepare,
@@ -1132,9 +1131,7 @@
         // outcomes still retain their original command for explicit recovery.
         if (knownProtectedRefusal(error)) state.pending = null;
         state.error = state.protectedSaved
-          ? initial.manual_review_id
-            ? 'Protected pay was saved, but the Office check did not close. Select Finish query.'
-            : 'Protected pay was saved, but the screen did not refresh. Close and refresh Queries.'
+          ? 'Protected pay was saved, but the screen did not refresh. Close and refresh Queries.'
           : state.pending
             ? 'The save could not be confirmed. Select Protect pay again to retry this same request.'
             : plainMessage(error?.message, 'Recheck the selected contract and shift details.');
@@ -1188,7 +1185,7 @@
     if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
     if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
     if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);
-    if (label === 'Review protected pay') return openProtectedReview(detail.payload);
+    if (['Review protected pay', 'Review and reconcile'].includes(label)) return openProtectedReview(detail.payload);
     if (['Protect pay', 'Add protected shift', 'Change protected shift'].includes(label)) {
       return openProtectedShift(detail.payload, label === 'Change protected shift' ? 'amend' : 'approve');
     }

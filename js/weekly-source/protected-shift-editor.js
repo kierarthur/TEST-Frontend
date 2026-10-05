@@ -147,7 +147,7 @@
       <div class="ws-child-context"><div><span>Candidate submission</span><strong>${escape(context.candidate_hours || 'Choose the client, candidate and date to check')}</strong></div><div><span>Imported hours</span><strong>${escape(context.source_hours || 'Choose the client, candidate and date to check')}</strong></div></div>
       <p>This changes the candidate’s pay position. It does not change the client source or invoice.</p>
       ${state.error ? `<div class="ws-notice ws-notice--danger" role="alert">${escape(state.error)}</div>` : ''}
-      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-cancel${state.busy ? disabledLock : ''}>Cancel</button><button type="button" class="btn primary" data-protected-submit${state.busy || context.allowed !== true ? disabledLock : ''}>${state.busy ? 'Saving…' : state.protectedSaved ? state.finishManualReview ? 'Finish query' : 'Refresh result' : state.mode === 'amend' ? 'Change protected shift' : 'Protect pay'}</button></div></div>`;
+      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-cancel${state.busy ? disabledLock : ''}>Cancel</button><button type="button" class="btn primary" data-protected-submit${state.busy || context.allowed !== true ? disabledLock : ''}>${state.busy ? 'Saving…' : state.protectedSaved ? 'Refresh result' : state.mode === 'amend' ? 'Change protected shift' : 'Protect pay'}</button></div></div>`;
   }
   function renderReview(context = {}, values = {}, state = {}) {
     const proposal = context.final_source_proposal;

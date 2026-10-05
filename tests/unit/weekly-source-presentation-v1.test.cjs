@@ -11,6 +11,250 @@ const fixtures = JSON.parse(fs.readFileSync(
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
+test('NEXT certified zero renders an aggregate without fabricating shifts or payment activity', () => {
+  const payload = clone(fixtures.nhspMatch);
+  payload.weekly_source_presentation.lifecycle.schedules.current_paid = {
+    available: true, reason: null, source: 'NEXT_ROOT_RETURN_ZERO', total_hours: '0', row_count: 0, rows: []
+  };
+  const schedule = presentation.buildViewModel(payload).lifecycle.schedules.current_paid;
+  assert.equal(schedule.row_shape, 'AGGREGATE_ZERO');
+  assert.equal(schedule.batch_count, null);
+  assert.equal(schedule.settlement_count, null);
+  const html = presentation.renderServerSchedule(schedule, 'Hours paid', {});
+  assert.match(html, /Total 0 hours/);
+  assert.doesNotMatch(html, /<table|No hours to show|LATEST_RESTATEMENT|segment/);
+});
+
+test('NEXT zero schedule rejects extra, nonzero, invented-row and wrong-purpose fields', () => {
+  for (const mutate of [s => s.total_hours = '1', s => s.row_count = '0', s => s.reason = 'UNKNOWN',
+    s => s.rows.push({hours:'0'}), s => s.batch_count = 0, s => s.position_basis = 'LATEST_RESTATEMENT']) {
+    const payload = clone(fixtures.nhspMatch);
+    const schedule = {available:true,reason:null,source:'NEXT_ROOT_RETURN_ZERO',total_hours:'0',row_count:0,rows:[]};
+    mutate(schedule);
+    payload.weekly_source_presentation.lifecycle.schedules.current_paid = schedule;
+    assert.equal(presentation.buildViewModel(payload).lifecycle.schedules.current_paid.available, false);
+  }
+  const payload = clone(fixtures.nhspMatch);
+  payload.weekly_source_presentation.lifecycle.schedules.approved = {
+    available:true,reason:null,source:'NEXT_ROOT_RETURN_ZERO',total_hours:'0',row_count:0,rows:[]
+  };
+  assert.equal(presentation.buildViewModel(payload).lifecycle.schedules.approved.available, false);
+});
+
+test('unknown counts do not become zero through numeric coercion', () => {
+  for (const value of [null, undefined, '', false, true]) {
+    const payload = clone(fixtures.nhspMatch);
+    const supplied = payload.weekly_source_presentation.lifecycle.schedules.current_paid;
+    supplied.batch_count = value;
+    supplied.settlement_count = value;
+    const schedule = presentation.buildViewModel(payload).lifecycle.schedules.current_paid;
+    assert.equal(schedule.batch_count, null);
+    assert.equal(schedule.settlement_count, null);
+  }
+});
+
+test('independent NEXT paid zero survives unknown lifecycle activity without granting actions or inventing a phase', () => {
+  const payload = clone(fixtures.nhspMatch);
+  const lifecycle = payload.weekly_source_presentation.lifecycle;
+  lifecycle.ok = false; lifecycle.server_phase = null; lifecycle.heading = null;
+  lifecycle.permitted_actions = [];
+  lifecycle.informational = {contract:'WEEKLY_SOURCE_OFFICE_NEXT_INFORMATION_V1',read_only:true,
+    approved_caption:'Currently approved hours',paid_caption:'Hours paid',processing_caption:'Payment processing hours'};
+  lifecycle.schedules.current_paid = {available:true,reason:null,source:'NEXT_ROOT_RETURN_ZERO',total_hours:'0',row_count:0,rows:[]};
+  const vm = presentation.buildViewModel(payload);
+  assert.equal(vm.lifecycle_ok, false);
+  assert.equal(vm.server_phase, null);
+  assert.deepEqual(vm.lifecycle.permitted_actions, []);
+  for (const render of [presentation.renderSimpleLines,presentation.renderApprovedHours]) {
+    const html = render(vm);
+    assert.match(html, /data-weekly-source-read-only="1"/);
+    assert.match(html, /Hours paid/);
+    assert.match(html, /Total 0 hours/);
+    assert.doesNotMatch(html, /AUTHOR[I]?SED_NOT_PAID|<button|data-weekly-source-decision/);
+  }
+  lifecycle.informational.extra = true;
+  assert.doesNotMatch(presentation.renderSimpleLines(presentation.buildViewModel(payload)), /Total 0 hours/);
+});
+
+test('NEXT information preserves the independently granted Source editor, expense context and actual errors', () => {
+  // Wire-contract vectors, not a claim that Banking produced these responses.
+  for (const code of ['ROOT_ACTIVITY_NOT_INDEXED', 'SOURCE_INTEGRITY_INVALID']) {
+    const payload = clone(fixtures.clientSourceProtected);
+    const source = payload.weekly_source_presentation;
+    source.source_expense_policy = 'SOURCE_SUPPLIED';
+    const lifecycle = source.lifecycle;
+    lifecycle.ok = false; lifecycle.server_phase = null; lifecycle.permitted_actions = [];
+    lifecycle.errors = [{ code, detail: 'The existing server status is unavailable.' }];
+    lifecycle.informational = { contract: 'WEEKLY_SOURCE_OFFICE_NEXT_INFORMATION_V1', read_only: true,
+      approved_caption: 'Currently approved hours', paid_caption: 'Hours paid',
+      processing_caption: 'Payment processing hours' };
+    lifecycle.schedules.processing = { available: false, reason: 'ROOT_ACTIVITY_NOT_INDEXED',
+      reason_detail: 'Payment processing information is not available.', rows: [] };
+    const vm = presentation.buildViewModel(payload);
+    assert.equal(vm.manage_approved_hours_allowed, true);
+    assert.equal(vm.lifecycle_ok, false);
+    assert.deepEqual(vm.lifecycle.permitted_actions, []);
+    const simple = presentation.renderSimpleLines(vm);
+    const bulk = presentation.renderApprovedHours(vm);
+    for (const html of [simple, bulk]) {
+      assert.match(html, /Payment processing hours/);
+      assert.match(html, /data-weekly-source-expense="source-supplied"/);
+      assert.ok(html.includes(`data-weekly-source-error-code="${code}"`));
+      assert.match(html, /The existing server status is unavailable/);
+      assert.doesNotMatch(html, /data-weekly-source-decision-actions/);
+    }
+    if (code === 'ROOT_ACTIVITY_NOT_INDEXED') {
+      assert.match(simple, /data-weekly-source-manage-approved-hours="1"/);
+    } else {
+      assert.doesNotMatch(simple, /data-weekly-source-manage-approved-hours="1"/);
+    }
+    assert.match(simple, /Timesheet totals/);
+    assert.doesNotMatch(bulk, /data-weekly-source-manage-approved-hours="1"/);
+    source.action_state.manage_approved_hours_allowed = false;
+    source.action_state.manage_approved_hours = null;
+    assert.doesNotMatch(presentation.renderSimpleLines(presentation.buildViewModel(payload)),
+      /data-weekly-source-manage-approved-hours="1"/);
+  }
+});
+
+const nextProposalVector = () => {
+  // Existing genuine Source-captured proposal tuple; NEXT lifecycle/identity
+  // are explicitly changed wire vectors here, not a claim of native capture.
+  const states = JSON.parse(fs.readFileSync(path.resolve(__dirname,
+    '../fixtures/weekly-source-lifecycle-states.json'), 'utf8'));
+  const source = clone(states.cases['UI-008'].presentation);
+  source.root_timesheet_id = source.proposal.members[0].root_timesheet_id;
+  Object.assign(source.lifecycle, { ok: false, server_phase: null, ui_state: null,
+    heading: null, permitted_actions: [], errors: [{ code: 'ROOT_ACTIVITY_NOT_INDEXED',
+      detail: 'Payment activity is unavailable.' }],
+    informational: { contract: 'WEEKLY_SOURCE_OFFICE_NEXT_INFORMATION_V1', read_only: true,
+      approved_caption: 'Currently approved hours', paid_caption: 'Hours paid',
+      processing_caption: 'Payment processing hours' } });
+  return source;
+};
+
+test('NEXT activity unknown retains only an independently verified existing single-root Source decision', () => {
+  const source = nextProposalVector();
+  const vm = presentation.buildViewModelFromPresentation(source);
+  assert.equal(vm.independent_proposal_decision, true);
+  assert.equal(vm.lifecycle_ok, false);
+  assert.equal(vm.server_phase, null);
+  assert.deepEqual(vm.permitted_actions, []);
+  for (const render of [presentation.renderSimpleLines, presentation.renderApprovedHours]) {
+    const html = render(vm);
+    assert.match(html, /data-weekly-source-later-change="PROPOSED"/);
+    assert.match(html, /data-weekly-source-decision="APPROVE_UPDATED_HOURS"/);
+    assert.match(html, /data-weekly-source-decision="KEEP_CURRENTLY_APPROVED_HOURS"/);
+    assert.doesNotMatch(html, /LATER_CHANGE_PENDING_PAID|LATER_CHANGE_PENDING_UNPAID/);
+  }
+  const command = presentation.buildLaterChangeDecisionCommand(vm,
+    { actor_user_id: 'd1000000-0000-4000-8000-000000000001', decision: 'APPROVE_UPDATED_HOURS' });
+  assert.equal(command.endpoint, source.proposal.decision.endpoint);
+  assert.deepEqual(command.body, { ...source.proposal.decision.command_payload,
+    actor_user_id: 'd1000000-0000-4000-8000-000000000001', decision: 'APPROVE_UPDATED_HOURS' });
+});
+
+test('NEXT proposal exception refuses wrong roots, stale/invalid tuples and all non-informational errors', () => {
+  const other = 'fa000000-0000-4000-8000-000000000009';
+  const mutations = [
+    s => delete s.root_timesheet_id,
+    s => s.root_timesheet_id = other,
+    s => s.freshness = 'STALE',
+    s => s.lifecycle.errors = [],
+    s => s.lifecycle.errors.push({ code: 'SOURCE_INTEGRITY_INVALID' }),
+    s => s.lifecycle.informational.extra = true,
+    s => s.proposal.present = false,
+    s => s.proposal.request_digest_verified = false,
+    s => s.proposal.state = 'FROZEN_PENDING',
+    s => s.proposal.state = 'UNAVAILABLE',
+    s => s.proposal.bundle_kind = 'CROSS_CONTRACT_A_B',
+    s => s.proposal.member_count = 2,
+    s => s.proposal.primary_root_ordinal = 2,
+    s => s.proposal.members.push(null),
+    s => s.proposal.members[0].is_requested_root = false,
+    s => s.proposal.members[0].root_timesheet_id = other,
+    s => s.proposal.members[0].root_ordinal = 2,
+    s => s.proposal.decision.endpoint = '/api/other',
+    s => s.proposal.decision.owner = 'public.other_owner',
+    s => s.proposal.decision.schema_version = 'OTHER_SCHEMA',
+    s => s.proposal.decision.command_payload.schema_version = 'OTHER_SCHEMA',
+    s => s.proposal.decision.command_payload.root_timesheet_id = other,
+    s => s.proposal.decision.command_payload.decision_bundle_id = other,
+    s => s.proposal.decision.command_payload.bundle_revision = 2,
+    s => s.proposal.decision.command_payload.final_revision_id = other,
+    s => s.proposal.decision.command_payload.extra = true,
+    s => s.proposal.decision.actions.pop(),
+    s => s.proposal.decision.actions[1] = clone(s.proposal.decision.actions[0]),
+    s => s.proposal.decision.actions[0].reason_required = true,
+    s => s.proposal.decision.actions[0].action = 'AUTHORISE',
+    s => s.proposal.decision.actions[0].label = ''
+  ];
+  for (const mutate of mutations) {
+    const source = nextProposalVector(); mutate(source);
+    const vm = presentation.buildViewModelFromPresentation(source);
+    assert.notEqual(vm.independent_proposal_decision, true, mutate.toString());
+    for (const render of [presentation.renderSimpleLines, presentation.renderApprovedHours]) {
+      assert.doesNotMatch(render(vm), /data-weekly-source-decision="/, mutate.toString());
+    }
+    assert.throws(() => presentation.buildLaterChangeDecisionCommand(vm,
+      { actor_user_id: 'd1000000-0000-4000-8000-000000000001', decision: 'APPROVE_UPDATED_HOURS' }),
+    /no longer available/, mutate.toString());
+  }
+});
+
+test('NEXT Simple retains the existing read-only submitted comparison without putting it in Bulk', () => {
+  for (const name of ['clientSourceNoTimesheet', 'clientSourceProtected']) {
+    assert(fixtures[name], 'exact existing fixture must be exercised');
+    const source = clone(fixtures[name].weekly_source_presentation);
+    const next = nextProposalVector().lifecycle;
+    Object.assign(source.lifecycle, { ok: false, server_phase: null, ui_state: null,
+      heading: null, permitted_actions: [], errors: next.errors, informational: next.informational });
+    const vm = presentation.buildViewModelFromPresentation(source);
+    const html = presentation.renderSimpleLines(vm);
+    if (vm.comparison_state === 'NO_TIMESHEET') assert.match(html, /No submitted Timesheet available/);
+    if (vm.comparison_state === 'MISMATCH') assert.match(html, /Submitted hours needing attention/);
+    assert.doesNotMatch(presentation.renderApprovedHours(vm), /Submitted hours needing attention/);
+  }
+});
+
+test('NEXT displays only the genuine current read-only withdrawal refusal without adding a button or withdrawn state', () => {
+  const source = nextProposalVector();
+  source.proposal = { present: false, state: 'NONE' };
+  source.action_state.unauthorise_allowed = false;
+  source.action_state.unauthorise = { available: false, authorisation_state: 'AUTHORISED',
+    withdrawn: false, availability_source: 'WEEKLY_SOURCE_FIRST_AUTHORISATION_WITHDRAW_AVAILABLE_V1',
+    refusal_code: 'WEEKLY_SOURCE_UNAUTHORISE_BANKING_ACTIVE', refusal_nature: 'TEMPORARY',
+    permanent: false, retryable: true, refusal_message: 'Existing owner refusal.' };
+  const vm = presentation.buildViewModelFromPresentation(source);
+  assert.equal(vm.independent_withdrawal_refusal, true);
+  assert.equal(vm.withdrawn, false);
+  const html = presentation.renderApprovedHours(vm);
+  assert.match(html, /Existing owner refusal/);
+  assert.doesNotMatch(html, /data-weekly-source-withdrawn="1"|<button/);
+  for (const availability_source of ['OWNER_ABSENT', 'OWNER_ERROR']) {
+    const unavailable = clone(source);
+    Object.assign(unavailable.action_state.unauthorise, { availability_source,
+      refusal_code: 'WEEKLY_SOURCE_WITHDRAW_AVAILABILITY_UNAVAILABLE',
+      refusal_nature: 'INTEGRITY', permanent: false, refusal_message: null });
+    const refused = presentation.buildViewModelFromPresentation(unavailable);
+    assert.equal(refused.independent_withdrawal_refusal, true);
+    const refusedHtml = presentation.renderApprovedHours(refused);
+    assert.match(refusedHtml, /WEEKLY_SOURCE_WITHDRAW_AVAILABILITY_UNAVAILABLE/);
+    assert.doesNotMatch(refusedHtml, /Cancel it in Banking Pay first|no longer be unauthorised|<button/);
+  }
+  for (const mutate of [s => s.lifecycle.errors.push({code:'SOURCE_INTEGRITY_INVALID'}),
+    s => s.action_state.unauthorise.authorisation_state = 'NEVER_AUTHORISED',
+    s => s.action_state.unauthorise.available = true,
+    s => s.action_state.unauthorise.withdrawn = true,
+    s => s.action_state.unauthorise.availability_source = 'UNVERIFIED',
+    s => s.action_state.unauthorise.availability_source = 'OWNER_ERROR']) {
+    const invalid = clone(source); mutate(invalid);
+    const unsafe = presentation.buildViewModelFromPresentation(invalid);
+    assert.equal(unsafe.independent_withdrawal_refusal, false);
+    assert.doesNotMatch(presentation.renderApprovedHours(unsafe), /data-weekly-source-unauthorise-refusal=/);
+  }
+});
+
 test('the dormant foundation loads before the existing application owner', () => {
   const index = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8');
   const styleMarker = './css/weekly-source-presentation-v1.css?v=20260915-r1';
