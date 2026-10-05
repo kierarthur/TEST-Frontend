@@ -369,3 +369,32 @@ installation; it does not qualify later financial activation. Play still shows
 version28 as an unpublished Internal testing draft and version26 as published.
 The USB phone was checked again and still has Play-installed version24. No hosted
 Save, publication, phone update or complete deployment is claimed here.
+
+## 5 October: definite Local publisher refusal and same-request retry
+
+The independently reviewed existing Local admission guard refuses a new
+already-authorised change before completion when its real publisher is not
+ready. The Office client must not confuse that known refusal with a lost
+network response. Only that exact structured code or its exact HTTP400 Local
+completion RPC refusal now stops automatic unknown-outcome recovery and says
+the pay change was not saved, existing approved pay is unchanged and the
+request is retained for retry. Earlier preparation/key/payload are preserved;
+the next click retries the same original request, never creates another stage
+or a new financial decision. Unknown transport outcomes retain their original
+recovery path. No SQL, financial writer, Banking policy or activation changed.
+
+Unit/render checks pass31/31 (`9d0bcf` unit portion). Four focused browser
+cases pass (`c3d8c1` -> `73fa31`, exit0): existing transient-response recovery,
+existing first-prepare refusal, structured Local refusal and exact raw RPC
+Local refusal. Both new cases verify no automatic recovery or duplicate
+PREPARE, identical request/key on retry, no visible result-check button and
+modal closure on accepted success. These use controlled local Office/HTTP
+fixtures, not the actual hosted Kier Save. The initial CLI attempt could not
+load this worktree's missing Playwright package; the successful retry used the
+existing normal frontend package via process-local NODE_PATH, with no new
+dependency installation, auth setup or hosted mutation.
+
+Current targeted Weekly Source/staged Candidate/withdrawn history/Bulk Source
+units pass212/212, zero skips (`1ebc36`, exit0). Diff check passes. Live Play
+Internal28 remains unpublished with zero devices lost and one deobfuscation
+warning. The latest USB check reports no connected phone, not an update.

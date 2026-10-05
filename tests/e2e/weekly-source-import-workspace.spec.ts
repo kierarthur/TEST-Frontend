@@ -558,6 +558,62 @@ test('a definite protected-pay refusal stops Saving without offering a result-ch
   expect(requests.some((request: any) => request.action === 'RESOLVE_MANUAL_REVIEW')).toBe(false);
 });
 
+for (const refusalShape of ['structured', 'rpc'] as const) {
+  test(`Local publisher refusal keeps the exact retry without uncertain-save recovery (${refusalShape})`, async ({ page }) => {
+    await loadOfficeFoundation(page);
+    await page.evaluate((shape) => {
+      const win = window as any;
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+      const context = { contract: 'WEEKLY_PROTECTED_EDITOR_V1', allowed: true,
+        source_cycle_id: id(1), source_group_id: id(2), client_id: id(3), candidate_id: id(4),
+        work_event_id: id(5), shift_contract_id: id(6), work_date: '2026-09-08',
+        client: 'Example Trust', candidate: 'Kier Arthur', source_hours: '01:00–04:00 · 30 min break',
+        contracts: [{ id: id(6), label: 'Band 6', week_ending_date: '2026-09-13' }] };
+      const original = win.authFetch;
+      let approvalCalls = 0;
+      win.authFetch = async (url: string, options: any = {}) => {
+        if (!url.includes('/weekly-source/v1/commands')) return original(url, options);
+        const request = JSON.parse(options.body);
+        win.__requests.push(request);
+        if (request.action === 'PROTECTED_EDITOR_CONTEXT' || request.action === 'PREPARE_PROTECTED_EDITOR')
+          return { ok: true, json: async () => context };
+        if (request.action === 'APPROVE_PROTECTED_HOURS') {
+          approvalCalls += 1;
+          if (approvalCalls === 1) return { ok: false, status: 400, json: async () => ({
+            error_code: shape === 'structured' ? 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY' : 'WEEKLY_SOURCE_REQUEST_FAILED',
+            message: shape === 'structured' ? 'Payment processing is not ready.' :
+              'RPC weekly_exceptional_pay_complete_local_v1 failed 400: WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY'
+          }) };
+          return { ok: true, json: async () => ({ ok: true, outcome: 'PUBLISHED' }) };
+        }
+        throw new Error(`Unexpected command ${request.action}`);
+      };
+      win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Protect pay', payload: {
+        ...context, manual_review_id: id(7), start: '01:00', end: '04:00', break_minutes: 30
+      } });
+    }, refusalShape);
+    await expect(page.locator('[data-protected-field="contract_id"]')).toContainText('Band 6');
+    await page.locator('[data-protected-field="end"]').fill('05:00');
+    await page.locator('[data-protected-field="reason"]').fill('Worked an extra hour');
+    await page.locator('[data-protected-submit]').click();
+    await expect(page.getByRole('alert')).toContainText('pay change was not saved');
+    await expect(page.getByRole('alert')).toContainText('Existing approved pay is unchanged');
+    await expect(page.locator('[data-protected-submit]')).toHaveText('Protect pay');
+    await expect(page.getByText('Check saved result')).toHaveCount(0);
+    expect((await page.evaluate(() => (window as any).__requests))
+      .filter((request: any) => request.action === 'APPROVE_PROTECTED_HOURS')).toHaveLength(1);
+    await page.locator('[data-protected-submit]').click();
+    await expect(page.locator('[data-protected-editor]')).toHaveCount(0);
+    const requests = await page.evaluate(() => (window as any).__requests);
+    const approvals = requests.filter((request: any) => request.action === 'APPROVE_PROTECTED_HOURS');
+    expect(approvals).toHaveLength(2);
+    expect(approvals[1].payload).toEqual(approvals[0].payload);
+    expect(requests.filter((request: any) => request.action === 'PREPARE_PROTECTED_EDITOR')).toHaveLength(1);
+    expect(approvals.every((request: any) => !request.payload.recover_unknown_outcome)).toBe(true);
+    expect(requests.some((request: any) => request.action === 'RESOLVE_MANUAL_REVIEW')).toBe(false);
+  });
+}
+
 test('new protected shift interrupts only when entered times overlap recorded work', async ({ page }) => {
   await loadOfficeFoundation(page);
   await page.evaluate(() => {

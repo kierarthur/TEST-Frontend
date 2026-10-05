@@ -68,6 +68,8 @@
       && /weekly_source_target_managed_root_prepare_atomic_v1 failed 400:[\s\S]*WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH/i.test(asText(error?.message)))
     || ['WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED', 'WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED',
       'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID', 'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID'].includes(error?.code);
+  const localPublisherRefusal = (error) => error?.code === 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY'
+    || (error?.status === 400 && /weekly_exceptional_pay_complete_local_v1 failed 400:[\s\S]*\bWEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY\b/i.test(asText(error?.message)));
 
   async function saveProtectedOnce(pending) {
     const command = pending.action;
@@ -75,11 +77,20 @@
     if (!pending.attempted) {
       pending.attempted = true;
       try { return await workspaceApi().issueCommand(command, payload); }
-      catch (error) { if (knownProtectedRefusal(error)) throw error; }
+      catch (error) {
+        if (localPublisherRefusal(error)) {
+          // The completion transaction refused before accepting a decision.
+          // Earlier preparation remains: retry this exact request, not a new key.
+          pending.attempted = false;
+          throw error;
+        }
+        if (knownProtectedRefusal(error)) throw error;
+      }
     }
     try {
       return await workspaceApi().issueCommand(command, { ...payload, recover_unknown_outcome: true });
     } catch (error) {
+      if (localPublisherRefusal(error)) { pending.attempted = false; throw error; }
       if (error?.code !== 'C1_DURABLE_RECOVERY_NOT_REQUIRED') throw error;
       // The same Office command is safe to resume with its original key when
       // the durable owner proves that no publication requires recovery.
@@ -107,7 +118,8 @@
       WEEKLY_SOURCE_PREVIEW_STALE: 'The source information has changed. Close this window and refresh Queries before continuing.',
       WEEKLY_SOURCE_MANUAL_REVIEW_ALREADY_AUTHORISED: 'This Timesheet has already been authorised. Use the existing unauthorise control first if it is still permitted, then reopen this shift for review.',
       WEEKLY_SOURCE_MANUAL_REVIEW_SOURCE_STALE: 'A newer import has changed this shift. Refresh Queries to review the current source hours before deciding.',
-      WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH: 'The weekly Timesheet settings do not match this protected-pay request. No pay change was saved. Refresh the shift and try again.'
+      WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH: 'The weekly Timesheet settings do not match this protected-pay request. No pay change was saved. Refresh the shift and try again.',
+      WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY: 'This pay change was not saved because payment processing is not ready. Existing approved pay is unchanged. Your request has been kept for retry.'
     };
     const code = [...text.matchAll(/WEEKLY_(?:SOURCE|PROTECTED)_[A-Z0-9_]+/g)]
       .map((match) => match[0]).find((item) => guidance[item]);
@@ -999,7 +1011,9 @@
           state.error='No submitted result needs recovery. You can retry the saved request.';
         } else {
           if (knownProtectedRefusal(error)) state.pending = null;
-          state.error = plainMessage(error?.message, 'The save could not be confirmed. Retry the same decision.');
+          state.error = plainMessage(localPublisherRefusal(error)
+            ? 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY' : error?.message,
+            'The save could not be confirmed. Retry the same decision.');
         }
       } finally { state.busy = false; rerender(kind); }
     };
@@ -1132,6 +1146,8 @@
         if (knownProtectedRefusal(error)) state.pending = null;
         state.error = state.protectedSaved
           ? 'Protected pay was saved, but the screen did not refresh. Close and refresh Queries.'
+          : localPublisherRefusal(error)
+            ? plainMessage(error?.code === 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY' ? error.code : error?.message)
           : state.pending
             ? 'The save could not be confirmed. Select Protect pay again to retry this same request.'
             : plainMessage(error?.message, 'Recheck the selected contract and shift details.');

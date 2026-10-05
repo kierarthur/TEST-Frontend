@@ -50,6 +50,17 @@ test('saved rejected upload reasons remain explanatory', () => {
   assert.match(actions._plainMessage('WEEKLY_SOURCE_REPORT_SCOPE_NOT_OPEN'), /correction journey/);
 });
 
+test('a known Local publisher refusal is not described as an uncertain or accepted save', () => {
+  for (const value of ['WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY',
+    'RPC weekly_exceptional_pay_complete_local_v1 failed 400: WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY']) {
+    const message = actions._plainMessage(value);
+    assert.match(message, /pay change was not saved/);
+    assert.match(message, /Existing approved pay is unchanged/);
+    assert.match(message, /request has been kept for retry/);
+    assert.doesNotMatch(message, /could not be confirmed|RPC|WEEKLY_|saved.and.waiting/i);
+  }
+});
+
 test('missing-week reminder confirmation identifies the week and source-link errors give usable guidance', () => {
   const html = actions.renderCommandConfirmation({ message: 'Remind missing timesheet',
     context: { candidate: 'Kier Arthur', weeks: '20 Sep 2026' }, confirmation: 'Send reminder', action_label: 'Send reminder' }, {});
