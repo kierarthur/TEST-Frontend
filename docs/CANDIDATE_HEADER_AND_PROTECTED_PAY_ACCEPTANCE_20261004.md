@@ -398,3 +398,44 @@ Current targeted Weekly Source/staged Candidate/withdrawn history/Bulk Source
 units pass212/212, zero skips (`1ebc36`, exit0). Diff check passes. Live Play
 Internal28 remains unpublished with zero devices lost and one deobfuscation
 warning. The latest USB check reports no connected phone, not an update.
+
+## 6 October: actual Kier Save acceptance passed before Office publication
+
+Backend commit `76e10e544a38edb48a1fd235569df0c0122976a9` passed all149
+required SQL verifiers and the complete protected TEST contract in GitHub run
+37516170631. Its three changed routine definitions are installed. The coordinator
+correctly retained allfour existing27f Worker builds because their application
+inputs are byte-unchanged; fresh Cloudflare version/build inspection proved each
+active version's successful27f source, and normal TEST `/healthz` returned200.
+
+The actual isolated development browser used reviewed local Office assets and
+the real normal TEST API. It opened exactly Kier Arthur's manually queried
+8September2026 shift, displayed the original immutable pending first-approval
+request (01:00–05:00,30-minute break, WORKED AN EXTRA HOUR), and clicked Save
+once. PREPARE_PROTECTED_EDITOR and APPROVE_PROTECTED_HOURS both returned200/ok.
+The modal closed, the manual query disappeared, and exactly one green protected
+shift appeared with the requested hours and Protected pay—awaiting source.
+There was no AMEND request and no Check saved result button. Screenshot
+`C:/tmp/protected-resume-accepted-20261006.png` was visually inspected.
+
+A separate SELECT-only Arthur transaction-lab read proved the correct physical
+database: family WAITING_SOURCE, current generation present, original generation
+PUBLISHED, original run COMPLETE, original publication RETIRED, one completed
+local receipt and zero open manual queries. The before/after counts remained
+exactly one family event and six historical orchestration runs. No new run or
+event was created. This diagnostic itself rolled back and verified a fresh
+read-only connection; the durable change came only from the authorized browser
+Save, not diagnostic SQL.
+
+Real read-only Candidate header acceptance also passed: View disables the badge;
+Edit permits Active/Inactive rotation beside Currently Working, stages the hidden
+active value and enables Save. Rotating back restores the original staged value.
+Baljit's saved record was already Active. No Candidate Save or persistence attempt
+occurred, and all non-read diagnostic API traffic was blocked. Both red/green
+header screenshots were inspected. No extra status section is present.
+
+The complete relevant Office test selection passed218 tests with zero skips.
+The separately recorded full-suite baseline failures remain unchanged; no test
+or Banking policy was weakened. This proves the actual pre-first-authorisation
+Kier case, not a blanket claim about already-authorised financial activation,
+unpublished native builds, or the other chat's unfinished Banking implementation.

@@ -16,6 +16,42 @@ const { resolve } = require('node:path');
 const actions = require('../../js/weekly-source/workspace-actions.js');
 const fixtures = JSON.parse(readFileSync(resolve(__dirname, '../fixtures/weekly-source-workspace-actions-v1.json'), 'utf8'));
 
+test('a pending source-absent retry is not redirected to its own overlap; new work still is', async () => {
+  const { runInNewContext } = require('node:vm');
+  const editor = require('../../js/weekly-source/protected-shift-editor.js');
+  const source = readFileSync(resolve(__dirname, '../../js/weekly-source/workspace-actions.js'), 'utf8');
+  const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const original = { work_date: '2026-09-21', start: '09:00', end: '17:00', break_minutes: 30,
+    reason: 'Office confirmed', contract_id: id(4) };
+  async function opened(pending) {
+    const titles = [], timers = [];
+    const root = { module: { exports: {} }, CloudTMSProtectedShiftEditorV1: editor,
+      __modalStack: [], document: { querySelector: () => null },
+      setTimeout: callback => timers.push(callback),
+      CloudTMSWeeklySourceImportWorkspaceV1: { issueCommand: async action => {
+        assert.equal(action, 'PROTECTED_EDITOR_CONTEXT');
+        return { contract: 'WEEKLY_PROTECTED_EDITOR_V1', allowed: true,
+          client_id: id(2), candidate_id: id(3), work_date: original.work_date,
+          contracts: [{ id: id(4), label: 'Band 6' }], work_event_id: id(7),
+          pending_approval: pending, resume_request: pending ? original : null,
+          events: [{ work_event_id: id(7), start: original.start, end: original.end }] };
+      } },
+      showModal: (title, tabs, render, save, edit, wire, options) => {
+        titles.push(title);
+        root.__modalStack.push({ kind: options.kind, setTab: () => render() });
+        render();
+      } };
+    runInNewContext(source, root);
+    assert.equal(root.module.exports.handleAction({ label: 'Add protected shift',
+      payload: { ...original, client_id: id(2), candidate_id: id(3) } }), true);
+    await new Promise(resolve => setImmediate(resolve));
+    while (timers.length) timers.shift()();
+    return titles;
+  }
+  assert.deepEqual(await opened(true), ['Protect shift pay']);
+  assert.deepEqual(await opened(false), ['Protect shift pay', 'Shift hours overlap']);
+});
+
 test('signed-Timesheet manager action opens the exact established import review', () => {
   const importId = '11111111-1111-4111-8111-111111111111';
   const previous = global.CloudTmsImportReviewV1;

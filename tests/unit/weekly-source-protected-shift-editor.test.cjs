@@ -120,3 +120,42 @@ test('existing same-day shifts require an explicit identity and protect cannot s
   assert.throws(() => editor.request({ ...current, family_id: id(6), protected_state: 'WAIT' }, selected, 'protected-editor-test-004'), /already has protected pay/);
   assert.throws(() => editor.request({ ...current, shift_contract_id: id(5) }, selected, 'protected-editor-test-004'), /contract already linked/);
 });
+
+test('an unfinished first approval resumes the original factual request, key and cycle, not AMEND', () => {
+  const original = { ...values, contract_id: id(4), source_cycle_id: id(8), work_event_id: id(7),
+    client_id: id(2), candidate_id: id(3), week_ending_date: '2026-09-27',
+    evidence_timesheet_id: null, idempotency_key: 'original-protected-save-0001' };
+  const pending = { ...context, family_id: id(6), work_event_id: id(7), shift_contract_id: id(4),
+    protected_state: 'WAIT', pending_approval: true, resume_request: original };
+  const result = editor.request(pending, { ...values, contract_id: id(4) }, 'must-not-create-another-key', 'amend');
+  assert.equal(result.action, 'APPROVE_PROTECTED_HOURS');
+  assert.equal(result.payload.source_cycle_id, id(8));
+  assert.equal(result.payload.idempotency_key, original.idempotency_key);
+  assert.equal(result.payload.reason, values.reason);
+  assert.ok(!('family_id' in result.payload));
+  assert.throws(() => editor.request(pending, { ...values, end: '17:00' }, 'new-key-is-not-used', 'amend'), /original save/);
+  assert.throws(() => editor.request(pending, { ...values, reason: 'Different reason' }, 'new-key-is-not-used', 'amend'), /original save/);
+  assert.throws(() => editor.request(pending, values, 'new-key-is-not-used', 'reconcile'), /original protected-pay save/);
+  assert.throws(() => editor.request({ ...pending, resume_request: null }, values, 'new-key-is-not-used', 'amend'), /original protected-pay save/);
+  const html = editor.render(pending, original, { mode: 'amend' });
+  assert.match(html, /data-protected-field="end"[^>]+ disabled/);
+  assert.match(html, /data-protected-submit[^>]*>Save<\/button>/);
+  assert.doesNotMatch(html, /Check saved result/);
+  assert.match(editor.render({ ...pending, resume_request: null }, original), /data-protected-submit disabled/);
+});
+
+test('a source-absent approval retains its originally null work identity on exact retry', () => {
+  const original = { ...values, contract_id: id(4), source_cycle_id: id(8), work_event_id: null,
+    client_id: id(2), candidate_id: id(3), week_ending_date: '2026-09-27',
+    evidence_timesheet_id: null, idempotency_key: 'original-source-absent-0001' };
+  const result = editor.request({ ...context, work_event_id: id(7), family_id: id(6), pending_approval: true,
+    events: [{ work_event_id: id(7), start: values.start, end: values.end }],
+    resume_request: original }, original, 'unused-reference-0001', 'amend');
+  assert.equal(result.payload.work_event_id, null);
+  assert.equal(result.payload.evidence_timesheet_id, null);
+  assert.throws(() => editor.request({ ...context, work_event_id: id(7), family_id: id(6),
+    pending_approval: true, resume_request: original,
+    events: [{ work_event_id: id(7), start: values.start, end: values.end },
+      { work_event_id: id(9), start: values.start, end: values.end }] },
+  original, 'unused-reference-0001', 'amend'), /overlap an existing shift/);
+});

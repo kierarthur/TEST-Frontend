@@ -1060,6 +1060,10 @@
           candidate: asText(result.candidate) || context.candidate };
         values.contract_id = editor.contractChoice(context.contracts, context.shift_contract_id || values.contract_id);
         if (mode === 'amend' && context.current_schedule) Object.assign(values, context.current_schedule);
+        if (context.pending_approval && context.resume_request) {
+          const original = context.resume_request;
+          for (const field of ['work_date', 'start', 'end', 'break_minutes', 'reason', 'contract_id']) values[field] = original[field];
+        }
       } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
       finally { if (sequence === readSequence) { state.busy = false; rerender(kind); setTimeout(() => warnIfOverlapping(), 30); } }
     };
@@ -1071,7 +1075,9 @@
       : event.final_report_key ? 'Open in History'
       : event.finalise_source_cycle_id ? 'Open unfinalised report' : '';
     const warnIfOverlapping = (force = false) => {
-      if (mode !== 'approve' || initial.work_event_id || state.busy || state.pending || !currentChild(kind)) return false;
+      // An exact unfinished first save is a retry, not a proposed second shift.
+      // request() still validates its fingerprint-derived facts and other overlaps.
+      if (mode !== 'approve' || initial.work_event_id || context.pending_approval || state.busy || state.pending || !currentChild(kind)) return false;
       const overlaps = editor.overlappingEvents(context, values);
       if (!overlaps.length) { state.lastOverlapSignature = ''; return false; }
       const signature = [context.client_id, context.candidate_id, values.work_date,
@@ -1128,7 +1134,7 @@
         if (!state.pending && !state.protectedSaved) {
           const prepared = await workspaceApi().issueCommand('PREPARE_PROTECTED_EDITOR', selection());
           context = { ...context, ...prepared };
-          state.idempotencyKey = root.crypto.randomUUID();
+          state.idempotencyKey = context.resume_request?.idempotency_key || root.crypto.randomUUID();
           state.pending = editor.request(context, values, state.idempotencyKey, mode);
         }
         if (!state.protectedSaved) {

@@ -78,6 +78,29 @@
   // signature claims and imported facts are never copied from form state.
   function request(context, values, idempotencyKey, mode = 'approve') {
     if (!ACTIONS[mode] || context?.allowed !== true) throw new Error('This action is not currently permitted. Recheck first.');
+    if (context.pending_approval === true) {
+      const original = context.resume_request;
+      if (!original || !['approve', 'amend'].includes(mode)) {
+        throw new Error('The original protected-pay save must finish before this shift can be changed.');
+      }
+      // The server proves this factual request against the retained fingerprint.
+      // Never silently discard edits or invent a new key for its retry.
+      for (const field of ['work_date', 'start', 'end', 'break_minutes', 'reason', 'contract_id']) {
+        const selected = field === 'contract_id' ? contractChoice(context.contracts, values[field]) : values[field];
+        if (text(selected) !== text(original[field])) throw new Error('Complete the original save before changing its details.');
+      }
+      if (original.client_id !== context.client_id || original.candidate_id !== context.candidate_id
+          || original.work_date !== context.work_date
+          || (original.work_event_id && original.work_event_id !== context.work_event_id)
+          || context.contracts?.find(item => item.id === original.contract_id)?.week_ending_date !== original.week_ending_date) {
+        throw new Error('The original protected-pay request changed. Recheck first.');
+      }
+      return request({ ...context, pending_approval: false, family_id: null, protected_state: null,
+        source_cycle_id: original.source_cycle_id, work_event_id: original.work_event_id,
+        events: (context.events || []).filter(item => item.work_event_id !== context.work_event_id),
+        evidence_timesheet_id: original.evidence_timesheet_id },
+      { ...values, shift_choice: original.work_event_id || 'NEW' }, original.idempotency_key, 'approve');
+    }
     const reason = text(values.reason);
     if (!reason || reason.length > 1000) throw new Error('Enter a reason of up to 1,000 characters.');
     if (text(idempotencyKey).length < 16 || text(idempotencyKey).length > 200) throw new Error('The action reference is unavailable.');
@@ -138,7 +161,7 @@
       ? (context.events || []).find((item) => item.work_event_id === values.shift_choice) : null;
     const shiftChoices = chosenExistingShift
       ? `<p><strong>Existing shift:</strong> ${escape(chosenExistingShift.source_hours || chosenExistingShift.candidate_hours || `${chosenExistingShift.start || ''}–${chosenExistingShift.end || ''} · ${chosenExistingShift.break_minutes ?? ''} min break`)}</p>` : '';
-    const locked = state.busy || !!state.pending || !!state.protectedSaved;
+    const locked = state.busy || !!state.pending || !!state.protectedSaved || context.pending_approval === true;
     const disabledLock = ' disabled data-ctms-intentional-lock="1"';
     const input = (label, name, type, extra = '') => `<label>${label}<input data-protected-field="${name}" type="${type}" value="${escape(values[name])}" ${extra}${locked ? disabledLock : ''}></label>`;
     return `<div class="ws-child" data-protected-editor><div class="ws-child-context"><div><span>Client</span><strong>${escape(context.client || 'Choose client')}</strong>${state.lockedIdentity?'':`<button type="button" class="btn btn-outline" data-protected-choose="client"${locked || state.mode === 'amend' ? disabledLock : ''}>Choose client</button>`}</div><div><span>Candidate</span><strong>${escape(context.candidate || 'Choose candidate')}</strong>${state.lockedIdentity?'':`<button type="button" class="btn btn-outline" data-protected-choose="candidate"${locked || state.mode === 'amend' ? disabledLock : ''}>Choose candidate</button>`}</div></div>
@@ -147,7 +170,8 @@
       <div class="ws-child-context"><div><span>Candidate submission</span><strong>${escape(context.candidate_hours || 'Choose the client, candidate and date to check')}</strong></div><div><span>Imported hours</span><strong>${escape(context.source_hours || 'Choose the client, candidate and date to check')}</strong></div></div>
       <p>This changes the candidate’s pay position. It does not change the client source or invoice.</p>
       ${state.error ? `<div class="ws-notice ws-notice--danger" role="alert">${escape(state.error)}</div>` : ''}
-      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-cancel${state.busy ? disabledLock : ''}>Cancel</button><button type="button" class="btn primary" data-protected-submit${state.busy || context.allowed !== true ? disabledLock : ''}>${state.busy ? 'Saving…' : state.protectedSaved ? 'Refresh result' : state.mode === 'amend' ? 'Change protected shift' : 'Protect pay'}</button></div></div>`;
+      ${context.pending_approval ? `<p role="status">${context.resume_request ? 'Complete the original save before changing these details.' : 'The original protected-pay request could not be verified. No new protection has been created.'}</p>` : ''}
+      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-cancel${state.busy ? disabledLock : ''}>Cancel</button><button type="button" class="btn primary" data-protected-submit${state.busy || context.allowed !== true || (context.pending_approval && !context.resume_request) ? disabledLock : ''}>${state.busy ? 'Saving…' : state.protectedSaved ? 'Refresh result' : context.pending_approval ? 'Save' : state.mode === 'amend' ? 'Change protected shift' : 'Protect pay'}</button></div></div>`;
   }
   function renderReview(context = {}, values = {}, state = {}) {
     const proposal = context.final_source_proposal;
