@@ -468,3 +468,23 @@ Publication uses the managed TEST coordinator with fresh four-Worker connection
 evidence and backend `2c28ded3db4088f57f456af6c04d7aa1897188cc` (unchanged).
 The exact deployment receipt and served-asset acceptance are recorded in the
 existing backend worktree's ignored `.codex-tmp` evidence after publication.
+
+## 7 October: green protected-review readiness
+
+Office-only presentation amendment on `948a9a5`: enabled protected review actions
+are green only for server-confirmed reconciliation readiness. Both Review protected
+pay and Review and reconcile are covered in combined and single-scope lists.
+Waiting-source reviews stay hidden; disabled/stale reviews and other actions do
+not acquire the readiness colour. Busy combined views do not advertise readiness.
+Exact action indexes, payloads, eligibility and financial guards are unchanged.
+Green/white text has accessible contrast and keyboard focus has a visible outline.
+Single-scope protected actions stack within their cell rather than clipping.
+
+Verification: 212 Weekly Source units and all 60 import-workspace browser tests
+passed. The two readiness browser cases were rerun after the final cell-sizing
+amendment and passed; their desktop/390px screenshots were visually inspected.
+Browser fixtures exercise ready/disabled/waiting rows without changing hosted
+source or pay data. No backend, database definition or native app changes.
+Publication follows the managed TEST coordinator, with fresh four-Worker proof;
+its receipt and served-asset acceptance are retained in the backend worktree's
+ignored `.codex-tmp/protected-ready-green-acceptance-20261007.json` after release.

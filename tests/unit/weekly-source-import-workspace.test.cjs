@@ -19,8 +19,19 @@ test('single-scope protected rows show review only for a server-ready final comp
       ] }],total_count:1 } } });
     const html=workspace.renderWorkspace(model,'queries',{});
     assert.match(html,/Change protected shift/);
-    if(requires_attention===true)assert.match(html,/Review protected pay/);
+    if(requires_attention===true)assert.match(html,/class="btn ws-protected-review-ready ws-row-action"[^>]*>Review protected pay/);
     else assert.doesNotMatch(html,/Review protected pay/);
+    assert.match(html,/class="btn btn-outline ws-row-action"[^>]*>Change protected shift/);
+  }
+});
+test('single-scope disabled or stale protected comparisons do not advertise green readiness', () => {
+  for (const [stale,enabled] of [[false,false],[true,true]]) {
+    const model=workspace.normaliseWorkspace({queries:{protected_shifts:{stale,rows:[{
+      row_key:'protected',requires_attention:true,actions:[{label:'Review protected pay',enabled}]
+    }],total_count:1}}});
+    const html=workspace.renderWorkspace(model,'queries',{});
+    assert.match(html,/Review protected pay/);
+    assert.doesNotMatch(html,/ws-protected-review-ready/);
   }
 });
 

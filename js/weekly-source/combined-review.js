@@ -105,7 +105,7 @@
       }
       const buttons=a(actions).map((action,index)=>filter(action)
         && !(model.section==='protected' && ['Review protected pay','Review and reconcile'].includes(action.label) && row.requires_attention!==true)
-        ?`<button class="btn btn-outline" data-wsr-row="${e(row.combined_key)}"${childIndex===undefined?'':` data-wsr-child="${childIndex}"`} data-wsr-action="${index}"${action.enabled===false?' disabled':''}>${e(action.label)}</button>`:'').join('');
+        ?`<button class="btn ${model.section==='protected' && row.requires_attention===true && action.enabled!==false && !state.busy && ['Review protected pay','Review and reconcile'].includes(action.label)?'ws-protected-review-ready':'btn-outline'}" data-wsr-row="${e(row.combined_key)}"${childIndex===undefined?'':` data-wsr-child="${childIndex}"`} data-wsr-action="${index}"${action.enabled===false?' disabled':''}>${e(action.label)}</button>`:'').join('');
       const accept=row.accept_system_hours_action;
       const canAccept=childIndex!==undefined && accept?.enabled===true
         && a(accept.payload?.selection?.incident_ids).includes(row.children?.[childIndex]?.incident_id);

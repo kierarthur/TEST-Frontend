@@ -15,8 +15,20 @@ test('protected review needs server-confirmed attention and retains original act
     if (requires_attention===true) {
       assert.match(html,/data-wsr-action="0">Review protected pay/);
       assert.match(html,/data-wsr-action="2">Review and reconcile/);
+      assert.equal((html.match(/class="btn ws-protected-review-ready"/g)||[]).length,2);
+      assert.match(html,/class="btn btn-outline"[^>]*data-wsr-action="1">Change protected shift/);
     } else assert.doesNotMatch(html,/Review protected pay|Review and reconcile/);
   }
+});
+test('protected review readiness colour never applies to disabled, busy or unrelated actions',()=>{
+  const row={combined_key:'protected',requires_attention:true,actions:[
+    {label:'Review protected pay',enabled:false},{label:'Review and reconcile',enabled:true},
+    {label:'Change protected shift',enabled:true}]};
+  const html=view.render({...model,section:'protected',rows:[row]});
+  assert.match(html,/class="btn btn-outline"[^>]*data-wsr-action="0" disabled>Review protected pay/);
+  assert.equal((html.match(/ws-protected-review-ready/g)||[]).length,1);
+  assert.doesNotMatch(view.render({...model,section:'protected',rows:[row]},{busy:true}),/ws-protected-review-ready/);
+  assert.doesNotMatch(view.render({...model,section:'checks',rows:[row]}),/ws-protected-review-ready/);
 });
 test('attention uses the complete server census, not visible rows or tab totals',()=>{
   const html=view.render({...model,counts:{questions:20,checks:10,protected:40},rows:[],

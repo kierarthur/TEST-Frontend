@@ -143,6 +143,28 @@
 .ws-grid thead th:has(input[type="checkbox"]), .ws-inner-grid thead th:has(input[type="checkbox"]) { z-index: 6; left: 0; width: 48px; min-width: 48px; text-align: center; }
 .ws-actions { white-space: nowrap; }
 .ws-actions .btn { margin: 2px 4px 2px 0; }
+#modal .ws-actions .btn.ws-protected-review-ready:not(:disabled) {
+  background: #166534;
+  border-color: #22c55e;
+  color: #fff;
+}
+#modal .ws-actions .btn.ws-protected-review-ready:not(:disabled):hover { background: #14532d; }
+#modal .ws-actions .btn.ws-protected-review-ready:focus-visible {
+  outline: 2px solid #86efac;
+  outline-offset: 3px;
+}
+.ws-protected-grid td.ws-actions { white-space: normal; }
+.ws-protected-grid td.ws-actions .btn {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
+  margin: 2px 0;
+}
+.ws-protected-grid .ws-action-hint { width: 100%; }
 .ws-source-finalise-grid th:last-child { width: 162px; }
 .ws-source-finalise-grid td.ws-actions > .btn {
   display: block;

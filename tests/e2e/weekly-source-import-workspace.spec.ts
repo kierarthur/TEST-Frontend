@@ -69,6 +69,22 @@ test('Queries attention summary keeps three tabs, counts genuine decisions and o
   await expect(page.locator('[data-wsr-outreach]')).toHaveCount(2);
   await summary.getByRole('button',{name:'Protected shifts ready to reconcile 1'}).click();
   await expect(page.getByRole('button',{name:'Review and reconcile',exact:true})).toBeVisible();
+  const readyReview=page.getByRole('button',{name:'Review and reconcile',exact:true});
+  await expect(readyReview).toHaveClass(/ws-protected-review-ready/);
+  await expect(readyReview).toHaveCSS('background-color','rgb(22, 101, 52)');
+  await expect(readyReview).toHaveCSS('color','rgb(255, 255, 255)');
+  await readyReview.focus();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  await expect(readyReview).toHaveCSS('outline-style','solid');
+  for(const width of [1700,390]) {
+    await page.setViewportSize({width,height:1000});
+    await expect(readyReview).toBeVisible();
+    expect(await readyReview.evaluate(element=>{
+      const rect=element.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth;
+    })).toBe(true);
+    await page.locator('#modal').screenshot({path:testInfo.outputPath(`protected-review-ready-${width}.png`)});
+  }
   await expect(page.getByText('Protected pay — awaiting source',{exact:true})).toHaveCount(0);
   const requests=await page.evaluate(()=>(window as any).__requests);
   expect(requests.at(-1).payload.section).toBe('protected');
@@ -359,6 +375,37 @@ async function loadOfficeFoundation(page: import('@playwright/test').Page) {
   await page.waitForFunction(()=>typeof (window as any).CloudTMSWeeklySourceImportWorkspaceV1?.open==='function');
   await page.evaluate(()=>{(window as any).__requests=[];});
 }
+
+test('single-scope protected reviews are green only for ready enabled comparisons', async ({page},testInfo) => {
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any;
+    const row=(key:string,requires_attention:boolean,enabled:boolean)=>({
+      row_key:key,candidate:key,client:'Example Trust',day_date:'8 Sep 2026',
+      protected_hours:'09:00–17:00 · 30 min break',requires_attention,
+      status:{text:requires_attention?'Ready to reconcile':'Awaiting source'},
+      actions:[{label:'Change protected shift',enabled:true},{label:'Review protected pay',enabled}]
+    });
+    win.authFetch=async()=>({ok:true,json:async()=>({...fixture,combined_source_workspace:false,
+      queries:{...fixture.queries,protected_shifts:{rows:[
+        row('Ready Worker',true,true),row('Disabled Worker',true,false),row('Waiting Worker',false,true)
+      ],total_count:3}}})});
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  const reviews=page.getByRole('button',{name:'Review protected pay',exact:true});
+  await expect(reviews).toHaveCount(2);
+  await expect(reviews.nth(0)).toHaveCSS('background-color','rgb(22, 101, 52)');
+  await expect(reviews.nth(0)).toHaveCSS('color','rgb(255, 255, 255)');
+  await expect(reviews.nth(1)).toBeDisabled();
+  await expect(reviews.nth(1)).not.toHaveClass(/ws-protected-review-ready/);
+  await expect(page.getByRole('button',{name:'Change protected shift',exact:true}).first()).not.toHaveClass(/ws-protected-review-ready/);
+  expect(await reviews.nth(0).evaluate(element=>{
+    const cell=element.closest('td')!.getBoundingClientRect(),rect=element.getBoundingClientRect();
+    return rect.left>=cell.left&&rect.right<=cell.right&&element.scrollWidth<=element.clientWidth;
+  })).toBe(true);
+  await page.locator('#modal').screenshot({path:testInfo.outputPath('single-protected-review-ready.png')});
+  expect(externalRequests(page)).toEqual([]);
+});
 
 test('manual query retry retains one command and explains existing payments are unchanged', async ({page}) => {
   await loadOfficeFoundation(page);

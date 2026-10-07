@@ -365,13 +365,14 @@
     }).filter(Boolean);
   }
 
-  function renderActions(actions, stale = false, scopeKey = '') {
+  function renderActions(actions, stale = false, scopeKey = '', protectedReviewReady = false) {
     return actions.map((action, index) => {
       const mutation = !!action.command || action.kind === 'MUTATION' || MUTATING_ACTIONS.has(action.label);
       const enabled = action.enabled && !(stale && mutation);
       const reason = stale && mutation ? 'This information has changed. Recheck before continuing.' : action.reason;
       const reasonId = reason ? safeKey(`${scopeKey || 'action'}-${action.label}-${index + 1}-reason`) : '';
-      const button = `<button type="button" class="btn btn-outline ws-row-action" data-ws-action="${escapeHtml(action.label)}" data-ws-kind="${escapeHtml(action.kind)}" data-ws-command="${escapeHtml(action.command)}" data-ws-payload="${escapeHtml(JSON.stringify(action.payload))}" data-ws-context="${escapeHtml(JSON.stringify(action.context))}"${enabled ? '' : ' disabled'}${reason ? ` aria-describedby="${escapeHtml(reasonId)}"` : ''}>${escapeHtml(action.label)}</button>`;
+      const ready = protectedReviewReady && !stale && enabled && ['Review protected pay','Review and reconcile'].includes(action.label);
+      const button = `<button type="button" class="btn ${ready ? 'ws-protected-review-ready' : 'btn-outline'} ws-row-action" data-ws-action="${escapeHtml(action.label)}" data-ws-kind="${escapeHtml(action.kind)}" data-ws-command="${escapeHtml(action.command)}" data-ws-payload="${escapeHtml(JSON.stringify(action.payload))}" data-ws-context="${escapeHtml(JSON.stringify(action.context))}"${enabled ? '' : ' disabled'}${reason ? ` aria-describedby="${escapeHtml(reasonId)}"` : ''}>${escapeHtml(action.label)}</button>`;
       return reason ? `<span class="ws-action-hint" title="${escapeHtml(reason)}" tabindex="0">${button}<span id="${escapeHtml(reasonId)}" class="sr-only">${escapeHtml(reason)}</span></span>` : button;
     }).join('');
   }
@@ -691,7 +692,7 @@
     const addProtected = workspace.queries.protected_pay_enabled
       ? `<div class="ws-child-actions"><button type="button" class="btn btn-outline ws-row-action" data-ws-action="Add protected shift" data-ws-payload="${escapeHtml(JSON.stringify({ source_group_id: workspace.selected.source_group_id, client_id: workspace.selected.client_id }))}">Add protected shift</button></div>` : '';
     const protectedRows = workspace.queries.protected_shifts;
-    const protectedSection = protectedRows.rows.length ? `<section><h3>Protected shifts (${protectedRows.total_count})</h3><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid"><thead><tr><th>Candidate</th><th>Client</th><th>Day/date</th><th>Protected hours</th><th>Status</th><th>Actions</th></tr></thead><tbody>${protectedRows.rows.map(row => `<tr>${['candidate','client','day_date','protected_hours'].map(key => `<td>${escapeHtml(row[key] || '—')}</td>`).join('')}<td>${renderStatus(row.status)}</td><td class="ws-actions">${renderActions(normaliseActions(row.actions, ACTIONS.shifts).filter(action => !['Review protected pay','Review and reconcile'].includes(action.label) || row.requires_attention === true), protectedRows.stale, row.row_key)}</td></tr>`).join('')}</tbody></table></div></section>` : '';
+    const protectedSection = protectedRows.rows.length ? `<section><h3>Protected shifts (${protectedRows.total_count})</h3><div class="ws-inner-scroll"><table class="grid mini ws-inner-grid ws-protected-grid"><thead><tr><th>Candidate</th><th>Client</th><th>Day/date</th><th>Protected hours</th><th>Status</th><th>Actions</th></tr></thead><tbody>${protectedRows.rows.map(row => `<tr>${['candidate','client','day_date','protected_hours'].map(key => `<td>${escapeHtml(row[key] || '—')}</td>`).join('')}<td>${renderStatus(row.status)}</td><td class="ws-actions">${renderActions(normaliseActions(row.actions, ACTIONS.shifts).filter(action => !['Review protected pay','Review and reconcile'].includes(action.label) || row.requires_attention === true), protectedRows.stale, row.row_key, row.requires_attention === true)}</td></tr>`).join('')}</tbody></table></div></section>` : '';
     return `${staleNotice}${paid}${addProtected}${protectedSection}${officeChecks}<h3>Hours questions</h3>
       <div class="ws-query-controls">
         <details class="ws-query-filter-menu" open>
