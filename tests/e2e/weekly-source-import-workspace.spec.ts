@@ -420,6 +420,68 @@ test('protected shift editor uses the real Office modal at desktop and phone wid
   expect(await page.evaluate(()=>(window as any).__requests.map((r:any)=>r.action))).toEqual(['PROTECTED_EDITOR_CONTEXT']);
 });
 
+test('protected reasons are visible in both real Office modals, with no waiting-only decision', async ({ page }, testInfo) => {
+  await loadOfficeFoundation(page);
+  await page.evaluate(() => {
+    const win = window as any, original = win.authFetch;
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    win.__protectedContext = { contract: 'WEEKLY_PROTECTED_EDITOR_V1', allowed: true,
+      client: 'CloudTMS Stage 8 NHSP Test Trust', candidate: 'Kier Arthur',
+      client_id: id(1), candidate_id: id(2), source_group_id: id(3), source_cycle_id: id(4),
+      work_event_id: id(5), family_id: id(6), expected_family_bound_version: 2,
+      work_date: '2026-09-08', current_schedule: { start: '01:00', end: '05:00', break_minutes: 35 },
+      source_hours: '01:00–04:00 · 30 min break', candidate_hours: 'No candidate hours recorded for this shift',
+      contracts: [{ id: id(7), label: 'CPN120 · Band 6 · Stage 8 Test Site · 7 Sep – 13 Sep 2026' }],
+      can_reconcile: false, history: [
+        { sequence: 1, at: '2026-09-01T22:00:00Z', by: 'Kier Arthur', reason: 'Missing shift — candidate confirmed these hours.',
+          state: 'WAIT', before: null, after: { start: '01:00', end: '04:00', break_minutes: 30 } },
+        { sequence: 2, at: '2026-09-09T09:15:00Z', by: 'Office colleague', reason: 'Confirmed finish at 05:00.\nBreak corrected to 35 minutes.',
+          state: 'WAIT', before: { start: '01:00', end: '04:00', break_minutes: 30 },
+          after: { start: '01:00', end: '05:00', break_minutes: 35 } }
+      ] };
+    win.authFetch = async (url: string, options: any) => {
+      if (!url.includes('/weekly-source/v1/commands')) return original(url, options);
+      const request = JSON.parse(options.body); win.__requests.push(request);
+      if (request.action !== 'PROTECTED_EDITOR_CONTEXT') throw new Error('Read-only history test must not save');
+      return { ok: true, json: async () => win.__protectedContext };
+    };
+  });
+  for (const label of ['Change protected shift', 'Review protected pay']) {
+    await page.evaluate(label => {
+      const win = window as any;
+      win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label, payload: win.__protectedContext });
+    }, label);
+    await expect(page.locator('.ws-protected-history h3')).toHaveText('Reasons and history (2)');
+    await expect(page.locator('.ws-protected-history li').first()).toContainText('Confirmed finish at 05:00.');
+    await expect(page.locator('.ws-protected-history li').last()).toContainText('Kier Arthur');
+    await expect(page.locator('.ws-protected-history li').last()).toContainText('1 Sept 2026, 23:00 (UK)');
+    await expect(page.locator('.ws-protected-history-meta time').first()).toHaveCSS('color', 'rgb(184, 199, 220)');
+    if (label.startsWith('Change')) await expect(page.locator('[data-protected-field="reason"]')).toHaveValue('');
+    else {
+      await expect(page.locator('[data-protected-review-action]')).toHaveCount(0);
+      await expect(page.locator('[data-protected-review-reason]')).toHaveCount(0);
+    }
+    for (const width of [390, 1700]) {
+      await page.setViewportSize({ width, height: 1000 });
+      expect(await page.locator('#modalBody').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      await page.locator('.ws-protected-history').scrollIntoViewIfNeeded();
+      await page.locator('#modal').screenshot({ path: testInfo.outputPath(`${label.startsWith('Change') ? 'change' : 'waiting-review'}-history-${width}.png`) });
+    }
+    await page.locator(label.startsWith('Change') ? '[data-protected-cancel]' : '[data-protected-review-close]').click();
+  }
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__protectedContext.can_reconcile = true;
+    win.__protectedContext.final_source_proposal = { source_present: false, source_minutes: 0, source_segments: [] };
+    win.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({ label: 'Review and reconcile', payload: win.__protectedContext });
+  });
+  await expect(page.getByText('The final source records no worked hours for this shift.')).toBeVisible();
+  await expect(page.locator('[data-protected-review-action="reconcile"]')).toBeEnabled();
+  await page.locator('#modal').screenshot({ path: testInfo.outputPath('final-zero-review-history.png') });
+  expect(await page.evaluate(() => (window as any).__requests.map((r: any) => r.action)))
+    .toEqual(['PROTECTED_EDITOR_CONTEXT', 'PROTECTED_EDITOR_CONTEXT', 'PROTECTED_EDITOR_CONTEXT']);
+});
+
 test('new protected shift retains client and candidate selected through the real picker Apply buttons', async ({ page }) => {
   await loadOfficeFoundation(page);
   const clientId = '11111111-1111-4111-8111-111111111111';

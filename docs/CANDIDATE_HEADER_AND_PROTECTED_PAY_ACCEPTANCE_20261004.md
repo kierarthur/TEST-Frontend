@@ -439,3 +439,32 @@ The separately recorded full-suite baseline failures remain unchanged; no test
 or Banking policy was weakened. This proves the actual pre-first-authorisation
 Kier case, not a blanket claim about already-authorised financial activation,
 unpublished native builds, or the other chat's unfinished Banking implementation.
+
+## 7 October: protected-pay reasons and useful review actions
+
+Office-only amendment based on main `21e83df4a25d426e35b0230ab7a7e2763648075a`.
+Both Change protected shift and Review protected pay now visibly display the
+existing immutable, work-event-scoped Office history: full reason, recorded actor,
+UK date/time, status and before/after schedule. Entries are newest first, escaped,
+multiline-preserving and bounded to a keyboard-scrollable panel. Changing the
+selected identity clears stale history before the next read.
+
+Both combined and single-scope protected lists suppress review until the server
+marks the shift as requiring reconciliation. Change protected shift remains
+available while waiting. A direct/stale review with no final source offers Close
+only; a retained uncertain decision remains exactly retryable. A finalised source
+recording zero worked hours remains a valid comparison and is not hidden. Source
+hash/version checks, mutation owners, payment policy and invoices are unchanged.
+There is no database definition change or native Android/iOS rebuild.
+
+Verification: all 210 Weekly Source unit checks pass. All 59 real Office-shell
+import-workspace browser checks pass; desktop and 390px screenshots were visually
+inspected. Timestamp contrast was corrected after visual inspection and the exact
+history browser test rerun successfully. The broad suite is 1612/1626 passing;
+the same 14 unrelated Banking Pay/cache/evidence failures were independently
+reproduced against the unchanged pre-amendment source. No tests were weakened.
+
+Publication uses the managed TEST coordinator with fresh four-Worker connection
+evidence and backend `2c28ded3db4088f57f456af6c04d7aa1897188cc` (unchanged).
+The exact deployment receipt and served-asset acceptance are recorded in the
+existing backend worktree's ignored `.codex-tmp` evidence after publication.

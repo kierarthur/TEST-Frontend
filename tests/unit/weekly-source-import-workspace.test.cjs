@@ -11,6 +11,19 @@ const WORKSPACE_VERSION = 'c'.repeat(64);
 const ACCEPT_PROOF = 'd'.repeat(64);
 const INCIDENT_ONE = '66666666-6666-4666-8666-666666666666';
 
+test('single-scope protected rows show review only for a server-ready final comparison', () => {
+  for (const requires_attention of [false, undefined, true]) {
+    const model=workspace.normaliseWorkspace({ queries: { protected_shifts: { rows: [{
+      row_key:'protected',candidate:'Worker',requires_attention,actions:[
+        {label:'Change protected shift',enabled:true},{label:'Review protected pay',enabled:true}
+      ] }],total_count:1 } } });
+    const html=workspace.renderWorkspace(model,'queries',{});
+    assert.match(html,/Change protected shift/);
+    if(requires_attention===true)assert.match(html,/Review protected pay/);
+    else assert.doesNotMatch(html,/Review protected pay/);
+  }
+});
+
 test('workspace requests omit absent optional filters instead of serialising null UUIDs', () => {
   const params = new URLSearchParams(workspace._test.queryFor('queries', {
     source_group_id: '11111111-1111-4111-8111-111111111111',

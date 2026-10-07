@@ -6,6 +6,18 @@ const model={contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'
     source:'NHSP',period:'27 Sep 2026',day_date:'21 Sep 2026',system_hours:'09:00–17:00 · 30 min break',
     status:{text:'Needs action'},problem:'Choose the correct candidate.',
     actions:[{label:'Link candidate',enabled:true},{label:'Unavailable',enabled:false}]}]};
+test('protected review needs server-confirmed attention and retains original action indexes',()=>{
+  for (const requires_attention of [false, undefined, true]) {
+    const html=view.render({...model,section:'protected',rows:[{combined_key:'protected',requires_attention,
+      actions:[{label:'Review protected pay',enabled:true},{label:'Change protected shift',enabled:true},
+        {label:'Review and reconcile',enabled:true}]}]});
+    assert.match(html,/data-wsr-action="1">Change protected shift/);
+    if (requires_attention===true) {
+      assert.match(html,/data-wsr-action="0">Review protected pay/);
+      assert.match(html,/data-wsr-action="2">Review and reconcile/);
+    } else assert.doesNotMatch(html,/Review protected pay|Review and reconcile/);
+  }
+});
 test('attention uses the complete server census, not visible rows or tab totals',()=>{
   const html=view.render({...model,counts:{questions:20,checks:10,protected:40},rows:[],
     attention:{complete:true,missing_source:1,questions:1,checks:1,protected:3,total:6}});

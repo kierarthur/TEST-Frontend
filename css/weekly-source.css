@@ -737,6 +737,17 @@
 [data-protected-editor] .ws-child-fields label:has([data-protected-field="contract_id"]) { grid-column: span 2; }
 [data-protected-editor] .ws-child-fields label:has(textarea) { grid-column: 1 / -1; }
 [data-protected-editor] .ws-child-context button { align-self: flex-start; margin-top: 6px; }
+.ws-protected-history { border: 1px solid var(--line, #334155); border-radius: 10px; padding: 14px; min-width: 0; }
+.ws-protected-history h3 { margin: 0 0 10px; font-size: 1rem; }
+.ws-protected-history-scroll { max-height: 260px; overflow: auto; overscroll-behavior: contain; }
+.ws-protected-history-scroll:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.ws-protected-history ol { list-style: none; padding: 0; margin: 0; }
+.ws-protected-history li { padding: 12px 0; overflow-wrap: anywhere; }
+.ws-protected-history li:first-child { padding-top: 0; }
+.ws-protected-history li + li { border-top: 1px solid var(--line, #334155); }
+.ws-protected-history-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; }
+.ws-protected-history-meta time, .ws-protected-history-facts { color: #b8c7dc; font-size: .875rem; }
+.ws-protected-history .ws-protected-history-reason { margin: 8px 0; white-space: pre-wrap; }
 :is([data-wsr-table], [data-wsc-table]) details > ul { padding-left: 20px; }
 :is([data-wsr-table], [data-wsc-table]) details li { margin: 8px 0; }
 :is([data-wsr-table], [data-wsc-table]) .ws-sort {

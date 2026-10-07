@@ -75,7 +75,7 @@ test('review shows only the selected final-source shift and keeps provisional ho
   assert.match(html, /09:00–16:00 · 30 min break/);
   assert.match(html, /390 minutes after breaks/);
   assert.doesNotMatch(html, /PROVISIONAL|OTHER SHIFT/);
-  assert.match(editor.renderReview({ ...current, can_reconcile: false }), /data-protected-review-action="reconcile" disabled/);
+  assert.doesNotMatch(editor.renderReview({ ...current, can_reconcile: false }), /data-protected-review-action|data-protected-review-reason/);
 });
 test('form is minutes-only, never invents missing evidence before the read, and escapes labels', () => {
   const html = editor.render({ ...context, client: '<script>' }, values);
@@ -98,18 +98,49 @@ test('an uncertain save retains the same action without a second result button',
   assert.doesNotMatch(saved, /Finish query|Check saved result/);
 });
 
-test('review history uses recorded actors, reasons and before/after schedules safely', () => {
-  const html = editor.renderReview({ ...context, history: [{
+test('both modals visibly show recorded actors, reasons and before/after schedules safely', () => {
+  const recorded = { ...context, history: [{
     at: '2026-10-01T10:15:00Z', by: '<Office user>', reason: '<confirmed>', state: 'WAIT',
     before: { start: '09:00', end: '17:00', break_minutes: 30 },
     after: { start: '09:00', end: '16:00', break_minutes: 15 }
-  }] });
+  }] };
+  for (const html of [editor.renderReview(recorded), editor.render(recorded, values, { mode: 'amend' })]) {
   assert.match(html, /1 Oct 2026, 11:15/);
   assert.match(html, /&lt;Office user&gt;/);
   assert.match(html, /&lt;confirmed&gt;/);
   assert.match(html, /Before: 09:00–17:00 · 30 min break/);
   assert.match(html, /After: 09:00–16:00 · 15 min break/);
-  assert.doesNotMatch(editor.renderReview(context), /Protected shift history/);
+  assert.match(html, /Reasons and history \(1\)/);
+  assert.doesNotMatch(html, /<details>|<Office user>|<confirmed>/);
+  }
+  assert.doesNotMatch(editor.renderReview(context), /Reasons and history/);
+});
+
+test('history is newest first, preserves full multiline comments and UK seasonal timestamps', () => {
+  const recorded = { ...context, history: [
+    { sequence: 1, at: '2026-09-01T22:00:00Z', by: 'Kier Arthur', reason: 'Missing shift\nCandidate confirmed', state: 'WAIT' },
+    { sequence: 2, at: '2026-12-01T23:00:00Z', by: 'Office colleague', reason: 'Corrected finish time', state: 'WAIT' }
+  ] };
+  for (const html of [editor.render(recorded, values), editor.renderReview(recorded)]) {
+    assert.ok(html.indexOf('Corrected finish time') < html.indexOf('Missing shift'));
+    assert.match(html, /Missing shift\nCandidate confirmed/);
+    assert.match(html, /1 Sept? 2026, 23:00 \(UK\)/);
+    assert.match(html, /1 Dec 2026, 23:00 \(UK\)/);
+    assert.match(html, /tabindex="0" role="region"/);
+  }
+  assert.equal(recorded.history[0].sequence, 1, 'render must not reorder server state');
+  assert.match(editor.renderReview({ history: [{ at: null }] }), /Date unavailable/);
+});
+
+test('final zero hours remains reviewable, and an uncertain decision remains retryable', () => {
+  const zero = editor.renderReview({ ...context, can_reconcile: true,
+    final_source_proposal: { source_present: false, source_minutes: 0, source_segments: [] } });
+  assert.match(zero, /final source records no worked hours/);
+  assert.match(zero, /data-protected-review-action="reconcile">/);
+  const pending = editor.renderReview(context, values, { pending: { mode: 'reconcile' } });
+  assert.match(pending, /data-protected-review-action="reconcile">/);
+  assert.match(pending, /data-protected-review-action="wait" disabled/);
+  assert.match(pending, /data-protected-review-reason[^>]* disabled/);
 });
 
 test('existing same-day shifts require an explicit identity and protect cannot silently amend', () => {

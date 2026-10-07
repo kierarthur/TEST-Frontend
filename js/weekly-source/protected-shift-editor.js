@@ -152,6 +152,24 @@
     return { action: ACTIONS[mode], payload };
   }
 
+  function renderHistory(context) {
+    // Use the immutable Office audit records, never the unsaved Reason field.
+    const entries = [...(Array.isArray(context.history) ? context.history : [])];
+    entries.sort((left, right) => Number(right.sequence || 0) - Number(left.sequence || 0));
+    if (!entries.length) return '';
+    const showSchedule = value => value ? `${text(value.start)}–${text(value.end)} · ${text(value.break_minutes)} min break` : 'No earlier protected hours';
+    const history = entries.map(entry => {
+      const when = entry.at ? new Date(entry.at) : null;
+      const at = when && Number.isFinite(when.valueOf()) ? new Intl.DateTimeFormat('en-GB', {
+        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+        timeZone: 'Europe/London'
+      }).format(when) : 'Date unavailable';
+      const status = { WAIT: 'Protected hours retained', ACCEPTED_SOURCE: 'System hours accepted', NOT_WORKED: 'Recorded as not worked' }[entry.state] || 'Protected hours recorded';
+      return `<li><div class="ws-protected-history-meta"><strong>${escape(entry.by || 'Office user')}</strong><time>${escape(at)} (UK)</time></div><p class="ws-protected-history-reason">${escape(entry.reason || 'No reason recorded')}</p><div class="ws-protected-history-facts">${escape(status)}<br>Before: ${escape(showSchedule(entry.before))}<br>After: ${escape(showSchedule(entry.after))}</div></li>`;
+    }).join('');
+    return `<section class="ws-protected-history" aria-label="Reasons and history"><h3>Reasons and history (${entries.length})</h3><div class="ws-protected-history-scroll" tabindex="0" role="region" aria-label="Saved protected shift reasons, newest first"><ol>${history}</ol></div></section>`;
+  }
+
   function render(context = {}, values = {}, state = {}) {
     let net = 'Enter the shift times and break.';
     try { const result = schedule(values); net = `${Math.floor(result.net_minutes / 60)} hours ${result.net_minutes % 60} minutes`; } catch (_) {}
@@ -168,6 +186,7 @@
       <div class="ws-child-fields">${input('Work date', 'work_date', 'date', `max="${ukToday()}" ${state.mode === 'amend' || state.lockedIdentity ? 'readonly data-ctms-intentional-lock="1" ' : ''}`)}<label>Contract<select data-protected-field="contract_id"${locked || state.mode === 'amend' || state.lockedIdentity ? disabledLock : ''}><option value="">Choose contract</option>${contracts}</select></label>${input('Start', 'start', 'time')}${input('Finish', 'end', 'time')}${input('Break (minutes)', 'break_minutes', 'number', 'min="0" step="1" required ')}<label>Reason<textarea data-protected-field="reason" maxlength="1000" required${locked ? disabledLock : ''}>${escape(values.reason)}</textarea></label></div>
       ${shiftChoices}${state.lockedIdentity?`<p><strong>Imported ${escape(context.source_family === 'NHSP' ? 'NHSP' : 'Roster')} Shift:</strong> ${escape(context.source_hours || 'Current imported shift')}</p>`:''}<p><strong>Hours approved for pay: <output data-protected-net>${escape(net)}</output></strong></p>
       <div class="ws-child-context"><div><span>Candidate submission</span><strong>${escape(context.candidate_hours || 'Choose the client, candidate and date to check')}</strong></div><div><span>Imported hours</span><strong>${escape(context.source_hours || 'Choose the client, candidate and date to check')}</strong></div></div>
+      ${renderHistory(context)}
       <p>This changes the candidate’s pay position. It does not change the client source or invoice.</p>
       ${state.error ? `<div class="ws-notice ws-notice--danger" role="alert">${escape(state.error)}</div>` : ''}
       ${context.pending_approval ? `<p role="status">${context.resume_request ? 'Complete the original save before changing these details.' : 'The original protected-pay request could not be verified. No new protection has been created.'}</p>` : ''}
@@ -183,23 +202,15 @@
     let hours = '';
     try { hours = `${schedule({ ...current, work_date: context.work_date }).net_minutes} minutes after breaks`; } catch (_) {}
     const disabled = state.busy || context.allowed !== true;
-    const showSchedule = value => value ? `${text(value.start)}–${text(value.end)} · ${text(value.break_minutes)} min break` : 'No earlier protected hours';
-    const history = (Array.isArray(context.history) ? context.history : []).map(entry => {
-      const when = new Date(entry.at);
-      const at = Number.isFinite(when.valueOf()) ? new Intl.DateTimeFormat('en-GB', {
-        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-        timeZone: 'Europe/London'
-      }).format(when) : 'Date unavailable';
-      const status = { WAIT: 'Protected hours retained', ACCEPTED_SOURCE: 'System hours accepted', NOT_WORKED: 'Recorded as not worked' }[entry.state] || 'Protected hours recorded';
-      return `<li><strong>${escape(at)} · ${escape(entry.by)}</strong><p>${escape(status)} — ${escape(entry.reason)}</p><p>Before: ${escape(showSchedule(entry.before))}<br>After: ${escape(showSchedule(entry.after))}</p></li>`;
-    }).join('');
+    // A retained command must stay retryable after an uncertain response.
+    const decisionAvailable = context.can_reconcile === true || !!state.pending;
     return `<div class="ws-child" data-protected-review><div class="ws-child-context"><div><span>Candidate</span><strong>${escape(context.candidate)}</strong></div><div><span>Client</span><strong>${escape(context.client)}</strong></div><div><span>Work date</span><strong>${escape(context.work_date)}</strong></div></div>
       <h3>Protected hours</h3><p>${escape(current.start)}–${escape(current.end)} · ${escape(current.break_minutes)} min break · ${escape(hours)}</p>
       <h3>Final source hours</h3><p>${escape(sourceText)}</p>${context.can_reconcile ? `<p>${escape(proposal.source_minutes)} minutes after breaks</p>` : ''}
-      ${history ? `<details><summary>Protected shift history</summary><ol>${history}</ol></details>` : ''}
-      <label>Reason<textarea data-protected-review-reason maxlength="1000"${disabled ? ' disabled' : ''}>${escape(values.reason)}</textarea></label>
+      ${renderHistory(context)}
+      ${decisionAvailable ? `<label>Reason for this decision<textarea data-protected-review-reason maxlength="1000"${disabled || state.pending ? ' disabled' : ''}>${escape(values.reason)}</textarea></label>` : ''}
       ${state.error ? `<div class="ws-notice ws-notice--danger" role="alert">${escape(state.error)}</div>` : ''}
-      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-review-close${state.busy ? ' disabled' : ''}>Close</button><button type="button" class="btn btn-outline" data-protected-review-action="wait"${disabled || state.pending?.mode === 'reconcile' ? ' disabled' : ''}>Wait</button><button type="button" class="btn primary" data-protected-review-action="reconcile"${disabled || !context.can_reconcile || state.pending?.mode === 'wait' ? ' disabled' : ''}>Accept system hours and reconcile</button></div></div>`;
+      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-review-close${state.busy ? ' disabled' : ''}>Close</button>${decisionAvailable ? `<button type="button" class="btn btn-outline" data-protected-review-action="wait"${disabled || state.pending?.mode === 'reconcile' ? ' disabled' : ''}>Wait</button><button type="button" class="btn primary" data-protected-review-action="reconcile"${disabled || (!context.can_reconcile && state.pending?.mode !== 'reconcile') || state.pending?.mode === 'wait' ? ' disabled' : ''}>Accept system hours and reconcile</button>` : ''}</div></div>`;
   }
   return Object.freeze({ schedule, contractChoice, overlappingEvents, request, render, renderReview });
 });

@@ -1048,7 +1048,7 @@
       ...(values.shift_choice && values.shift_choice !== 'NEW' ? { work_event_id: values.shift_choice } : {}) });
     const reload = async () => {
       const sequence = ++readSequence;
-      context.allowed = false; context.contracts = [];
+      context.allowed = false; context.contracts = []; context.history = [];
       if (!context.client_id || !context.candidate_id || !values.work_date) { rerender(kind); return; }
       state.busy = true; state.error = ''; rerender(kind);
       try {
