@@ -506,3 +506,28 @@ Desktop and 390px advisory/recovery screenshots were visually inspected.
 Hosted publication and the original saved-request recovery remain pending on
 the managed TEST database/runtime release. This Office-only change needs no
 Android or Apple rebuild.
+
+### Original saved-request recovery: hosted acceptance
+
+Protected TEST database run `37691061087` passed all 150 required verifiers for
+backend `1860952f620aa503440e179bc15e67de9f908899`. All four ordered Worker
+deployments were verified active at 100%; Pages served Office
+`d35c40c57f5edb8a8e7fd205fd05ed85583f95f5` with the recovery asset keys.
+
+In the actual Office browser, the original actor used the exact saved Retry
+recheck once at 22:39:37 UTC. The replacement publication became CURRENT,
+generation 6. Queries stayed open and both Office checks remained visible:
+the newly linked active candidate now needs an eligible client link, and the
+established candidate's charge warning remains. No new candidate selection,
+client membership, charge acceptance, final source or billing movement was
+created. The established work event and its complete row fingerprint are
+unchanged. Fresh read-only database assertions confirm the browser result.
+Actual before/after screenshots are retained in ignored task evidence.
+
+Hosted Candidate/Client browser regression passed. Its separate Office unit
+job failed on pre-existing stale cache-version expectations, also confirmed
+against the predecessor. The maintenance amendment updates the three exact
+existing asset expectations and checks ordering against the complete current
+main asset URL; no runtime asset or assertion is removed. All 235 Office/UI
+tests pass locally. Final managed maintenance publication and hosted CI are
+recorded in the ignored task receipt; no mobile build is required.
