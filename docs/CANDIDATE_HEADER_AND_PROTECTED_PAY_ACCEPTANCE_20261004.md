@@ -488,3 +488,21 @@ source or pay data. No backend, database definition or native app changes.
 Publication follows the managed TEST coordinator, with fresh four-Worker proof;
 its receipt and served-asset acceptance are retained in the backend worktree's
 ignored `.codex-tmp/protected-ready-green-acceptance-20261007.json` after release.
+
+## Saved source recheck recovery — 7 October
+
+Queries now shows an explicit incomplete-recheck advisory and a direct Office
+checks button instead of claiming no decisions remain while a replacement
+comparison is unfinished. Previous checks remain visible, with only the exact
+saved recheck offered for retry. A saved linking choice followed by a comparison
+failure is explained truthfully and refreshes the parent workspace. Successful
+retry keeps Queries open and does not create another candidate selection.
+
+All 61 import-workspace browser tests and 215 Weekly Source unit tests pass.
+The integrated two-row browser case proves both candidates remain visible,
+the exact saved command is submitted once, and the recovered row progresses to
+its remaining client check while the other charge warning stays visible.
+Desktop and 390px advisory/recovery screenshots were visually inspected.
+Hosted publication and the original saved-request recovery remain pending on
+the managed TEST database/runtime release. This Office-only change needs no
+Android or Apple rebuild.

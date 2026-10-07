@@ -115,6 +115,7 @@
       WEEKLY_SOURCE_CONTRACT_NOT_ELIGIBLE: 'That contract does not cover this candidate, client and shift date. Review the contract or choose another.',
       WEEKLY_SOURCE_RECHECK_NOT_CURRENT: 'A newer file or comparison has replaced this one. Close this window and refresh Queries before continuing.',
       WEEKLY_SOURCE_RECHECK_REPLAY_CONFLICT: 'This check was already started with a different choice. Close this window and refresh Queries before making another choice.',
+      WEEKLY_SOURCE_RECHECK_INCOMPLETE: 'Your selection was saved, but the source recheck did not finish. Close this window and retry the saved recheck in Office Checks.',
       WEEKLY_SOURCE_PREVIEW_STALE: 'The source information has changed. Close this window and refresh Queries before continuing.',
       WEEKLY_SOURCE_MANUAL_REVIEW_ALREADY_AUTHORISED: 'This Timesheet has already been authorised. Use the existing unauthorise control first if it is still permitted, then reopen this shift for review.',
       WEEKLY_SOURCE_MANUAL_REVIEW_SOURCE_STALE: 'A newer import has changed this shift. Refresh Queries to review the current source hours before deciding.',
@@ -1204,6 +1205,15 @@
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
+    if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) {
+      return (async () => {
+        try { await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', detail.payload); await workspaceApi()?.refresh?.(); }
+        catch (error) { await workspaceApi()?.refresh?.(); return openDetail({ detail: {
+          problem: plainMessage(error?.code || error?.message),
+          guidance: 'The saved recheck remains in Office Checks. Retry it there; do not make a new linking choice.'
+        } }, 'Source recheck incomplete'); }
+      })();
+    }
     if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
     if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
     if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);
@@ -1222,6 +1232,10 @@
         try {
           await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...detail.payload.recheck_payload, [field]: asText(id) });
         } catch (error) {
+          if (error?.code === 'WEEKLY_SOURCE_RECHECK_INCOMPLETE') {
+            await workspaceApi()?.refresh?.();
+            throw new Error(plainMessage(error.code));
+          }
           throw new Error(plainMessage(error?.message, 'The selected record could not be linked. Recheck its status and try again.'));
         }
         await workspaceApi()?.refresh?.();

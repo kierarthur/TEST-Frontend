@@ -8,6 +8,7 @@
   const a=value=>Array.isArray(value)?value:[];
   function attentionSummary(model,state){
     if(model.tab!=='queries')return '';
+    if(Number(model.summary?.recheck_pending_count)>0)return `<aside class="ws-attention ws-attention--unavailable" role="status"><strong>Source recheck incomplete</strong><span>Saved selections are retained. Retry the saved recheck; previous checks remain visible below.</span><button type="button" class="ws-attention__link" data-wsr-section="checks"${state.busy?' disabled':''}>Open Office checks</button></aside>`;
     const attention=model.attention;
     const sections=[['missing_source','Shift missing','questions',
       'The candidate reported working this shift, but it has no matching row in the import. Review it and decide whether to protect pay.'],

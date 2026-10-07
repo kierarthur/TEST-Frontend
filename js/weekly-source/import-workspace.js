@@ -31,7 +31,7 @@
   });
   const ACTIONS = Object.freeze({
     imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager']),
-    queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet']),
+    queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet', 'Retry recheck']),
     shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay', 'Review and reconcile']),
     finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),
     tracker: new Set(['No shifts to import', 'View'])
@@ -74,6 +74,7 @@
     if (code === 'WEEKLY_SOURCE_GROUP_NOT_ACTIVE') return 'This source is no longer available. Choose another source.';
     if (code === 'WEEKLY_SOURCE_CLIENT_NOT_IN_GROUP') return 'This client is not available for the selected source and week.';
     if (code === 'WEEKLY_SOURCE_WORKSPACE_CURSOR_STALE') return 'This information has changed. Recheck before continuing.';
+    if (code === 'WEEKLY_SOURCE_RECHECK_INCOMPLETE') return 'Your selection was saved, but the source recheck did not finish. Retry the saved recheck in Office Checks.';
     return 'Weekly source information is temporarily unavailable. Recheck or try again shortly.';
   }
 

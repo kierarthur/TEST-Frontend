@@ -150,6 +150,38 @@ test('source linking explains that a selected inactive Candidate must be reactiv
   }
 });
 
+test('saved source recheck retry reuses its exact request and refreshes without closing the parent modal', async () => {
+  const calls=[];
+  const previous=globalThis.CloudTMSWeeklySourceImportWorkspaceV1;
+  const payload={request_id:'saved-request',candidate_id:'saved-candidate',upload_row_id:'saved-row'};
+  try {
+    globalThis.CloudTMSWeeklySourceImportWorkspaceV1={
+      issueCommand:async (...args)=>calls.push(args),refresh:async()=>calls.push(['refresh'])
+    };
+    await actions.handleAction({label:'Retry recheck',command:'RECHECK_SOURCE',payload});
+    assert.deepEqual(calls,[['RECHECK_SOURCE',payload],['refresh']]);
+  } finally {globalThis.CloudTMSWeeklySourceImportWorkspaceV1=previous;}
+});
+
+test('saved linking selection with failed recheck refreshes retained work and explains the partial outcome', async () => {
+  const saved = { picker: globalThis.openCandidatePicker, workspace: globalThis.CloudTMSWeeklySourceImportWorkspaceV1 };
+  let choose, refreshed = 0;
+  try {
+    globalThis.openCandidatePicker = callback => { choose = callback; };
+    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = {
+      issueCommand: async () => { throw Object.assign(new Error('Internal failure'), { code: 'WEEKLY_SOURCE_RECHECK_INCOMPLETE' }); },
+      refresh: async () => { refreshed++; }
+    };
+    actions.handleAction({ label: 'Link candidate', payload: { recheck_payload: { request_id: 'same-request' } } });
+    await assert.rejects(choose({ id: 'active' }), /selection was saved.*recheck did not finish/i);
+    assert.equal(refreshed, 1);
+    assert.match(actions._plainMessage('WEEKLY_SOURCE_RECHECK_INCOMPLETE'), /retry the saved recheck/i);
+  } finally {
+    globalThis.openCandidatePicker = saved.picker;
+    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = saved.workspace;
+  }
+});
+
 test('an unmatched contract provides a create path without pretending it is a tie', () => {
   const model = actions.normaliseContractChooser({ choices: [], recheck_payload: { request_id: 'request' },
     contract_seed: { candidate_id: 'candidate', client_id: 'client' } });

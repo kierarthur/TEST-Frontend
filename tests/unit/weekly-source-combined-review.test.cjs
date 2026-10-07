@@ -49,6 +49,20 @@ test('waiting-only protection and missing Timesheet are not invented attention i
   assert.match(html,/No decisions outstanding/);
   assert.doesNotMatch(html,/data-wsr-attention/);
 });
+
+test('unfinished file recheck never displays a reassuring all-clear and keeps prior checks visible',()=>{
+  const html=view.render({...model,summary:{recheck_pending_count:2},counts:{checks:2},
+    attention:{complete:true,missing_source:0,questions:0,checks:0,protected:0,total:0},
+    rows:[{...model.rows[0],candidate:'Baljit',status:{text:'Recheck incomplete'},
+      problem:'Selection saved; replacement check incomplete.',actions:[{label:'Retry recheck',enabled:true}]},
+      {...model.rows[0],combined_key:'rate',candidate:'Kier',pay_blocking:false,
+        problem:'Previous contract charge warning — replacement check incomplete.',actions:[]}]});
+  assert.match(html,/Source recheck incomplete/);
+  assert.match(html,/Office checks \(2\)/);
+  assert.match(html,/Baljit/);assert.match(html,/Kier/);assert.match(html,/Retry recheck/);
+  assert.match(html,/ws-query-nonblocking/);
+  assert.doesNotMatch(html,/No decisions outstanding|No matching work/);
+});
 test('attention displays only positive outstanding categories without hiding normal tabs',()=>{
   const html=view.render({...model,attention:{complete:true,missing_source:0,questions:0,checks:1,protected:0,total:1}});
   assert.match(html,/data-wsr-section="checks" data-wsr-attention/);

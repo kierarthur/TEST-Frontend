@@ -13,6 +13,63 @@ const fixtures = JSON.parse(readFileSync(
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
+test('incomplete candidate link keeps both checks visible and retries the exact saved request without closing Queries',async({page},testInfo)=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any;
+    const saved={request_id:'saved-link-request',upload_id:'same-file',upload_row_id:'baljit-row',
+      candidate_id:'active-baljit',projection_publication_id:'previous-publication',expected_authority_scope_version:5};
+    win.__savedRecheck=saved;win.__rechecked=false;
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>({...fixture,combined_source_workspace:true})};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action==='RECHECK_SOURCE'){
+        win.__rechecked=true;return {ok:true,json:async()=>({ok:true,state:'CURRENT'})};
+      }
+      if(request.action!=='COMBINED_REVIEW_WORKSPACE')throw new Error('Unexpected mutation');
+      const pending=!win.__rechecked;
+      return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:request.payload.section,
+        summary:{recheck_pending_count:pending?2:0},counts:{questions:0,checks:2,protected:0},
+        attention:{complete:true,missing_source:0,questions:0,checks:2,protected:0,total:2},owners:[],scope_options:[],
+        rows:request.payload.section==='checks'?[
+          {combined_key:'baljit',candidate:'Baljit Rai-Baptiste',client:'Berkshire Healthcare',day_date:'21 Sep 2026',
+            status:{text:pending?'Recheck incomplete':'Needs correction'},problem:pending?'Candidate selection saved':'Client needs linking',
+            pay_blocking:true,requires_attention:true,
+            actions:pending?[{label:'Retry recheck',enabled:true,command:'RECHECK_SOURCE',payload:saved}]:[{label:'Link client',enabled:true,payload:{}}]},
+          {combined_key:'kier',candidate:'Kier Arthur',client:'Stage 8 Trust',day_date:'21 Sep 2026',
+            status:{text:pending?'Recheck incomplete':'Charge decision needed'},problem:'Contract rate mismatch',
+            pay_blocking:false,requires_attention:true,
+            actions:pending?[{label:'Retry recheck',enabled:true,command:'RECHECK_SOURCE',payload:saved}]:[]}
+        ]:[],has_more:false})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  await expect(page.getByText('Source recheck incomplete',{exact:true})).toBeVisible();
+  await expect(page.getByText('No decisions outstanding',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Open Office checks',exact:true}).click();
+  await expect(page.getByText('Baljit Rai-Baptiste',{exact:true})).toBeVisible();
+  await expect(page.getByText('Kier Arthur',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Retry recheck',exact:true})).toHaveCount(2);
+  for(const width of [1700,390]){
+    await page.setViewportSize({width,height:1000});
+    expect(await page.locator('.ws-attention').evaluate(el=>el.scrollWidth-el.clientWidth)).toBe(0);
+    await page.locator('#modal').screenshot({path:testInfo.outputPath(`recheck-retained-${width}.png`)});
+  }
+  await page.setViewportSize({width:1700,height:1000});
+  await page.getByRole('button',{name:'Retry recheck',exact:true}).first().click();
+  await expect(page.getByRole('button',{name:'Link client',exact:true})).toBeVisible();
+  await expect(page.getByText('Charge decision needed',{exact:true})).toBeVisible();
+  await expect(page.getByText('Baljit Rai-Baptiste',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Retry recheck',exact:true})).toHaveCount(0);
+  await expect(page.locator('.ws-inner-tabs')).toBeVisible();
+  expect(await page.evaluate(()=>{
+    const win=window as any,commands=win.__requests.filter((r:any)=>r.action==='RECHECK_SOURCE');
+    return {count:commands.length,exact:JSON.stringify(commands[0].payload)===JSON.stringify(win.__savedRecheck)};
+  })).toEqual({count:1,exact:true});
+  await page.locator('#modal').screenshot({path:testInfo.outputPath('recheck-recovered.png')});
+  expect(externalRequests(page)).toEqual([]);
+});
+
 test('Queries attention summary keeps three tabs, counts genuine decisions and opens actionable-first work',async({page},testInfo)=>{
   await loadOfficeFoundation(page);
   await page.evaluate(async fixture=>{
