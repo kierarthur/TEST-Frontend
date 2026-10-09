@@ -323,12 +323,81 @@ test('contract chooser appears for every qualifying choice with no default selec
   const model = actions.normaliseContractChooser(fixtures.contractChooser);
   assert.equal(model.choices.length, 3);
   const html = actions.renderContractChooser(model);
-  assert.equal((html.match(/type="radio"/g) || []).length, 3);
-  assert.doesNotMatch(html, /type="radio"[^>]* checked/);
+  assert.equal((html.match(/type="checkbox"/g) || []).length, 3);
+  assert.doesNotMatch(html, /type="radio"|type="checkbox"[^>]* checked/);
   assert.match(html, /Role \/ band/);
   assert.match(html, /Contract site/);
   assert.match(html, /Pay type/);
   assert.doesNotMatch(html, /£|hourly rate|source charge|calculated charge|source_row_ordinal/i);
+});
+
+test('contract chooser tick boxes switch exclusively, untick, and gate creation without rerendering', async () => {
+  const { runInNewContext } = require('node:vm');
+  const source = readFileSync(resolve(__dirname, '../../js/weekly-source/workspace-actions.js'), 'utf8');
+  const payload = { ...fixtures.contractChooser,
+    contract_seed: { candidate_id: 'candidate', client_id: 'client' },
+    recheck_payload: { request_id: 'request' } };
+  const inputs = payload.choices.map(choice => ({ value: choice.contract_id, checked: false,
+    handlers: {}, addEventListener(event, handler) { this.handlers[event] = handler; } }));
+  const controls = Object.fromEntries(['close', 'create-contract', 'use-contract'].map(key => [key,
+    { disabled: key === 'use-contract', handlers: {}, addEventListener(event, handler) { this.handlers[event] = handler; } }]));
+  const host = { dataset: {}, querySelector: selector => controls[selector.match(/data-wsa-(.+)\]/)?.[1]],
+    querySelectorAll: selector => selector.startsWith('input') ? inputs : [] };
+  const timers = [], creates = [], commands = [];
+  let rerenders = 0, rejectCommand;
+  const root = { module: { exports: {} }, document: { querySelector: () => host },
+    setTimeout: callback => timers.push(callback), __modalStack: [],
+    openContract: (seed, options) => creates.push({ seed, options }),
+    CloudTMSWeeklySourceImportWorkspaceV1: { issueCommand: (command, data) => {
+      commands.push({ command, data }); return new Promise((resolve, reject) => { rejectCommand = reject; });
+    } },
+    showModal: (title, tabs, render, save, edit, wire, options) => {
+      root.__modalStack.push({ kind: options.kind, setTab: () => { rerenders++; return render(); } });
+      render(); wire();
+    } };
+  runInNewContext(source, root);
+  assert.equal(root.module.exports.handleAction({ label: 'Choose contract', payload }), true);
+  while (timers.length) timers.shift()();
+  const change = (index, checked) => { inputs[index].checked = checked; inputs[index].handlers.change(); };
+  controls['create-contract'].handlers.click();
+  assert.equal(creates.length, 1);
+  change(0, true);
+  assert.deepEqual(inputs.map(input => input.checked), [true, false, false]);
+  assert.equal(controls['create-contract'].disabled, true);
+  assert.equal(controls['use-contract'].disabled, false);
+  controls['create-contract'].handlers.click();
+  assert.equal(creates.length, 1, 'handler also rejects creation when selected');
+  change(1, true);
+  assert.deepEqual(inputs.map(input => input.checked), [false, true, false]);
+  change(1, false);
+  assert.deepEqual(inputs.map(input => input.checked), [false, false, false]);
+  assert.equal(controls['create-contract'].disabled, false);
+  assert.equal(controls['use-contract'].disabled, true);
+  await controls['use-contract'].handlers.click();
+  assert.equal(commands.length, 0, 'nothing is submitted without a selection');
+  assert.equal(rerenders, 0, 'selection changes preserve the layout');
+  change(2, true);
+  const pending = controls['use-contract'].handlers.click();
+  await controls['use-contract'].handlers.click();
+  controls['create-contract'].handlers.click();
+  assert.equal(commands.length, 1, 'double submission is blocked');
+  assert.equal(creates.length, 1);
+  assert.equal(commands[0].command, 'RECHECK_SOURCE');
+  assert.equal(commands[0].data.contract_id, 'contract-3');
+  assert.equal(commands[0].data.request_id, 'request');
+  rejectCommand(new Error('Fixture rejection'));
+  await pending;
+  const selected = actions.renderContractChooser(actions.normaliseContractChooser(payload), { selected: 'contract-2' });
+  assert.equal((selected.match(/type="checkbox"[^>]* checked/g) || []).length, 1);
+  assert.match(selected, /data-wsa-create-contract disabled/);
+  assert.doesNotMatch(selected, /data-wsa-use-contract disabled/);
+  const busy = actions.renderContractChooser(actions.normaliseContractChooser(payload), { selected: 'contract-2', busy: true });
+  assert.equal((busy.match(/type="checkbox"[^>]* disabled/g) || []).length, 3);
+  assert.match(busy, /data-wsa-create-contract disabled/);
+  assert.match(busy, /data-wsa-use-contract disabled/);
+  const empty = actions.renderContractChooser(actions.normaliseContractChooser({ ...payload, choices: [] }));
+  assert.doesNotMatch(empty, /data-wsa-create-contract disabled/);
+  assert.match(empty, /data-wsa-use-contract disabled/);
 });
 
 test('detail renderer whitelists plain Office facts and suppresses technical commentary', () => {

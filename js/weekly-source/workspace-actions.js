@@ -338,9 +338,9 @@
 
   function renderContractChooser(model, state = {}) {
     const context = [['Candidate',model.candidate],['Client',model.client],['Shift',model.shift],['Source role / band',model.source_role_band]].filter(([,value]) => value).map(([label,value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-    const rows = model.choices.map((choice) => `<tr><td><input type="radio" name="wsa-contract" value="${escapeHtml(choice.id)}" aria-label="Choose ${escapeHtml(choice.role_band || 'contract')}"${state.selected === choice.id ? ' checked' : ''}></td><td>${escapeHtml(choice.role_band || '—')}</td><td>${escapeHtml(choice.site || '—')}</td><td>${escapeHtml(choice.dates || '—')}</td><td>${escapeHtml(choice.pay_type || '—')}</td><td><button type="button" class="btn btn-outline" data-wsa-view-contract="${escapeHtml(choice.id)}">${escapeHtml(choice.details_label)}</button></td></tr>`).join('');
+    const rows = model.choices.map((choice) => `<tr><td><input type="checkbox" name="wsa-contract" value="${escapeHtml(choice.id)}" aria-label="Choose ${escapeHtml(choice.role_band || 'contract')}"${state.selected === choice.id ? ' checked' : ''}${state.busy ? ' disabled' : ''}></td><td>${escapeHtml(choice.role_band || '—')}</td><td>${escapeHtml(choice.site || '—')}</td><td>${escapeHtml(choice.dates || '—')}</td><td>${escapeHtml(choice.pay_type || '—')}</td><td><button type="button" class="btn btn-outline" data-wsa-view-contract="${escapeHtml(choice.id)}">${escapeHtml(choice.details_label)}</button></td></tr>`).join('');
     const explanation = model.choices.length ? 'Review the contracts for this shift and choose the one that applies. Its eligibility will be checked again.' : 'No contract covers this shift. Create or correct the contract, then return to Imports and use Recheck.';
-    return `<div class="ws-child" data-wsa-screen="contract"><div class="ws-child-context">${context}</div><p>${explanation}</p><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Choose</th><th>Role / band</th><th>Contract site</th><th>Contract dates</th><th>Pay type</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button>${model.contract_seed.candidate_id && model.contract_seed.client_id ? '<button type="button" class="btn btn-outline" data-wsa-create-contract>Create contract</button>' : ''}<button type="button" class="btn primary" data-wsa-use-contract${state.selected && !state.busy ? '' : ' disabled'}>${state.failed ? 'Try again' : 'Use selected contract'}</button></div></div>`;
+    return `<div class="ws-child" data-wsa-screen="contract"><div class="ws-child-context">${context}</div><p>${explanation}</p><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Choose</th><th>Role / band</th><th>Contract site</th><th>Contract dates</th><th>Pay type</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button>${model.contract_seed.candidate_id && model.contract_seed.client_id ? `<button type="button" class="btn btn-outline" data-wsa-create-contract${state.selected || state.busy ? ' disabled' : ''}>Create contract</button>` : ''}<button type="button" class="btn primary" data-wsa-use-contract${state.selected && !state.busy ? '' : ' disabled'}>${state.failed ? 'Try again' : 'Use selected contract'}</button></div></div>`;
   }
 
   function normaliseCorrectFinal(payload) {
@@ -651,15 +651,23 @@
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1'; host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
       host.querySelector('[data-wsa-create-contract]')?.addEventListener('click', () => {
+        if (state.selected || state.busy) return;
         if (typeof root.openContract === 'function') root.openContract(model.contract_seed, { noParentGate: true });
       });
-      host.querySelectorAll('input[name="wsa-contract"]').forEach((input) => input.addEventListener('change', () => { state.selected = input.checked ? input.value : state.selected; host.querySelector('[data-wsa-use-contract]').disabled = !state.selected; }));
+      host.querySelectorAll('input[name="wsa-contract"]').forEach((input) => input.addEventListener('change', () => {
+        if (state.busy) return;
+        state.selected = input.checked ? input.value : '';
+        host.querySelectorAll('input[name="wsa-contract"]').forEach((choice) => { choice.checked = choice.value === state.selected; });
+        host.querySelector('[data-wsa-use-contract]').disabled = !state.selected;
+        const create = host.querySelector('[data-wsa-create-contract]');
+        if (create) create.disabled = !!state.selected;
+      }));
       host.querySelectorAll('[data-wsa-view-contract]').forEach((button) => button.addEventListener('click', () => {
         const choice = model.choices.find((entry) => entry.id === button.dataset.wsaViewContract);
         if (choice) void reviewContract(choice.id, button);
       }));
       host.querySelector('[data-wsa-use-contract]')?.addEventListener('click', async () => {
-        if (!state.selected || (!model.recheck_payload.request_id
+        if (state.busy || !state.selected || (!model.recheck_payload.request_id
           && (!model.source_row_ordinal || !asText(model.accept_payload.file_key)))) return;
         state.busy = true; state.error = ''; rerender(kind);
         try {

@@ -44,6 +44,14 @@ The import Create Contract journey was retested after this deployment: Baljit/Be
 
 The coordinator receipt retains its generic `DEPLOYED_ACCEPTANCE_PENDING` status; the later bounded browser acceptance and its limits are recorded here rather than rewriting protected deployment evidence. This evidence-only report update is pushed on the task branch; the installed Office source identity remains the release commit above.
 
+## Choose contract: clearable single-selection tick boxes
+
+Owner scope: use checkboxes, permit at most one selected Contract and allow unticking; Create contract is available only with no selection. Keep explicit selection/submission and server eligibility checks unchanged.
+
+Changed `js/weekly-source/workspace-actions.js`, its versioned include in `index.html`, and `tests/unit/weekly-source-workspace-actions.test.cjs`. Choice changes update the checkboxes and both action buttons in place, without changing the layout. Creation also rejects selected/busy state in its handler; submission rejects empty/busy state, retaining the existing exact server payload and eligibility owner.
+
+Focused executable regression: 95/95 pass across source-workspace actions, import workspace, Contract workflow safety and saved-authority tests. The actual chooser handlers execute in an isolated three-choice fixture proving switching clears the previous tick, unticking restores no selection, Create/Use button gates, empty submission rejection, exact selected-contract command and double-submit blocking. Renderer cases cover initial, selected, busy and no-choice states. Syntax and whitespace checks pass. No real Contract/link save, SQL, financial operation or external communication was used in these fixtures. Full financial recovery verification is not required for this presentation-only delta; deployed acceptance and release identities will be recorded after publication.
+
 ## Authoritative-import authorisers and saved-modal follow-up
 
 Owner scope: hide the irrelevant hours-authoriser panel for import-authoritative Contracts; after a successful save, Close must not warn about a saved draft. Keep the explicit Choose contract step after creation. The owner withdrew the proposed automatic link/refresh expansion.
