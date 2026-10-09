@@ -7,6 +7,28 @@ const model={contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'
     status:{text:'Needs action'},problem:'Choose the correct candidate.',
     actions:[{label:'Link candidate',enabled:true},{label:'Unavailable',enabled:false}]}]};
 
+test('status cell selectors outrank the actual universal-table zebra and hover selectors',()=>{
+  const fs=require('node:fs'),path=require('node:path');
+  const source=fs.readFileSync(path.join(__dirname,'../../css/weekly-source.css'),'utf8');
+  const generic=fs.readFileSync(path.join(__dirname,'../../css/modal-modernisation.css'),'utf8');
+  // These selectors use only ID, class, attribute, type and simple pseudo-class
+  // components. Each member of the status :is() list has the same specificity.
+  function specificity(selector){
+    selector=selector.replace(/:is\([^)]*\)/g,'.scope').replace(/\([^)]*\)/g,'');
+    const ids=(selector.match(/#[\w-]+/g)||[]).length;
+    const classes=(selector.match(/\.[\w-]+|\[[^\]]+\]|:[\w-]+/g)||[]).length;
+    const types=(selector.replace(/#[\w-]+|\.[\w-]+|\[[^\]]+\]|:[\w-]+/g,'').match(/\b[a-z][\w-]*\b/g)||[]).length;
+    return ids*10000+classes*100+types;
+  }
+  const competitors=['#modal.ctms-modern-modal table.ctms-universal-table tbody tr:nth-child(even) td','#modal.ctms-modern-modal table.ctms-universal-table tbody tr:hover td'];
+  for(const s of competitors) assert.ok(generic.includes(s));
+  for(const tone of ['hold','nonblocking']) {
+    const selector=`#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table], .ws-office-checks) table.grid tr.ws-query-${tone} > td`;
+    assert.ok(source.includes(selector));
+    for(const s of competitors) assert.ok(specificity(selector)>specificity(s),`${tone} must outrank ${s}`);
+  }
+});
+
 test('Office checks, hours questions and protected shifts retain status colouring on every row',()=>{
   for(const section of ['checks','questions','protected']) {
     const rows=[1,2].map(id=>({combined_key:String(id),candidate:'Test',pay_blocking:false,children:[{issue:'Timesheet missing'}],actions:[]}));

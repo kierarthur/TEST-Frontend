@@ -84,6 +84,8 @@ Canonical coordinator resumed with fresh inspected connection evidence: protecte
 
 Deployed acceptance caught an additional lock interaction before completion: the modal mode pass adds readonly as well as disabled to intentional-lock inputs. Unticking removed disabled but left readonly behind. The bounded correction now removes readonly only from inputs carrying the ad hoc-owned lock; unrelated locks stay intact. The explanatory hint is also shown/hidden in place when the choice changes. The new regression simulates the actual modal's second lock pass and proves unrelated locks are preserved. Focused frontend checks now pass 130/130; syntax and diff checks pass. Browser testing has not saved the real Baljit Contract or changed its business data. Final corrective deployment and acceptance follow below.
 
+The live cascade check also disproved the first colour selector's sufficiency: `#modal.ctms-modern-modal table.ctms-universal-table tbody tr:nth-child(even) td` still won by type specificity. The corrected source rule includes `table.grid`, so its class specificity outranks both the actual zebra and hover selectors. All five sections and nested question tables render grid tables. A new executable regression compares specificity against those exact repository rules, not just the presence of status classes; focused checks pass 131/131. This is still presentation-only and leaves pay/charge eligibility unchanged.
+
 ## Authoritative-import authorisers and saved-modal follow-up
 
 Owner scope: hide the irrelevant hours-authoriser panel for import-authoritative Contracts; after a successful save, Close must not warn about a saved draft. Keep the explicit Choose contract step after creation. The owner withdrew the proposed automatic link/refresh expansion.

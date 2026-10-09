@@ -32,7 +32,7 @@ test('Ready and Blocked use authoritative status row colours, not zebra/hover co
   assert.match(view.render(model),/<tr class="ws-query-nonblocking">/);
   assert.match(view.render({...model,list:'blocked'}),/<tr class="ws-query-hold">/);
   const css=require('node:fs').readFileSync(require('node:path').join(__dirname,'../../css/weekly-source.css'),'utf8');
-  for(const tone of ['hold','nonblocking']) assert.match(css,new RegExp(`#modal\\.ctms-modern-modal :is\\(\\[data-wsr-table\\], \\[data-wsc-table\\], \\.ws-office-checks\\) tr\\.ws-query-${tone} > td \\{ background:`));
+  for(const tone of ['hold','nonblocking']) assert.match(css,new RegExp(`#modal\\.ctms-modern-modal :is\\(\\[data-wsr-table\\], \\[data-wsc-table\\], \\.ws-office-checks\\) table\\.grid tr\\.ws-query-${tone} > td \\{ background:`));
 });
 
 test('every displayed finalisation data column remains sortable',()=>{

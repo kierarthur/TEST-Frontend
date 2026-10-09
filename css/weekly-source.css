@@ -742,8 +742,8 @@
 [data-wsr-table] .ws-query-reason:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 /* Status is authoritative, including even rows and hovered rows. The modal's
    generic zebra/hover backgrounds must not hide pay readiness. */
-#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table], .ws-office-checks) tr.ws-query-hold > td { background: rgba(180, 48, 64, .15); }
-#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table], .ws-office-checks) tr.ws-query-nonblocking > td { background: rgba(31, 148, 94, .13); }
+#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table], .ws-office-checks) table.grid tr.ws-query-hold > td { background: rgba(180, 48, 64, .15); }
+#modal.ctms-modern-modal :is([data-wsr-table], [data-wsc-table], .ws-office-checks) table.grid tr.ws-query-nonblocking > td { background: rgba(31, 148, 94, .13); }
 :is([data-wsr-table], .ws-office-checks) tr.ws-query-hold > td:first-child { box-shadow: inset 3px 0 #d35a69; }
 :is([data-wsr-table], .ws-office-checks) tr.ws-query-nonblocking > td:first-child { box-shadow: inset 3px 0 #58bd8a; }
 .ws-charge-guidance { margin: 10px 0 0; color: var(--ws-muted-text, #b7c4d8); line-height: 1.45; }
