@@ -28,6 +28,13 @@ test('completed rows never show a selection or finalise action',()=>{
   assert.doesNotMatch(html,/data-wsc-list="complete"/);
 });
 
+test('Ready and Blocked use authoritative status row colours, not zebra/hover colours',()=>{
+  assert.match(view.render(model),/<tr class="ws-query-nonblocking">/);
+  assert.match(view.render({...model,list:'blocked'}),/<tr class="ws-query-hold">/);
+  const css=require('node:fs').readFileSync(require('node:path').join(__dirname,'../../css/weekly-source.css'),'utf8');
+  for(const tone of ['hold','nonblocking']) assert.match(css,new RegExp(`#modal\\.ctms-modern-modal :is\\(\\[data-wsr-table\\], \\[data-wsc-table\\], \\.ws-office-checks\\) tr\\.ws-query-${tone} > td \\{ background:`));
+});
+
 test('every displayed finalisation data column remains sortable',()=>{
   const html=view.render(model);
   for(const key of ['client','source','period'])

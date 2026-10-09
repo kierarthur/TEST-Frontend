@@ -6,6 +6,15 @@ const model={contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'
     source:'NHSP',period:'27 Sep 2026',day_date:'21 Sep 2026',system_hours:'09:00–17:00 · 30 min break',
     status:{text:'Needs action'},problem:'Choose the correct candidate.',
     actions:[{label:'Link candidate',enabled:true},{label:'Unavailable',enabled:false}]}]};
+
+test('Office checks, hours questions and protected shifts retain status colouring on every row',()=>{
+  for(const section of ['checks','questions','protected']) {
+    const rows=[1,2].map(id=>({combined_key:String(id),candidate:'Test',pay_blocking:false,children:[{issue:'Timesheet missing'}],actions:[]}));
+    const html=view.render({...model,section,rows});
+    assert.equal((html.match(/data-wsr-group="[12]" class="ws-query-nonblocking"/g)||[]).length,2);
+  }
+  assert.match(view.render({...model,rows:[{combined_key:'blocked',pay_blocking:true,actions:[]}]}),/class="ws-query-hold"/);
+});
 test('protected review needs server-confirmed attention and retains original action indexes',()=>{
   for (const requires_attention of [false, undefined, true]) {
     const html=view.render({...model,section:'protected',rows:[{combined_key:'protected',requires_attention,

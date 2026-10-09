@@ -126254,6 +126254,40 @@ function wirePickerLiveFilter(inputEl, tableEl) {
 // ─────────────────────────────────────────────────────────────────────────────
 // UPDATED: setContractFormValue (adds logging)
 // ─────────────────────────────────────────────────────────────────────────────
+function contractAdHocEnabled(value) {
+  return value === true || value === 1 || ['true', '1', 'on', 'yes'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+// Draft pattern only: never touch Calendar, Contract Weeks or worked hours.
+function syncContractAdHocSchedule(ctx, enabled, form) {
+  const main = (ctx.formState ||= { main: {}, pay: {} }).main ||= {};
+  if (enabled) {
+    main.__scheduleClearedForAdHoc = true;
+    main.__template = null;
+    main.__hours = null;
+    ctx.data ||= {};
+    ctx.data.std_schedule_json = null;
+    ctx.data.std_hours_json = null;
+    for (const day of ['mon','tue','wed','thu','fri','sat','sun']) {
+      for (const part of ['start','end','break']) main[`${day}_${part}`] = '';
+      main[`gh_${day}`] = '';
+    }
+  }
+  for (const el of Array.from(form?.querySelectorAll('.sched-grid input, .sched-grid button') || [])) {
+    if (enabled) {
+      if (el.tagName === 'INPUT') el.value = '';
+      el.removeAttribute('data-invalid');
+      el.disabled = true;
+      el.setAttribute('data-ctms-intentional-lock', '1');
+      el.setAttribute('data-contract-ad-hoc-lock', '1');
+    } else if (el.getAttribute('data-contract-ad-hoc-lock') === '1') {
+      el.removeAttribute('data-contract-ad-hoc-lock');
+      el.removeAttribute('data-ctms-intentional-lock');
+      el.disabled = false;
+    }
+  }
+}
+
 function setContractFormValue(name, value) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : false;
 
@@ -126396,6 +126430,7 @@ function setContractFormValue(name, value) {
     try {
       window.modalCtx.data = window.modalCtx.data || {};
       window.modalCtx.data.is_ad_hoc = stored;
+      syncContractAdHocSchedule(window.modalCtx, stored, form);
     } catch {}
   }
 
@@ -126709,6 +126744,11 @@ function applyRatePresetToContractForm(preset, payMethod /* 'PAYE'|'UMBRELLA' */
       }
     }
   } catch {}
+
+  // A rate preset must not reintroduce a fixed pattern into an ad hoc draft.
+  if (contractAdHocEnabled(Object.prototype.hasOwnProperty.call(fs.main, 'is_ad_hoc') ? fs.main.is_ad_hoc : window.modalCtx?.data?.is_ad_hoc)) {
+    syncContractAdHocSchedule(window.modalCtx, true, form);
+  }
 
   // Recompute margins + mark modal dirty
   try { if (typeof computeContractMargins === 'function') computeContractMargins(); } catch {}
@@ -141250,9 +141290,10 @@ function renderContractMainTab(ctx) {
   `;
 
   const dayRow = (k, label) => {
-    const s  = pick(k,'start');
-    const e  = pick(k,'end');
-    const br = pick(k,'break');
+    const s  = isAdHocChecked ? '' : pick(k,'start');
+    const e  = isAdHocChecked ? '' : pick(k,'end');
+    const br = isAdHocChecked ? '' : pick(k,'break');
+    const adHocLock = isAdHocChecked ? 'disabled data-ctms-intentional-lock="1" data-contract-ad-hoc-lock="1"' : '';
     const num = (v) => (v == null ? '' : String(v));
     return `
       <div class="row sched" data-day="${k}">
@@ -141261,21 +141302,21 @@ function renderContractMainTab(ctx) {
           <div class="grid-3" style="min-width:420px">
             <div class="split">
               <span class="mini">Start</span>
-              <input class="input" name="${k}_start" value="${s}" placeholder="HH:MM" ${timeEvents()} />
+              <input class="input" name="${k}_start" value="${s}" placeholder="HH:MM" ${adHocLock} ${timeEvents()} />
             </div>
             <div class="split">
               <span class="mini">End</span>
-              <input class="input" name="${k}_end" value="${e}" placeholder="HH:MM" ${timeEvents()} />
+              <input class="input" name="${k}_end" value="${e}" placeholder="HH:MM" ${adHocLock} ${timeEvents()} />
             </div>
             <div class="split">
               <span class="mini">Break (min)</span>
-              <input class="input" type="number" min="0" step="1" name="${k}_break" value="${num(br)}" placeholder="0"
+              <input class="input" type="number" min="0" step="1" name="${k}_break" value="${num(br)}" placeholder="0" ${adHocLock}
                 oninput="try{ if(typeof setContractFormValue==='function') setContractFormValue(this.name, this.value); }catch(e){}" />
             </div>
           </div>
           <div class="row-actions" style="display:flex;gap:6px">
             <button type="button" class="btn mini"
-              title="Copy this row’s Start/End/Break"
+              title="Copy this row’s Start/End/Break" ${adHocLock}
               onclick="(function(){
                 try{
                   const f=document.querySelector('#contractForm'); if(!f) return;
@@ -141290,7 +141331,7 @@ function renderContractMainTab(ctx) {
                 }catch(e){ console.warn('sched copy failed', e); }
               })()">Copy</button>
             <button type="button" class="btn mini"
-              title="Paste to this row"
+              title="Paste to this row" ${adHocLock}
               onclick="(function(){
                 try{
                   const clip = window.__schedClipboard || {};
@@ -141337,7 +141378,7 @@ function renderContractMainTab(ctx) {
              <label></label>
              <div class="controls">
                <div class="mini" style="opacity:.85">
-                 <strong>Ad hoc is enabled:</strong> this schedule is kept for reference, but it will not be prepopulated into the worker app timesheet.
+                 <strong>Ad hoc is enabled:</strong> no fixed schedule or guaranteed hours.
                </div>
              </div>
            </div>`
@@ -297865,7 +297906,8 @@ function computeContractSaveEligibility() {
     }
 
     const hasTemplate = !!(data.std_schedule_json && typeof data.std_schedule_json === 'object' && Object.keys(data.std_schedule_json).length);
-    const scheduleOk = (hasValidPair || hasPendingPair || hasStaged || hasTemplate);
+    const adHoc = contractAdHocEnabled(Object.prototype.hasOwnProperty.call(fs.main || {}, 'is_ad_hoc') ? fs.main.is_ad_hoc : data.is_ad_hoc);
+    const scheduleOk = (adHoc || hasValidPair || hasPendingPair || hasStaged || hasTemplate);
     const pendingTimeFormat = hasPendingPair || pendingFields.length > 0;
 
     // -------- Finance checks (with fallback to saved rates_json)
@@ -298538,8 +298580,10 @@ try {
             const gh = { mon: numOrNull('gh_mon'), tue: numOrNull('gh_tue'), wed: numOrNull('gh_wed'),
                      thu: numOrNull('gh_thu'), fri: numOrNull('gh_fri'), sat: numOrNull('gh_sat'), sun: numOrNull('gh_sun') };
         const ghFilled = Object.values(gh).some(v => v != null && v !== 0);
-        let std_hours_json = ghFilled ? gh : (base.std_hours_json ?? null);
+        const adHocSchedule = contractAdHocEnabled(Object.prototype.hasOwnProperty.call(fs.main || {}, 'is_ad_hoc') ? fs.main.is_ad_hoc : base.is_ad_hoc);
+        let std_hours_json = ghFilled ? gh : (fs.main?.__scheduleClearedForAdHoc ? null : (base.std_hours_json ?? null));
         if (!std_hours_json && fs.main && fs.main.__hours) std_hours_json = fs.main.__hours;
+        if (adHocSchedule) std_hours_json = null;
 
         // --- Build std_schedule_json from mon_start/end/break etc. ---
         const buildScheduleJson = () => {
@@ -298635,7 +298679,7 @@ try {
           return { schedule: sched, issues };
         };
 
-        const { schedule, issues } = buildScheduleJson();
+        const { schedule, issues } = adHocSchedule ? { schedule: null, issues: [] } : buildScheduleJson();
         if (issues.length) {
           // Block save; user must fix bad times first
           window.modalCtx._saveInFlight = false;
@@ -298651,9 +298695,10 @@ try {
         } else if (fs.main && fs.main.__template) {
           // No rows entered this time → keep last template if present
           std_schedule_json = fs.main.__template;
-        } else if (base.std_schedule_json) {
+        } else if (!fs.main?.__scheduleClearedForAdHoc && base.std_schedule_json) {
           std_schedule_json = base.std_schedule_json;
         }
+        if (adHocSchedule) std_schedule_json = null;
 
 
 

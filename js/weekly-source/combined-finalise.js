@@ -28,7 +28,7 @@
       .sort((left,right)=>(direction==='desc'?-1:1)*sortValue(left).localeCompare(sortValue(right),'en-GB')||String(left.key).localeCompare(String(right.key)));
     const jump=state.seek?reports.findIndex(item=>sortValue(item).toLowerCase().startsWith(state.seek.toLowerCase())):-1;
     if(jump>0)reports=reports.slice(jump);
-    const rows=reports.map(item=>`<tr>${columns.map(([label,key])=>{
+    const rows=reports.map(item=>`<tr class="${eligible(item)?'ws-query-nonblocking':'ws-query-hold'}">${columns.map(([label,key])=>{
       if(key==='selection')return `<td data-label="Select"><input type="checkbox" aria-label="Select ${escape(item.client)} ${escape(item.period)}" data-wsc-select="${escape(item.key)}"${selected.has(item.key)?' checked':''}${eligible(item)&&!state.batch?'':' disabled'}></td>`;
       if(key==='action')return `<td data-label="Action" class="ws-actions"><button class="btn btn-outline" data-wsc-open-report="${escape(item.key)}">Open</button></td>`;
       if(key==='status')return `<td data-label="Status">${eligible(item)?'Ready to finalise':Number(item.blocked_count)>0?`${Number(item.blocked_count)} blockers — not included`:'Not ready — open for details'}</td>`;
