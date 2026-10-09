@@ -144,7 +144,7 @@ test('a new backdated Contract draft is never lifecycle-locked; persisted protec
     assert.equal(result.hasAnyWeeks, false);
     assert.equal(result.reason, '');
   }
-  const started = locks({ id: 'existing', start_date: '2020-09-21' });
+  const started = locks({ id: 'existing', candidate_id: 'assigned', start_date: '2020-09-21' });
   assert.equal(started.veryHighLocked, true);
   assert.equal(started.ratesLocked, false);
   for (const history of [{ has_timesheets: true }, { has_real_timesheets: true }, { real_timesheets_count: 1 }]) {
@@ -153,6 +153,10 @@ test('a new backdated Contract draft is never lifecycle-locked; persisted protec
     assert.equal(worked.ratesLocked, true);
   }
   assert.equal(locks({ id: 'existing', start_date: '2099-09-21' }).veryHighLocked, false);
+  const vacancy = locks({ id: 'vacant-copy', candidate_id: null, start_date: '2020-09-21', contract_weeks_count: 9 });
+  assert.equal(vacancy.veryHighLocked, false, 'past dates/planned weeks cannot prevent assigning or amending a vacant copy');
+  assert.equal(vacancy.ratesLocked, false);
+  assert.equal(locks({ id: 'vacant-copy', candidate_id: null, start_date: '2020-09-21', has_real_timesheets: true }).veryHighLocked, true);
 });
 
 test('View and Edit Contract actions are separated and use branded confirmation', () => {
@@ -247,4 +251,42 @@ test('Duplicate Contract Studio supports polished responsive candidate assignmen
   assert.match(css, /@media \(max-width: 1024px\)/);
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /-webkit-overflow-scrolling: touch/);
+});
+
+test('Duplicate Studio filters by the copied pay channel and permits an entirely vacant copy', async () => {
+  const { runInNewContext } = require('node:vm');
+  for (const payMethod of ['PAYE', 'UMBRELLA']) {
+    let modal, searchTimer, requestUrl, created;
+    const fields = new Map();
+    const root = { innerHTML: '', querySelectorAll: () => [], querySelector: (selector) => {
+      if (!fields.has(selector)) fields.set(selector, { addEventListener(type, handler) { this[type] = handler; } });
+      return fields.get(selector);
+    } };
+    const open = runInNewContext(`${section('function openContractDuplicateStudio', 'async function duplicateContract')}; openContractDuplicateStudio`, {
+      window: { modalCtx: { data: { pay_method_snapshot: payMethod, client_name: 'Client', start_date: '2026-09-21', end_date: '2026-09-27' } } },
+      document: { getElementById: () => root }, URLSearchParams, escapeHtml: String, formatIsoToUk: String,
+      setTimeout: (fn) => { searchTimer = fn; return 1; }, clearTimeout: () => {},
+      showModal: (...args) => { modal = args; root.innerHTML = args[2](); args[5](); },
+      authFetch: async (url) => { requestUrl = url; return { ok: true, json: async () => ({ rows: [] }) }; },
+      API: (url) => url, crypto: { randomUUID: () => 'unit-fixture' },
+      checkContractOverlap: () => { throw new Error('a vacant copy has no Candidate overlap query'); },
+      duplicateContract: async (id, intent) => { created = { id, intent }; return { ok: true, count: 1 }; }, renderAll: async () => {}
+    });
+    open('source');
+    assert.match(root.innerHTML, /Unassigned vacancy/);
+    assert.match(root.innerHTML, /Unassigned copies are allowed/);
+    fields.get('[data-duplicate-query]').input({ target: { value: 'Baljit' } });
+    await searchTimer();
+    assert.equal(new URL(requestUrl, 'https://test.invalid').searchParams.get('pay_method'), payMethod);
+    assert.equal((await modal[3]()).ok, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(created.intent.assignments)), [null]);
+    assert.equal(created.intent.count, 1);
+  }
+});
+
+test('an initial vacant duplication intent bypasses record-edit dirtiness and the assigned-record save gate', () => {
+  const controls = section('// ✅ NEW: Contracts create-mode gating', '// 🔹 Top-level Invoice Modal');
+  assert.match(controls, /!\['contract-clone-extend', 'contract-duplicate-studio'\]\.includes\(top\.kind\) && !top\.isDirty/);
+  assert.match(controls, /top\.entity === 'contracts' && top\.kind !== 'contract-duplicate-studio'/);
+  assert.match(main, /showContractLock = !!\([\s\S]{0,150}top\.kind !== 'contract-duplicate-studio'/);
 });

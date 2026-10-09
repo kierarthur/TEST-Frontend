@@ -140915,7 +140915,8 @@ function checkClientInvoiceEmailPresence(client) {
 function getContractLifecycleLocks(contractLike = null) {
   const d = contractLike || window.modalCtx?.data || {};
   // A proposed/backdated start is not lifecycle evidence for an unsaved draft.
-  // Retain the existing date/history protections only for persisted Contracts.
+  // A vacant copy has no booking to protect solely because its dates are past.
+  // Worked history remains protected, including on an unassigned Contract.
   const isExistingContract = !!d.id;
   const today = (() => {
     try { return new Intl.DateTimeFormat('en-CA', { timeZone:'Europe/London', year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date()); }
@@ -140929,7 +140930,7 @@ function getContractLifecycleLocks(contractLike = null) {
   );
   const hasPlannedWeeks = isExistingContract && (Number(d.contract_weeks_count ?? 0) > 0 ||
     (Array.isArray(window.modalCtx?.contract_weeks) && window.modalCtx.contract_weeks.length > 0));
-  const startedByDate = !!(isExistingContract && start && /^\d{4}-\d{2}-\d{2}$/.test(start) && start <= today);
+  const startedByDate = !!(isExistingContract && d.candidate_id && start && /^\d{4}-\d{2}-\d{2}$/.test(start) && start <= today);
   return {
     today,
     hasProtectedHistory,
@@ -333201,7 +333202,7 @@ top._updateButtons = ()=> {
     const contractOwner = top.kind === 'contract_settings' ? parent : top;
     const contractData = contractOwner?._ctxRef?.data || (top.entity === 'contracts' ? window.modalCtx?.data : null);
     const showContractLock = !!(
-      (top.entity === 'contracts' || top.kind === 'contract_settings') &&
+      ((top.entity === 'contracts' && top.kind !== 'contract-duplicate-studio') || top.kind === 'contract_settings') &&
       getContractLifecycleLocks(contractData).veryHighLocked
     );
     if (showContractLock && title) {
@@ -335684,7 +335685,7 @@ Operation ID: ${operationId}` : ''}`);
       btnSave.style.display = '';
 
       // ✅ NEW: Contracts create-mode gating must respect eligibility (incl. unknown pay method)
-      if (top.entity === 'contracts') {
+      if (top.entity === 'contracts' && top.kind !== 'contract-duplicate-studio') {
         let gate = null;
         let gateOk = true;
         try {
@@ -335720,7 +335721,7 @@ Operation ID: ${operationId}` : ''}`);
 
       let gateOK = true;
 
-      if (top.entity === 'contracts') {
+      if (top.entity === 'contracts' && top.kind !== 'contract-duplicate-studio') {
         try {
           const gate = (typeof computeContractSaveEligibility === 'function') ? computeContractSaveEligibility() : null;
           gateOK = (gate && typeof gate === 'object' && Object.prototype.hasOwnProperty.call(gate, 'ok'))
@@ -335736,7 +335737,7 @@ Operation ID: ${operationId}` : ''}`);
         btnSave.disabled = !!top._saving || !top.isDirty;
       } else {
         btnSave.disabled = (top.entity === 'contracts')
-          ? (top._saving || ((top.kind !== 'contract-clone-extend') && !top.isDirty) || !gateOK)
+          ? (top._saving || (!['contract-clone-extend', 'contract-duplicate-studio'].includes(top.kind) && !top.isDirty) || !gateOK)
           : (
               top._saving ||
               (top.kind === 'timesheet-evidence-viewer' && !top.isDirty)
@@ -358358,6 +358359,9 @@ async function commitContractCalendarStage(contractId) {
 
 function openContractDuplicateStudio(contractId) {
   const source = { ...(window.modalCtx?.data || {}) };
+  const payMethod = String(source.pay_method_snapshot || 'PAYE').trim().toUpperCase();
+  const payMethodAvailable = ['PAYE', 'UMBRELLA'].includes(payMethod);
+  const payMethodLabel = payMethod === 'UMBRELLA' ? 'Umbrella' : 'PAYE';
   const rootId = `contractDuplicateStudio_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const state = {
     count: 1,
@@ -358415,7 +358419,7 @@ function openContractDuplicateStudio(contractId) {
       </div>
       <div class="ctms-contract-duplicate-grid">
         <section class="ctms-contract-duplicate-pane" aria-labelledby="duplicateCandidateHeading">
-          <header class="ctms-contract-duplicate-pane__head"><h3 id="duplicateCandidateHeading">Find candidates</h3><p>Tick a person to assign the next vacant copy.</p></header>
+          <header class="ctms-contract-duplicate-pane__head"><h3 id="duplicateCandidateHeading">Find candidates</h3><p>${esc(payMethodLabel)} candidates only. Tick a person to assign the next vacant copy.</p></header>
           <div class="ctms-contract-duplicate-filters">
             <input class="input" data-duplicate-query value="${esc(state.query)}" placeholder="Search name…" aria-label="Search candidate name">
             <input class="input" data-duplicate-job value="${esc(state.job)}" placeholder="Primary job title" aria-label="Filter by primary job title">
@@ -358454,13 +358458,14 @@ function openContractDuplicateStudio(contractId) {
   };
   const fetchRows = async () => {
     const query = state.query.trim();
+    if (!payMethodAvailable) { state.rows = []; state.loading = false; state.error = 'The source Contract pay method is unavailable. Reopen the Contract before duplicating.'; paint(); return; }
     if (query.length < 2) { state.rows = []; state.loading = false; paint(); return; }
     const serial = ++state.requestSerial;
     state.loading = true;
     state.error = '';
     paint();
     try {
-      const params = new URLSearchParams({ format:'picker', q:query, page:'1', page_size:'25' });
+      const params = new URLSearchParams({ format:'picker', q:query, page:'1', page_size:'25', pay_method:payMethod });
       const response = await authFetch(API(`/api/search/candidates?${params.toString()}`));
       if (!response?.ok) throw new Error('Candidate search is temporarily unavailable.');
       const payload = await response.json();
