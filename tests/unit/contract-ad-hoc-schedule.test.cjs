@@ -10,27 +10,41 @@ function fn(name) {
 function harness() {
   const controls = Array.from({length:35}, (_, i) => ({tagName:i%5<3?'INPUT':'BUTTON', value:'09:00', disabled:false, attrs:{}, setAttribute(k,v){this.attrs[k]=v;}, getAttribute(k){return this.attrs[k];}, removeAttribute(k){delete this.attrs[k];}}));
   const checkbox = { type:'checkbox', checked:false };
-  const form = { querySelector: selector => selector.includes('is_ad_hoc') ? checkbox : null, querySelectorAll: () => controls };
+  const hint = {hidden:true,style:{display:'none'}};
+  const form = { querySelector: selector => selector.includes('is_ad_hoc') ? checkbox : selector.includes('data-contract-ad-hoc-hint') ? hint : null, querySelectorAll: () => controls };
   const data = {client_id:'client', candidate_id:'candidate', role:'CPN', start_date:'2026-10-12', end_date:'2026-10-25', rates_json:{paye_day:20,charge_day:30}, std_schedule_json:{mon:{start:'09:00',end:'17:00',break_minutes:30}}, std_hours_json:{mon:7.5}};
   const ctx = {data, formState:{main:{},pay:{}}};
   const sandbox = {window:{modalCtx:ctx,dispatchEvent(){}}, document:{querySelector:()=>form,getElementById:()=>null}, CSS:{escape:v=>v}, CustomEvent:class{}, console};
   const api = vm.runInNewContext(`${['contractAdHocEnabled','syncContractAdHocSchedule','setContractFormValue','computeContractSaveEligibility'].map(fn).join('\n')}; ({setContractFormValue,computeContractSaveEligibility})`, sandbox);
-  return {api,ctx,controls};
+  return {api,ctx,controls,hint};
 }
 test('actual checkbox setter clears and locks all 21 schedule inputs and 14 Copy/Paste controls; untick unlocks blank fields', () => {
-  const {api,ctx,controls}=harness();
+  const {api,ctx,controls,hint}=harness();
   const history={worked:'17:00', protected:true};ctx.data.history=history;
   api.setContractFormValue('is_ad_hoc', true);
+  assert.equal(hint.hidden,false);assert.equal(hint.style.display,'');
   assert.equal(ctx.data.std_schedule_json,null);assert.equal(ctx.data.std_hours_json,null);
   assert.ok(controls.every(el=>el.disabled && el.attrs['data-ctms-intentional-lock']==='1'));
   assert.ok(controls.filter(el=>el.tagName==='INPUT').every(el=>el.value===''));
   for(const day of ['mon','tue','wed','thu','fri','sat','sun']) for(const part of ['start','end','break']) assert.equal(ctx.formState.main[`${day}_${part}`],'');
+  // Simulate the actual modal mode pass, which adds a second lock attribute.
+  controls.filter(el=>el.tagName==='INPUT').forEach(el=>{el.readOnly=true;el.setAttribute('readonly','true');});
   api.setContractFormValue('is_ad_hoc',false);
+  assert.equal(hint.hidden,true);assert.equal(hint.style.display,'none');
   assert.ok(controls.every(el=>!el.disabled && !el.attrs['data-ctms-intentional-lock']));
   assert.ok(controls.filter(el=>el.tagName==='INPUT').every(el=>el.value===''));
+  assert.ok(controls.filter(el=>el.tagName==='INPUT').every(el=>!el.readOnly && !Object.hasOwn(el.attrs,'readonly')));
   assert.equal(ctx.data.history,history);assert.equal(history.worked,'17:00');
   api.setContractFormValue('mon_start','10:00');assert.equal(ctx.formState.main.mon_start,'10:00');
   api.setContractFormValue('is_ad_hoc',true);assert.equal(ctx.formState.main.mon_start,'');
+});
+
+test('unticking does not release a schedule lock that is not owned by ad hoc',()=>{
+  const {api,controls}=harness();const el=controls[0];
+  el.disabled=true;el.readOnly=true;el.setAttribute('readonly','true');el.setAttribute('data-ctms-intentional-lock','1');
+  api.setContractFormValue('is_ad_hoc',false);
+  assert.equal(el.disabled,true);assert.equal(el.readOnly,true);assert.equal(el.attrs.readonly,'true');
+  assert.equal(el.attrs['data-ctms-intentional-lock'],'1');
 });
 test('actual Save gate accepts blank ad hoc, rejects blank fixed schedule and retains rate/date guards', () => {
   const {api,ctx}=harness();api.setContractFormValue('is_ad_hoc',true);

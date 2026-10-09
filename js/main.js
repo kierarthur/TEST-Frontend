@@ -126284,7 +126284,18 @@ function syncContractAdHocSchedule(ctx, enabled, form) {
       el.removeAttribute('data-contract-ad-hoc-lock');
       el.removeAttribute('data-ctms-intentional-lock');
       el.disabled = false;
+      // The modal's intentional-lock pass also adds readonly to inputs.
+      // Release only the schedule controls owned by this ad hoc lock.
+      if (el.tagName === 'INPUT') {
+        el.readOnly = false;
+        el.removeAttribute('readonly');
+      }
     }
+  }
+  const hint = form?.querySelector('[data-contract-ad-hoc-hint]');
+  if (hint) {
+    hint.hidden = !enabled;
+    hint.style.display = enabled ? '' : 'none';
   }
 }
 
@@ -141377,18 +141388,14 @@ function renderContractMainTab(ctx) {
 
   const schedGrid = `
     <div class="row" style="grid-column:1 / -1"><label class="section">Proposed schedule (Mon–Sun)</label></div>
-    ${
-      isAdHocChecked
-        ? `<div class="row" style="grid-column:1 / -1;margin-top:2px">
+    <div class="row" data-contract-ad-hoc-hint ${isAdHocChecked ? '' : 'hidden'} style="grid-column:1 / -1;margin-top:2px;${isAdHocChecked ? '' : 'display:none;'}">
              <label></label>
              <div class="controls">
                <div class="mini" style="opacity:.85">
                  <strong>Ad hoc is enabled:</strong> no fixed schedule or guaranteed hours.
                </div>
              </div>
-           </div>`
-        : ``
-    }
+           </div>
     <div class="sched-grid" style="grid-column:1 / -1;min-width:0">
       ${DAYS.map(([k,l]) => dayRow(k,l)).join('')}
     </div>
