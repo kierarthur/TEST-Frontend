@@ -42,6 +42,14 @@ test('actual Save gate accepts blank ad hoc, rejects blank fixed schedule and re
   api.setContractFormValue('is_ad_hoc',true);ctx.data.rates_json={};
   assert.equal(api.computeContractSaveEligibility().ok,false);
 });
+test('unticking a saved legacy ad hoc Contract does not revive its hidden template on later rendering',()=>{
+  const {api,ctx,controls}=harness();ctx.data.is_ad_hoc=true;
+  api.setContractFormValue('is_ad_hoc',false);
+  assert.equal(ctx.data.std_schedule_json,null);assert.equal(ctx.data.std_hours_json,null);
+  assert.ok(controls.every(el=>!el.disabled));
+  assert.equal(ctx.formState.main.mon_start,'');
+  assert.equal(api.computeContractSaveEligibility().ok,false);
+});
 test('save serialization does not resurrect an ad hoc or explicitly cleared base pattern',()=>{
   assert.match(source,/adHocSchedule \? \{ schedule: null, issues: \[\] \} : buildScheduleJson\(\)/);
   assert.match(source,/if \(adHocSchedule\) std_hours_json = null/);

@@ -126429,6 +126429,11 @@ function setContractFormValue(name, value) {
   if (isAdHocField) {
     try {
       window.modalCtx.data = window.modalCtx.data || {};
+      // Opening a saved ad hoc Contract may hide an older legacy template.
+      // Unticking must not revive that hidden pattern on the next tab render.
+      if (!stored && contractAdHocEnabled(window.modalCtx.data.is_ad_hoc)) {
+        syncContractAdHocSchedule(window.modalCtx, true, form);
+      }
       window.modalCtx.data.is_ad_hoc = stored;
       syncContractAdHocSchedule(window.modalCtx, stored, form);
     } catch {}
