@@ -115305,16 +115305,9 @@ async function upsertContract(payload, id /* optional */) {
     if (LOGC) console.warn('[CONTRACTS][UPSERT] weekly import auto-refresh failed', e);
   }
 
-  // MyTMS is an explicitly separate post-commit action. A decline, eligibility
-  // failure, unavailable dependency or delivery uncertainty can never change
-  // the already-successful contract result.
-  if (method === 'POST' && data) {
-    try {
-      await window.CloudTMSMyTmsOffice?.offerAfterContractSuccess?.(data);
-    } catch (e) {
-      if (LOGC) console.warn('[CONTRACTS][UPSERT] MyTMS post-success offer failed (non-fatal)', e);
-    }
-  }
+  // The record-modal owner offers MyTMS only after every save step succeeds
+  // and the saved identity/clean View mode have been adopted. Opening a child
+  // here would suspend and resume the still-unsaved Create frame.
 
   return data;
 }
@@ -141169,6 +141162,21 @@ function restoreModalDirtyAfterRender(fr, previousDirty, contractSaveRevision) {
   if (Number(fr.__contractSaveRevision || 0) === contractSaveRevision) fr.isDirty = !!(fr.isDirty || previousDirty);
 }
 
+async function offerMyTmsAfterContractModalSaved(fr, saved, wasCreate) {
+  const stack = window.__modalStack || [];
+  if (!wasCreate || fr?.entity !== 'contracts' || fr.mode !== 'view' || fr.isDirty
+      || stack[stack.length - 1] !== fr) return;
+  const contract = saved?.contract || saved;
+  if (!contract?.id || !contract.candidate_id) return;
+  // Separate optional action: never re-save, clear later edits, or fail the
+  // already-completed Contract because the invitation was declined/unavailable.
+  try {
+    await window.CloudTMSMyTmsOffice?.offerAfterContractSuccess?.(saved);
+  } catch {
+    try { window.showModalHint?.('Contract saved. MyTMS invitation is unavailable.', 'warn'); } catch {}
+  }
+}
+
 function renderContractMainTab(ctx) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
 
@@ -143143,6 +143151,7 @@ async function openUiConfirmModal(opts = {}) {
       null,
       {
         kind,
+        frameEntity: opts.frameEntity,
         noParentGate: true,
         showSave: false,
         showApply: false,
@@ -337070,6 +337079,8 @@ const resumeParentAfterChildReturn = (closing) => {
 
 async function saveForFrame(fr) {
   if (!fr || fr._saving) return;
+  const wasContractCreate = fr.entity === 'contracts' && !fr.hasId
+    && (fr.mode === 'create' || fr.mode === 'edit');
   const onlyDel    = hasStagedClientDeletes();
   const allowApply = (
     fr.kind === 'candidate-override' ||
@@ -337364,6 +337375,7 @@ async function saveForFrame(fr) {
 
     L('saveForFrame EXIT (global parent, kept open)');
   }
+  await offerMyTmsAfterContractModalSaved(fr, saved, wasContractCreate);
 }
 
 const onSaveClick = async (ev)=>{

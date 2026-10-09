@@ -1209,7 +1209,8 @@
         </div>`,
       confirm_label: actionLabel,
       cancel_label: 'Not now',
-      kind: 'mytms-candidate-invitation-confirm'
+      kind: 'mytms-candidate-invitation-confirm',
+      frameEntity: 'mytms-action-confirmation'
     });
     if (!confirmation?.confirmed) return { sent: false, reason: 'DECLINED' };
     const result = membershipAction
@@ -1247,7 +1248,8 @@
           <p>${escapeHtml(presented.message)}</p>
         </div>`,
       confirm_label: 'Close', hide_cancel: true,
-      kind: 'mytms-invitation-result'
+      kind: 'mytms-invitation-result',
+      frameEntity: 'mytms-action-confirmation'
     });
     return { sent: !membershipAction, changed: membershipAction, result };
   }

@@ -193,7 +193,7 @@ test('source wiring keeps MyTMS Office separate, server-authored and post-commit
   assert.match(mainSource, /data-k="mytms-app"/);
   assert.match(mainSource, /CloudTMSMyTmsOffice\?\.openSettings/);
   assert.match(mainSource, /CloudTMSMyTmsOffice\?\.mountCandidateAction/);
-  assert.match(mainSource, /if \(method === 'POST' && data\)/);
+  assert.match(mainSource, /const wasContractCreate = fr\.entity === 'contracts' && !fr\.hasId/);
   assert.match(mainSource, /offerAfterContractSuccess/);
   assert.doesNotMatch(mainSource, /renderSettingsTab\([^)]*mytms/i);
   assert.match(htmlSource, /js\/main\.js[\s\S]*js\/mytms-office-v1\.js/);
