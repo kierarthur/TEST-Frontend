@@ -315,6 +315,11 @@
 
   function normaliseContractChooser(payload) {
     const raw = asObject(payload);
+    const seed = { ...asObject(raw.contract_seed) };
+    // The read projection supplies IDs/date separately from its display context.
+    // Carry those labels into the new draft; never infer an ID or rates from a name.
+    if (seed.candidate_id && !asText(seed.candidate_display)) seed.candidate_display = asText(raw.candidate);
+    if (seed.client_id && !asText(seed.client_name)) seed.client_name = asText(raw.client);
     const choices = asArray(raw.choices || raw.contract_choices || raw.qualifying_contracts).map((entry) => {
       const item = asObject(entry);
       return {
@@ -327,7 +332,7 @@
       choices, candidate: asText(raw.candidate), client: asText(raw.client), shift: asText(raw.shift),
       source_role_band: asText(raw.source_role_band), source_row_ordinal: asText(raw.source_row_ordinal),
       accept_payload: asObject(raw.accept_payload), existing_selections: asObject(raw.contract_selections),
-      recheck_payload: asObject(raw.recheck_payload), contract_seed: asObject(raw.contract_seed)
+      recheck_payload: asObject(raw.recheck_payload), contract_seed: seed
     };
   }
 

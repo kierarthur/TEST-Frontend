@@ -140914,19 +140914,22 @@ function checkClientInvoiceEmailPresence(client) {
 
 function getContractLifecycleLocks(contractLike = null) {
   const d = contractLike || window.modalCtx?.data || {};
+  // A proposed/backdated start is not lifecycle evidence for an unsaved draft.
+  // Retain the existing date/history protections only for persisted Contracts.
+  const isExistingContract = !!d.id;
   const today = (() => {
     try { return new Intl.DateTimeFormat('en-CA', { timeZone:'Europe/London', year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date()); }
     catch { return new Date().toISOString().slice(0, 10); }
   })();
   const start = String(d.start_date || '').slice(0, 10);
-  const hasProtectedHistory = !!(
+  const hasProtectedHistory = isExistingContract && !!(
     d.has_real_timesheets === true ||
     d.has_timesheets === true ||
     Number(d.real_timesheets_count ?? d.timesheets_count ?? 0) > 0
   );
-  const hasPlannedWeeks = Number(d.contract_weeks_count ?? 0) > 0 ||
-    (Array.isArray(window.modalCtx?.contract_weeks) && window.modalCtx.contract_weeks.length > 0);
-  const startedByDate = !!(start && /^\d{4}-\d{2}-\d{2}$/.test(start) && start <= today);
+  const hasPlannedWeeks = isExistingContract && (Number(d.contract_weeks_count ?? 0) > 0 ||
+    (Array.isArray(window.modalCtx?.contract_weeks) && window.modalCtx.contract_weeks.length > 0));
+  const startedByDate = !!(isExistingContract && start && /^\d{4}-\d{2}-\d{2}$/.test(start) && start <= today);
   return {
     today,
     hasProtectedHistory,

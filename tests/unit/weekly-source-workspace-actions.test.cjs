@@ -16,6 +16,18 @@ const { resolve } = require('node:path');
 const actions = require('../../js/weekly-source/workspace-actions.js');
 const fixtures = JSON.parse(readFileSync(resolve(__dirname, '../fixtures/weekly-source-workspace-actions-v1.json'), 'utf8'));
 
+test('source Contract creation preserves resolved IDs/date and displays the selected Candidate and Client without cache', () => {
+  const seed = { candidate_id: 'resolved-candidate', client_id: 'resolved-client', start_date: '2026-09-21' };
+  const payload = { candidate: 'Baljit Rai-Baptiste', client: 'Berkshire Healthcare NHS Foundation Trust', contract_seed: seed };
+  const model = actions.normaliseContractChooser(payload);
+  assert.deepEqual(model.contract_seed, { ...seed, candidate_display: payload.candidate, client_name: payload.client });
+  assert.deepEqual(seed, { candidate_id: 'resolved-candidate', client_id: 'resolved-client', start_date: '2026-09-21' });
+  assert.equal(actions.normaliseContractChooser({ ...payload, contract_seed: {} }).contract_seed.candidate_id, undefined);
+  assert.equal(actions.normaliseContractChooser({ ...payload, contract_seed: { ...seed, client_name: 'Resolved Client' } }).contract_seed.client_name, 'Resolved Client');
+  assert.equal(model.contract_seed.rates_json, undefined);
+  assert.equal(model.contract_seed.pay_method_snapshot, undefined);
+});
+
 test('a pending source-absent retry is not redirected to its own overlap; new work still is', async () => {
   const { runInNewContext } = require('node:vm');
   const editor = require('../../js/weekly-source/protected-shift-editor.js');

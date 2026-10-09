@@ -131,6 +131,30 @@ test('Contract lifecycle protects very-high fields after start but locks rates o
   assert.match(additionalRatesTab, /<fieldset class="ctms-contract-protected-fields" \$\{ratesLocked \? 'disabled data-ctms-intentional-lock="1"' : ''\}/);
 });
 
+test('a new backdated Contract draft is never lifecycle-locked; persisted protections remain', () => {
+  const { runInNewContext } = require('node:vm');
+  const locks = runInNewContext(`${section('function getContractLifecycleLocks', 'function markContractParentDirty')}; getContractLifecycleLocks`, {
+    window: { modalCtx: { contract_weeks: [{}] } }
+  });
+  for (const draft of [{}, { start_date: '2020-09-21' },
+    { start_date: '2020-09-21', has_timesheets: true, timesheets_count: 9, contract_weeks_count: 3 }]) {
+    const result = locks(draft);
+    assert.equal(result.veryHighLocked, false);
+    assert.equal(result.ratesLocked, false);
+    assert.equal(result.hasAnyWeeks, false);
+    assert.equal(result.reason, '');
+  }
+  const started = locks({ id: 'existing', start_date: '2020-09-21' });
+  assert.equal(started.veryHighLocked, true);
+  assert.equal(started.ratesLocked, false);
+  for (const history of [{ has_timesheets: true }, { has_real_timesheets: true }, { real_timesheets_count: 1 }]) {
+    const worked = locks({ id: 'existing', start_date: '2099-09-21', ...history });
+    assert.equal(worked.veryHighLocked, true);
+    assert.equal(worked.ratesLocked, true);
+  }
+  assert.equal(locks({ id: 'existing', start_date: '2099-09-21' }).veryHighLocked, false);
+});
+
 test('View and Edit Contract actions are separated and use branded confirmation', () => {
   const dirty = section('function markContractParentDirty', 'function contractModifyIsParentClean');
   assert.match(dirty, /reverse\(\)\.find\(item => item\?\.kind === 'contracts'\)/);
