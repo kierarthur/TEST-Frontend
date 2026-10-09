@@ -50,6 +50,8 @@
     CSV_ISSUE: { instruction_id: 'uuid', transfer_id: 'uuid', file_name: 'file', csv_sha256: 'sha', csv_text: 'csv', phase: 'csv', payment_recorded: 'boolean', replay: 'boolean' }
   };
   const ROWS = {
+    ACCEPTED_CANDIDATES:{candidate_id:'uuid',accepted_input_id:'uuid',module_epoch:'positive',target_pay_channel:'channel',target_umbrella_id:'uuid?',pay_week_start:'date',case_scope:'acceptedCaseScope',case_selection_revision:'positive?',settings_witness_kind:'settingsWitness',input_evidence_sha256:'sha',prepare_job_id:'uuid?',prepare_job_status:'prepareJobStatus?',prepare_job_phase:'prepareJobPhase?',run_worker_id:'uuid?',worker_status:'worker?',has_unsealed_work:'boolean',waiting_command_id:'uuid?',waiting_command_sequence:'positive?',progress_state:'acceptedProgress',progress_code:'acceptedProgressCode?',review_issue_code:'issue?'},
+    ACCEPTED_WORK:{candidate_id:'uuid',accepted_input_id:'uuid',accepted_work_input_id:'uuid',work_id:'uuid',original_revision_id:'uuid',effective_revision_id:'uuid',selection_mode:'mode',selected_line_count:'integer',publication_command_id:'uuid',predecessor_sequence:'positive',source_kind:'acceptedSourceKind',query_disposition:'acceptedQuery?',query_state_sha256:'sha?',input_evidence_sha256:'sha',effective_cut_id:'uuid?',cut_state:'acceptedCutState'},
     CURRENT_CASES: { case_id: 'uuid', candidate_id: 'uuid', case_kind: 'caseKind', tax_treatment: 'tax', status: 'caseStatus', principal_approved: 'money', principal_funded: 'money', principal_recovered: 'money', principal_written_off: 'money', active_hold_amount: 'money' },
     CASE_COMPONENTS: { case_component_id: 'uuid', case_id: 'uuid', candidate_id: 'uuid', component_ordinal: 'positive', component_revision: 'positive', case_kind: 'caseKind', case_subtype: 'caseSubtype', tax_treatment: 'tax', instruction_kind: 'instruction', direction: 'direction', payroll_stage: 'stage', source_pay_channel: 'channel', resolution_state: 'resolution', approved_source_ex_vat: 'money', funded_source_ex_vat: 'money', recovered_source_ex_vat: 'money', written_off_source_ex_vat: 'money', active_payout_source_ex_vat: 'money', active_recovery_source_ex_vat: 'money' },
     CURRENT_WORK: { work_id: 'uuid', candidate_id: 'uuid', original_timesheet_id: 'uuid', work_kind: 'workKind', week_ending_date: 'date', approval_state: 'approval', current_revision_id: 'uuid?', applied_revision_id: 'uuid?', position_ready: 'boolean', source_pay_channel: 'channel?', timesheet_reference: 'label?', client_display_name: 'label?', approved_source_ex_vat: 'money?' },
@@ -60,11 +62,14 @@
     STATUS: { transfer_id: 'uuid', transfer_no: 'transferNo', projection_id: 'uuid?', execution_kind: 'execution', status: 'transfer', cash_amount: 'money', original_transfer_id: 'uuid?' },
     RETURN_CASH: { original_transfer_id:'uuid',original_transfer_no:'transferNo',original_transfer_status:'returned',original_cash_amount:'cashMoney',beneficiary_kind:'beneficiary',beneficiary_id:'uuid',return_command_id:'uuid',return_posting_complete:'boolean',return_cash_id:'uuid?',amount_owed:'cashMoney?',amount_held:'cashMoney?',amount_reissued_paid:'cashMoney?',amount_available:'cashMoney?',pending_reissue_command_id:'uuid?',action_state:'returnState' }
   };
+  const ACCEPTED_HEADER={run_id:'uuid',prepare_command_id:'uuid',accepted_sequence:'positive',accepted_module_epoch:'positive',run_status:'run',command_status:'prepareCommandStatus',expected_candidate_count:'positive',enrolled_candidate_count:'integer'};
   const STATUS_HEADER = {
     run_id: 'uuid', run_status: 'run', selection_state: 'selection', review_revision: 'integer', run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', target_pay_channel: 'channel', umbrella_id: 'uuid?', preparation_revision: 'positive', case_selection_revision: 'integer', net_request_revision: 'integer', net_projection_revision: 'integer', net_pending: 'boolean', review_issue_code: 'issue?', review_issue_work_id: 'uuid?', frozen_gross_ex_vat: 'money', frozen_gross_vat: 'money', frozen_gross_inc_vat: 'money', projection_id: 'uuid?', projection_input_kind: 'projection?', entered_paye_net: 'money?', accepted_recoveries: 'money?', accepted_net_additions: 'money?', cash_amount: 'money?'
   };
   const RETURN_HEADER = {run_id:'uuid',run_worker_id:'uuid',candidate_id:'uuid',financial_view_revision:'integer'};
   const PAGES = {
+    ACCEPTED_CANDIDATES:{run_id:'uuid',after_candidate_id:'uuid?',limit:'limit'},
+    ACCEPTED_WORK:{run_id:'uuid',candidate_id:'uuid',after_work_id:'uuid?',limit:'limit'},
     CURRENT_CASES: { candidate_id: 'uuid', after_case_id: 'uuid?', limit: 'limit' },
     CASE_COMPONENTS: { candidate_id: 'uuid', case_id: 'uuid', after_component_ordinal: 'integer?', limit: 'limit' },
     CURRENT_WORK: { candidate_id: 'uuid', after_week: 'date?', after_work_id: 'uuid?', limit: 'limit' },
@@ -104,6 +109,18 @@
     if (!same(actor, options.actorId)) fail('ACTOR_CHANGED');
   }
   function field(v, type) {
+    const acceptedEnums={acceptedCaseScope:['NO_CASE','SEALED_SELECTION'],settingsWitness:['BASELINE_AT_ACCEPTANCE','ORDERED_VERSION'],
+    prepareJobStatus:['READY','LEASED','BLOCKED','DONE','FAILED'],prepareJobPhase:['NEW','PINNING','RESERVE','ALLOCATE','FINANCE_ALLOCATE','READY','DONE','EXPIRED'],
+    acceptedProgress:['WAITING_ENROLLMENT','WAITING_EARLIER_COMMAND','PREPARING','READY','REVIEW','CANCELLING','CANCELLED','FAILED','EPOCH_PAUSED'],
+    acceptedProgressCode:['ENROLLMENT_PENDING','EARLIER_COMMAND_PENDING','CUT_PENDING','PREPARATION_RUNNING','REVIEW_REQUIRED','CANCELLATION_PENDING','PREPARATION_EXPIRED','OWNER_EPOCH_STALE','JOB_FAILED'],
+    acceptedSourceKind:['ORDINARY','SOURCE','PROTECTED','EXPENSE','ADJUSTMENT'],acceptedQuery:['CLEAR'],acceptedCutState:['WAITING_PREDECESSOR','WAITING_PIN','SEALED'],
+    prepareCommandStatus:['RECEIVED','ENROLLING','SEALED','COMPLETE','FAILED']};
+    if(Object.hasOwn(acceptedEnums,type))return acceptedEnums[type].includes(v);
+    if(type==='beforeAcceptance')return v==='BEFORE_ACCEPTANCE';
+    if(type==='acceptedIdentity')return v==='ACCEPTED_IDENTITY';
+    if(type==='commandConflict')return v==='COMMAND_CONFLICT';
+    if(type==='acceptanceReason')return ['EARLIER_ECONOMIC_PENDING','QUERY_UNAVAILABLE','QUERY_BLOCKED','QUERY_BUSY','INPUT_UNAVAILABLE','SELECTION_INCOMPLETE','ORIGIN_UNAVAILABLE','TRANSACTION_NOT_FRESH'].includes(v);
+    if(type==='mode')return ['ALL','SUBSET'].includes(v);
     if (type.endsWith('?')) return v === null || field(v, type.slice(0, -1));
     if (type === 'uuid') return typeof v === 'string' && UUID.test(v);
     if (type === 'integer') return integer(v);
@@ -151,6 +168,7 @@
     };
     return Object.hasOwn(values, type) && values[type].includes(v);
   }
+  function normalizeAccepted(v){if(Array.isArray(v))return v.map(normalizeAccepted);if(record(v))return Object.fromEntries(Object.entries(v).map(([k,x])=>[k,normalizeAccepted(x)]));return typeof v==='string'&&UUID.test(v)?v.toLowerCase():v;}
   function shape(v, schema) { return record(v) && Object.keys(v).length === Object.keys(schema).length && Object.entries(schema).every(([k, t]) => Object.hasOwn(v, k) && field(v[k], t)); }
   const financial = action => ['PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
   function requestBody(action, args) {
@@ -189,7 +207,7 @@
   }
   function createTransport(options) {
     if (typeof options?.api !== 'function' || typeof options.authFetch !== 'function') fail('DEPENDENCY_UNAVAILABLE');
-    async function call(path, init, frozenRead = false) {
+    async function call(path, init, frozenRead = false, context = null) {
       requireActor(options);
       const controller = new AbortController(); let timer;
       const task = (async () => {
@@ -200,8 +218,17 @@
         requireActor(options);
         if (!raw.ok) {
           const schema = frozenRead ? { ok:'false',error_code:'code',retryable:'boolean' } : { ok: 'false', error_code: 'code', retryable: 'boolean', outcome_unknown: 'boolean' };
-          if (!shape(body, schema)) fail();
+          const typed=Object.hasOwn(body||{},'refusal');
+          if(!shape(typed?(({refusal,...rest})=>rest)(body):body,schema))fail();
+          if(typed){
+            const r=body.refusal,reasons={EARLIER_ECONOMIC_PENDING:true,QUERY_UNAVAILABLE:true,QUERY_BLOCKED:false,QUERY_BUSY:true,INPUT_UNAVAILABLE:false,SELECTION_INCOMPLETE:false,ORIGIN_UNAVAILABLE:false,TRANSACTION_NOT_FRESH:false};
+            if(frozenRead||context?.action!=='SEAL_ENQUEUE'||raw.status!==409||body.outcome_unknown!==false||!record(r))fail();
+            if(r.phase==='BEFORE_ACCEPTANCE'){
+              if(!shape(r,{phase:'beforeAcceptance',reason:'acceptanceReason',candidate_id:'uuid?',work_id:'uuid?'})||(r.work_id!==null&&r.candidate_id===null)||body.error_code!=='BPAY_NEXT_PREPARATION_'+r.reason||body.retryable!==reasons[r.reason])fail();
+            }else if(!shape(r,{phase:'acceptedIdentity',reason:'commandConflict',run_id:'uuid',command_id:'uuid',agency_sequence:'positive'})||!same(r.run_id,context.args.run_id)||body.error_code!=='BPAY_NEXT_PREPARATION_COMMAND_CONFLICT'||body.retryable!==false)fail();
+          }
           const refusal = new Failure(raw.status === 401 || raw.status === 403 ? 'AUTH_REQUIRED' : 'SERVER_REFUSED', frozenRead ? false : body.outcome_unknown);
+          refusal.serverCode=body.error_code;refusal.retryable=body.retryable;refusal.refusal=typed?Object.freeze({...body.refusal}):null;
           if (['BPAY_NEXT_COMMAND_MODULE_NOT_ACTIVE','BPAY_NEXT_PREPARATION_MODULE_NOT_ACTIVE'].includes(body.error_code)) {
             refusal.ownerCode = body.error_code;
             try { const refresh = options.onOwnerStale?.(body.error_code); if(refresh)void refresh.catch(()=>{}); } catch {}
@@ -217,7 +244,7 @@
       async mutation(action, bytes) {
         const body = JSON.parse(bytes), { action: saved, ...args } = body;
         if (saved !== action || requestBody(action, args) !== bytes) fail('REQUEST_INVALID');
-        const result = await call('/api/banking/pay/next/' + (financial(action) ? 'command' : 'preparation'), { method: 'POST', body: bytes });
+        const result = await call('/api/banking/pay/next/' + (financial(action) ? 'command' : 'preparation'), { method: 'POST', body: bytes },false,{action,args});
         if (!record(result) || result.ok !== true || result.action !== action || Object.keys(result).length !== 3) fail();
         return receipt(result.result, action, args);
       },
@@ -247,7 +274,45 @@
       async page(kind, args) {
         if (!Object.hasOwn(PAGES, kind) || !shape(args, PAGES[kind]) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
         const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, String(v));
-        const body = await call('/api/banking/pay/next/preparation-page?' + query.toString(), { method: 'GET' });
+        let body = await call('/api/banking/pay/next/preparation-page?' + query.toString(), { method: 'GET' });
+  if(['ACCEPTED_CANDIDATES','ACCEPTED_WORK'].includes(kind)){
+    body=normalizeAccepted(body);
+    if(!record(body)||Object.keys(body).length!==6||body.ok!==true||body.kind!==kind||!Object.hasOwn(body,'next_cursor')||!Object.hasOwn(body,'header')||!Object.hasOwn(body,'rows')||!Object.hasOwn(body,'complete')
+      ||!shape(body.header,ACCEPTED_HEADER)||!same(body.header.run_id,args.run_id)
+      ||BigInt(body.header.enrolled_candidate_count)>BigInt(body.header.expected_candidate_count)
+      ||!Array.isArray(body.rows)||body.rows.length>args.limit||typeof body.complete!=='boolean'
+      ||(!body.complete&&body.rows.length===0))fail();
+    const h=body.header,candidates=kind==='ACCEPTED_CANDIDATES',key=candidates?'candidate_id':'work_id',inputKey=candidates?'after_candidate_id':'after_work_id';
+    let previous=args[inputKey]===null?null:args[inputKey].toLowerCase(),workInput=null;const acceptedIds=new Set();
+    for(const row of body.rows){
+      if(!shape(row,ROWS[kind])||(previous!==null&&row[key]<=previous)||acceptedIds.has(candidates?row.accepted_input_id:row.accepted_work_input_id))fail();
+      previous=row[key];acceptedIds.add(candidates?row.accepted_input_id:row.accepted_work_input_id);
+      if(candidates){
+        if(row.module_epoch!==h.accepted_module_epoch||(row.target_pay_channel==='UMBRELLA')!==(row.target_umbrella_id!==null)
+          ||(row.case_scope==='NO_CASE')!==(row.case_selection_revision===null)
+          ||(row.prepare_job_id===null)!==(row.prepare_job_status===null)||(row.prepare_job_id===null)!==(row.prepare_job_phase===null)
+          ||(row.run_worker_id===null)!==(row.worker_status===null)||(row.waiting_command_id===null)!==(row.waiting_command_sequence===null)
+          ||(row.waiting_command_sequence!==null&&BigInt(row.waiting_command_sequence)>=BigInt(h.accepted_sequence)))fail();
+        const codes={WAITING_ENROLLMENT:['ENROLLMENT_PENDING'],WAITING_EARLIER_COMMAND:['EARLIER_COMMAND_PENDING'],PREPARING:['CUT_PENDING','PREPARATION_RUNNING'],READY:[null],REVIEW:['REVIEW_REQUIRED'],CANCELLING:['CANCELLATION_PENDING'],CANCELLED:[null,'PREPARATION_EXPIRED'],FAILED:['JOB_FAILED'],EPOCH_PAUSED:['OWNER_EPOCH_STALE']};
+        if(!codes[row.progress_state].includes(row.progress_code)
+          ||(row.progress_state==='WAITING_ENROLLMENT'&&(row.prepare_job_id!==null||row.run_worker_id!==null||!['RECEIVED','ENROLLING'].includes(h.command_status)))
+          ||(row.progress_state==='WAITING_EARLIER_COMMAND'&&(row.waiting_command_id===null||!['READY','LEASED','BLOCKED'].includes(row.prepare_job_status)))
+          ||(row.progress_state==='READY'&&(row.prepare_job_status!=='DONE'||row.prepare_job_phase!=='READY'||!['READY','DRAFT','ISSUED','COMPLETE'].includes(row.worker_status)||h.run_status==='CANCELLING'||row.has_unsealed_work||!['SEALED','COMPLETE'].includes(h.command_status)||h.expected_candidate_count!==h.enrolled_candidate_count))
+          ||(row.progress_state==='REVIEW'&&row.worker_status!=='REVIEW')
+          ||(row.progress_state==='CANCELLED'&&!(row.worker_status==='CANCELLED'||(row.prepare_job_status==='DONE'&&row.prepare_job_phase==='EXPIRED')))
+          ||(row.progress_state==='CANCELLING'&&row.worker_status!=='CANCELLING'&&h.run_status!=='CANCELLING')
+          ||(row.progress_state==='FAILED'&&row.prepare_job_status!=='FAILED'&&h.command_status!=='FAILED')
+          ||(row.progress_state==='PREPARING'&&(row.waiting_command_id!==null||!['READY','LEASED','BLOCKED'].includes(row.prepare_job_status)||!['NEW','PINNING','RESERVE','ALLOCATE','FINANCE_ALLOCATE'].includes(row.prepare_job_phase)||(row.worker_status!==null&&row.worker_status!=='PREPARING')||((row.progress_code==='CUT_PENDING')!==row.has_unsealed_work))))fail();
+      }else {
+        if(workInput!==null&&workInput!==row.accepted_input_id)fail();workInput=row.accepted_input_id;
+        if(!same(row.candidate_id,args.candidate_id)||BigInt(row.predecessor_sequence)>=BigInt(h.accepted_sequence)
+        ||(['SOURCE','PROTECTED'].includes(row.source_kind)!==(row.query_disposition==='CLEAR'&&row.query_state_sha256!==null))
+        ||(!['SOURCE','PROTECTED'].includes(row.source_kind)&&(row.query_disposition!==null||row.query_state_sha256!==null))
+        ||(row.cut_state==='SEALED')!==(row.effective_cut_id!==null))fail();
+      }
+    }
+    const cursor=body.complete?null:{[inputKey]:previous};if(JSON.stringify(body.next_cursor)!==JSON.stringify(cursor))fail();return body;
+  }
         if(kind==='CHANNEL_DRAFTS'){
           if(!record(body)||Object.keys(body).length!==5||!['ok','kind','rows','complete','next_cursor'].every(k=>Object.hasOwn(body,k))||body.ok!==true||body.kind!==kind||body.complete!==true||body.next_cursor!==null||!field(body.rows,'drafts')||body.rows.some(d=>!same(d.run_id,args.run_id)))fail();
           return body;
@@ -300,7 +365,7 @@
     const caseDefaults = { case_pages: '0', case_items: '0', case_selected_count: '0', case_excluded_count: '0', case_sealed: false, case_cursor: null, case_id: null, component_cursor: null, accepted_page_component_ids: [], accepted_page_component_selected: [] };
     const ids = rows => Array.isArray(rows) && rows.length <= 100 && rows.every(x => field(x,'uuid')) && new Set(rows.map(x=>x.toLowerCase())).size === rows.length;
     const validCases = value => ['case_pages','case_items','case_selected_count','case_excluded_count'].every(k=>integer(value[k])) && BigInt(value.case_items) === BigInt(value.case_selected_count) + BigInt(value.case_excluded_count) && (value.case_pages==='0') === (value.case_items==='0') && typeof value.case_sealed === 'boolean' && (!value.case_sealed || positive(value.case_pages)) && (value.case_cursor === null || shape(value.case_cursor,{after_case_id:'uuid'})) && (value.case_id === null || field(value.case_id,'uuid')) && (value.component_cursor === null || shape(value.component_cursor,{after_component_ordinal:'positive'})) && ids(value.accepted_page_component_ids) && Array.isArray(value.accepted_page_component_selected) && value.accepted_page_component_selected.length === value.accepted_page_component_ids.length && value.accepted_page_component_selected.every(v=>typeof v==='boolean') && (value.case_id !== null || (value.component_cursor === null && value.accepted_page_component_ids.length === 0));
-    let state = { version: 3, drafts:[], pay_channel:null, actor_id: options.actorId.toLowerCase(), run_id: null, worker_id: null, candidate_id: null, selection_pages: '0', selection_count: '0', selection_sealed: false, current_cursor: null, accepted_page_work_ids: [], can_confirm: false, confirmed: false, review_revision: null, instruction_id: null, transfer_id: null, pending: null, prior_case_selected_count:'0', ...caseDefaults };
+    let state = { version: 4, accepted_prepare:null, drafts:[], pay_channel:null, actor_id: options.actorId.toLowerCase(), run_id: null, worker_id: null, candidate_id: null, selection_pages: '0', selection_count: '0', selection_sealed: false, current_cursor: null, accepted_page_work_ids: [], can_confirm: false, confirmed: false, review_revision: null, instruction_id: null, transfer_id: null, pending: null, prior_case_selected_count:'0', ...caseDefaults };
     let busy = false;
     const saved = options.storage.getItem(key);
     if (saved !== null) {
@@ -320,24 +385,26 @@
         // new channel is deliberately unknown until an actual server header
         // and descriptor read qualify it; never default an old worker to PAYE.
         if(record(value)&&value.version===2&&!Object.hasOwn(value,'drafts')&&!Object.hasOwn(value,'pay_channel')){
-          const oldKeys=Object.keys(state).filter(k=>!['drafts','pay_channel'].includes(k)).sort().join();
+          const oldKeys=Object.keys(state).filter(k=>!['drafts','pay_channel','accepted_prepare'].includes(k)).sort().join();
           if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');
           value={...value,version:3,drafts:[],pay_channel:null};
         }
-        if (!record(value) || value.version !== 3 || value.actor_id !== state.actor_id || Object.keys(value).sort().join() !== Object.keys(state).sort().join() || !['run_id','worker_id','candidate_id','instruction_id','transfer_id'].every(k => value[k] === null || field(value[k], 'uuid')) || !['selection_sealed','can_confirm','confirmed'].every(k=>typeof value[k]==='boolean') || !integer(value.selection_pages) || !integer(value.selection_count) || !integer(value.prior_case_selected_count) || !(value.current_cursor === null || shape(value.current_cursor,{after_week:'date',after_work_id:'uuid'})) || !ids(value.accepted_page_work_ids) || !validCases(value) || !(Array.isArray(value.drafts)&&(value.drafts.length===0||field(value.drafts,'drafts'))&&value.drafts.every(d=>same(d.run_id,value.run_id))) || !(value.pay_channel===null||(field(value.pay_channel,'channel')&&value.drafts.some(d=>d.pay_channel===value.pay_channel))) || !(value.review_revision === null || positive(value.review_revision)) || !(value.pending === null || (record(value.pending) && Object.keys(value.pending).length === 2 && typeof value.pending.action === 'string' && typeof value.pending.bytes === 'string' && JSON.parse(value.pending.bytes).action === value.pending.action && requestBody(value.pending.action, (({ action, ...args }) => args)(JSON.parse(value.pending.bytes))) === value.pending.bytes))) fail('JOURNAL_INVALID'); state = value; } catch { fail('JOURNAL_INVALID'); }
+        if(record(value)&&value.version===3&&!Object.hasOwn(value,'accepted_prepare')){const oldKeys=Object.keys(state).filter(k=>k!=='accepted_prepare').sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:4,accepted_prepare:null};}
+        if (!record(value) || value.version !== 4 || !(value.accepted_prepare===null||shape(value.accepted_prepare,{command_id:'uuid',agency_sequence:'positive'})) || value.actor_id !== state.actor_id || Object.keys(value).sort().join() !== Object.keys(state).sort().join() || !['run_id','worker_id','candidate_id','instruction_id','transfer_id'].every(k => value[k] === null || field(value[k], 'uuid')) || !['selection_sealed','can_confirm','confirmed'].every(k=>typeof value[k]==='boolean') || !integer(value.selection_pages) || !integer(value.selection_count) || !integer(value.prior_case_selected_count) || !(value.current_cursor === null || shape(value.current_cursor,{after_week:'date',after_work_id:'uuid'})) || !ids(value.accepted_page_work_ids) || !validCases(value) || !(Array.isArray(value.drafts)&&(value.drafts.length===0||field(value.drafts,'drafts'))&&value.drafts.every(d=>same(d.run_id,value.run_id))) || !(value.pay_channel===null||(field(value.pay_channel,'channel')&&value.drafts.some(d=>d.pay_channel===value.pay_channel))) || !(value.review_revision === null || positive(value.review_revision)) || !(value.pending === null || (record(value.pending) && Object.keys(value.pending).length === 2 && typeof value.pending.action === 'string' && typeof value.pending.bytes === 'string' && JSON.parse(value.pending.bytes).action === value.pending.action && requestBody(value.pending.action, (({ action, ...args }) => args)(JSON.parse(value.pending.bytes))) === value.pending.bytes))) fail('JOURNAL_INVALID'); state = value; } catch { fail('JOURNAL_INVALID'); }
     }
     const notify = () => options.onChange?.(snapshot());
-    const snapshot = () => Object.freeze({ ...state, drafts:Object.freeze(state.drafts.map(d=>Object.freeze({...d}))), current_cursor:state.current_cursor===null?null:Object.freeze({...state.current_cursor}),case_cursor:state.case_cursor===null?null:Object.freeze({...state.case_cursor}),component_cursor:state.component_cursor===null?null:Object.freeze({...state.component_cursor}),accepted_page_work_ids:Object.freeze([...state.accepted_page_work_ids]),accepted_page_component_ids:Object.freeze([...state.accepted_page_component_ids]),accepted_page_component_selected:Object.freeze([...state.accepted_page_component_selected]),pending: state.pending === null ? null : Object.freeze({ ...state.pending }), busy });
+    const snapshot = () => Object.freeze({ ...state, accepted_prepare:state.accepted_prepare===null?null:Object.freeze({...state.accepted_prepare}), drafts:Object.freeze(state.drafts.map(d=>Object.freeze({...d}))), current_cursor:state.current_cursor===null?null:Object.freeze({...state.current_cursor}),case_cursor:state.case_cursor===null?null:Object.freeze({...state.case_cursor}),component_cursor:state.component_cursor===null?null:Object.freeze({...state.component_cursor}),accepted_page_work_ids:Object.freeze([...state.accepted_page_work_ids]),accepted_page_component_ids:Object.freeze([...state.accepted_page_component_ids]),accepted_page_component_selected:Object.freeze([...state.accepted_page_component_selected]),pending: state.pending === null ? null : Object.freeze({ ...state.pending }), busy });
     function save(next) { if(!integer(next.prior_case_selected_count))fail('JOURNAL_INVALID');const bytes = JSON.stringify(next); if (encoder.encode(bytes).byteLength > LIMITS.journalBytes) fail('JOURNAL_TOO_LARGE'); options.storage.setItem(key, bytes); state = next; notify(); }
     function adopt(action, result, args) {
       const next = { ...state, pending: null };
+      if(result.run_id&&state.accepted_prepare!==null&&!same(result.run_id,state.run_id))fail('ACCEPTED_IDENTITY_CONFLICT');
       if (result.run_id) next.run_id = result.run_id;
       if (result.run_worker_id) next.worker_id = result.run_worker_id;
       if (action === 'CREATE') next.selection_sealed = result.selection_state === 'SEALED';
       if (action === 'WORK_PAGE') { next.selection_pages = result.page_no; next.selection_count = result.selection_count; next.accepted_page_work_ids=Array.from(new Set([...state.accepted_page_work_ids,...args.choices.map(x=>x.work_id.toLowerCase())]));if(next.accepted_page_work_ids.length>100)fail('JOURNAL_INVALID'); }
       if (action === 'CASE_PAGE') { next.case_pages=result.page_no;next.case_items=String(BigInt(state.case_items)+BigInt(result.item_count));const selected=BigInt(args.selected.filter(x=>x).length);next.case_selected_count=String(BigInt(state.case_selected_count)+selected);next.case_excluded_count=String(BigInt(state.case_excluded_count)+BigInt(result.item_count)-selected);next.accepted_page_component_ids=[...state.accepted_page_component_ids,...args.component_ids.map(x=>x.toLowerCase())];next.accepted_page_component_selected=[...state.accepted_page_component_selected,...args.selected];if(!ids(next.accepted_page_component_ids))fail('JOURNAL_INVALID'); }
       if (action === 'CASE_SEAL') { if(result.selected_count!==state.case_selected_count||result.excluded_count!==state.case_excluded_count)fail();next.case_sealed=true; }
-      if (action === 'SEAL_ENQUEUE') next.selection_sealed = true;
+      if (action === 'SEAL_ENQUEUE') {if(state.accepted_prepare&&(!same(state.accepted_prepare.command_id,result.command_id)||state.accepted_prepare.agency_sequence!==result.agency_sequence))fail('ACCEPTED_IDENTITY_CONFLICT');next.selection_sealed=true;next.accepted_prepare={command_id:result.command_id,agency_sequence:result.agency_sequence};}
       // A validated REVIEW receipt comes only from the existing sealed-run owner.
       // PREPARING is pending, not ready; never retain a stale confirm revision.
       if (action === 'REVIEW') { next.selection_sealed = true; next.can_confirm = result.phase === 'REVIEW' && result.all_ready === true; next.review_revision = next.can_confirm ? result.review_revision : null; }
@@ -366,7 +433,7 @@
         if(action==='SEAL_ENQUEUE'&&state.case_pages!=='0'&&!state.case_sealed)fail('REQUEST_INVALID');
         save({ ...state, pending: { action, bytes } }); return dispatch(false); },
       async retry() { if (busy || state.pending === null) fail('NO_PENDING_REQUEST'); return dispatch(true); },
-      bind(values) { if (busy || state.pending !== null || Object.keys(values).some(k => !['run_id','worker_id','candidate_id'].includes(k)) || (state.drafts.length!==0&&Object.hasOwn(values,'run_id')&&!same(values.run_id,state.run_id)) || !Object.values(values).every(v => field(v,'uuid')) || ((state.case_pages!=='0'||state.prior_case_selected_count!=='0')&&Object.hasOwn(values,'run_id')&&!same(values.run_id,state.run_id)) || (state.case_pages!=='0'&&!state.case_sealed&&!state.selection_sealed&&Object.hasOwn(values,'candidate_id')&&!same(values.candidate_id,state.candidate_id))) fail('REQUEST_INVALID'); const changed=['run_id','worker_id','candidate_id'].some(k=>Object.hasOwn(values,k)&&!same(values[k],state[k]));const changedChoice=!state.selection_sealed&&Object.hasOwn(values,'candidate_id')&&!same(values.candidate_id,state.candidate_id);save({ ...state, ...values,...(changed?{transfer_id:null,instruction_id:null}:{}),...(changedChoice?{...caseDefaults,prior_case_selected_count:String(BigInt(state.prior_case_selected_count)+(state.case_sealed?BigInt(state.case_selected_count):0n)),current_cursor:null,accepted_page_work_ids:[]}: {}) }); },
+      bind(values) { if (busy || state.pending !== null || Object.keys(values).some(k => !['run_id','worker_id','candidate_id'].includes(k)) || (state.accepted_prepare!==null&&Object.hasOwn(values,'run_id')&&!same(values.run_id,state.run_id)) || (state.drafts.length!==0&&Object.hasOwn(values,'run_id')&&!same(values.run_id,state.run_id)) || !Object.values(values).every(v => field(v,'uuid')) || ((state.case_pages!=='0'||state.prior_case_selected_count!=='0')&&Object.hasOwn(values,'run_id')&&!same(values.run_id,state.run_id)) || (state.case_pages!=='0'&&!state.case_sealed&&!state.selection_sealed&&Object.hasOwn(values,'candidate_id')&&!same(values.candidate_id,state.candidate_id))) fail('REQUEST_INVALID'); const changed=['run_id','worker_id','candidate_id'].some(k=>Object.hasOwn(values,k)&&!same(values[k],state[k]));const changedChoice=!state.selection_sealed&&Object.hasOwn(values,'candidate_id')&&!same(values.candidate_id,state.candidate_id);save({ ...state, ...values,...(changed?{transfer_id:null,instruction_id:null}:{}),...(changedChoice?{...caseDefaults,prior_case_selected_count:String(BigInt(state.prior_case_selected_count)+(state.case_sealed?BigInt(state.case_selected_count):0n)),current_cursor:null,accepted_page_work_ids:[]}: {}) }); },
       setDrafts(rows) {
         if(busy||state.pending!==null||!field(rows,'drafts')||rows.some(d=>!same(d.run_id,state.run_id)))fail('REQUEST_INVALID');
         if(state.drafts.length!==0&&JSON.stringify(state.drafts)!==JSON.stringify(rows))fail('RESPONSE_INVALID');
@@ -386,7 +453,12 @@
       setCaseCursor(cursor) { if(busy||state.pending!==null||!(cursor===null||shape(cursor,{after_case_id:'uuid'})))fail('REQUEST_INVALID');if(JSON.stringify(cursor)!==JSON.stringify(state.case_cursor))save({...state,case_cursor:cursor}); },
       setComponentScope(case_id,cursor) { if(busy||state.pending!==null||!field(case_id,'uuid')||!(cursor===null||shape(cursor,{after_component_ordinal:'positive'})))fail('REQUEST_INVALID');if(!same(case_id,state.case_id)||JSON.stringify(cursor)!==JSON.stringify(state.component_cursor))save({...state,case_id,component_cursor:cursor,accepted_page_component_ids:[],accepted_page_component_selected:[]}); },
       newId() { const id = options.uuid(); if (!field(id, 'uuid')) fail('DEPENDENCY_UNAVAILABLE'); return id.toLowerCase(); },
-      async page(kind, args) { return options.transport.page(kind, args); },
+      async page(kind,args){const page=await options.transport.page(kind,args);if(['ACCEPTED_CANDIDATES','ACCEPTED_WORK'].includes(kind)){
+        const h=page.header;if(!shape(h,ACCEPTED_HEADER)||!same(h.run_id,state.run_id))fail();
+        if(state.accepted_prepare&&(!same(state.accepted_prepare.command_id,h.prepare_command_id)||state.accepted_prepare.agency_sequence!==h.accepted_sequence))fail('ACCEPTED_IDENTITY_CONFLICT');
+        if(state.pending?.action==='SEAL_ENQUEUE'&&!same(JSON.parse(state.pending.bytes).command_id,h.prepare_command_id))fail('ACCEPTED_IDENTITY_CONFLICT');
+        if(state.accepted_prepare===null)save({...state,accepted_prepare:{command_id:h.prepare_command_id,agency_sequence:h.accepted_sequence},selection_sealed:true});
+      }return page;},
       async frozenPage(kind,args) { return options.transport.frozenPage(kind,args); }
     });
   }
@@ -410,7 +482,7 @@
     requireActor(options);
     if (sheet) { sheet.focus(); return sheet; }
     const doc = options.document || document; const win = options.window || window;
-    const transport = createTransport(options); let controller, drafts = null, current = null, cases = null, components = null, workers = null, status = null, returnedCash = null, lines = null, comparisons = null, frozenLine = null, shifts = null, breaks = null, usedRates = null, frozenWork = null, rateSchedule = null;
+    const transport = createTransport(options); let controller, acceptedCandidates=null, acceptedWork=null, acceptedCandidate=null, acceptedCursor=null, acceptedWorkCursor=null, drafts = null, current = null, cases = null, components = null, workers = null, status = null, returnedCash = null, lines = null, comparisons = null, frozenLine = null, shifts = null, breaks = null, usedRates = null, frozenWork = null, rateSchedule = null;
     let selection = new Map(), caseSelection = new Map(), renderEpoch = 0, readBusy = false, error = '', progressTimer, workersCursor=null, statusCursor=null, statusScope=null, reviewObserved=false, preparationPending=false;
     const host = doc.createElement('section'); host.className = 'bpay-next-office'; host.setAttribute('role','dialog'); host.setAttribute('aria-modal','true'); host.setAttribute('aria-label','Banking Pay NEXT'); host.tabIndex = -1;
     const previousFocus = doc.activeElement;
@@ -418,9 +490,25 @@
     const button = (text, action, disabled = false, direct = false) => { const b = el('button',text); b.type='button'; b.disabled=disabled; b.addEventListener('click', () => { if(direct)action();else void act(action); }); return b; };
     const input = (label, type, value) => { const wrap = el('label', label); const n = el('input'); n.type=type; n.value=value || ''; wrap.append(n); return [wrap,n]; };
     let dateInput, netInput, resumeInput;
-    const close = () => { if(!host.isConnected)return;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);host.remove();sheet=null;previousFocus?.focus(); };
+    const close = () => { if(!host.isConnected)return;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);host.remove();sheet=null;previousFocus?.focus(); };
     host.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close();}else if(event.key==='Tab'){const nodes=Array.from(host.querySelectorAll('button:not(:disabled),input:not(:disabled),a[href]'));if(!nodes.length){event.preventDefault();host.focus();return;}const first=nodes[0],last=nodes.at(-1);if(event.shiftKey&&(doc.activeElement===first||doc.activeElement===host)){event.preventDefault();last.focus();}else if(!event.shiftKey&&doc.activeElement===last){event.preventDefault();first.focus();}}});
-    async function act(action) { if (readBusy) return; error=''; readBusy=true; render(); try { await action(); } catch { error=controller?.snapshot().pending ? 'The result is not known. Payment controls are paused. Retry this exact request; do not start a replacement.' : 'This action could not be completed. The accepted payment state is unchanged; refresh or sign in again.'; } finally { readBusy=false; render(); } }
+    async function act(action) { if (readBusy) return; error=''; readBusy=true; render(); try { await action(); } catch(e) { error=controller?.snapshot().pending ? 'The result is not known. Payment controls are paused. Retry this exact request; do not start a replacement.' : refusalCopy(e) || 'This action could not be completed. Refresh or sign in again.'; } finally { readBusy=false; render(); } }
+    function refusalCopy(e){
+      if(e?.refusal?.phase==='BEFORE_ACCEPTANCE'){
+        const copy={EARLIER_ECONOMIC_PENDING:'An earlier financial command must finish before preparation can be accepted.',QUERY_UNAVAILABLE:'The Source Query check is unavailable. Preparation was not accepted.',QUERY_BLOCKED:'A Source Query blocks this selection. Preparation was not accepted.',QUERY_BUSY:'The Source Query check is busy. Preparation was not accepted.',INPUT_UNAVAILABLE:'A selected preparation input is unavailable. Preparation was not accepted.',SELECTION_INCOMPLETE:'Complete the selection before preparing.',ORIGIN_UNAVAILABLE:'An original payment or source obligation cannot be proved. Preparation was not accepted.',TRANSACTION_NOT_FRESH:'The preparation transaction could not accept a new command.'};return copy[e.refusal.reason];
+      }
+      if(e?.refusal?.phase==='ACCEPTED_IDENTITY')return 'This run already has accepted command '+e.refusal.command_id+' at sequence '+e.refusal.agency_sequence+'. Open its original progress; do not prepare a replacement.';
+      if(e?.serverCode==='BPAY_NEXT_PREPARATION_SCHEMA_UNAVAILABLE')return 'Preparation progress is unavailable until the database and Worker versions are aligned.';
+      return null;
+    }
+    async function loadAccepted(cursor){const snap=controller.snapshot(),epoch=renderEpoch;
+      const page=await controller.page('ACCEPTED_CANDIDATES',{run_id:snap.run_id,after_candidate_id:cursor?.after_candidate_id??null,limit:100});
+      if(epoch!==renderEpoch||!host.isConnected)return;acceptedCandidates=page;acceptedCursor=cursor??null;
+    }
+    async function loadAcceptedWork(candidate,cursor){const snap=controller.snapshot(),epoch=renderEpoch;
+      const page=await controller.page('ACCEPTED_WORK',{run_id:snap.run_id,candidate_id:candidate,after_work_id:cursor?.after_work_id??null,limit:100});
+      if(epoch!==renderEpoch||!host.isConnected)return;acceptedCandidate=candidate;acceptedWork=page;acceptedWorkCursor=cursor??null;
+    }
     function table(headers, rows) { const t=el('table'), h=el('thead'), hr=el('tr'), b=el('tbody'); for(const label of headers) hr.append(el('th',label)); h.append(hr); for(const values of rows){const r=el('tr');for(const value of values){const c=el('td');if(value?.nodeType)c.append(value);else c.textContent=value===null?'Not recorded':String(value);r.append(c);}b.append(r);}t.append(h,b);return t; }
     async function loadCurrent(cursor) { const s=controller.snapshot(), epoch=renderEpoch; const page=await controller.page('CURRENT_WORK',{candidate_id:s.candidate_id,after_week:cursor?.after_week??null,after_work_id:cursor?.after_work_id??null,limit:100}); if(epoch!==renderEpoch)return;current=page;selection=new Map();controller.setCurrentCursor(cursor??null); }
     async function loadCases(cursor) { const s=controller.snapshot(),epoch=renderEpoch;const page=await controller.page('CURRENT_CASES',{candidate_id:s.candidate_id,after_case_id:cursor?.after_case_id??null,limit:100});if(epoch!==renderEpoch)return;cases=page;controller.setCaseCursor(cursor??null); }
@@ -437,7 +525,7 @@
     async function applyReview(result) { if(result.phase==='REVIEW'){reviewObserved=true;preparationPending=false;await loadWorkers();}else{reviewObserved=false;preparationPending=true;workers=null;} }
     async function loadDrafts() { const s=controller.snapshot(),epoch=renderEpoch;const page=await controller.page('CHANNEL_DRAFTS',{run_id:s.run_id});if(epoch!==renderEpoch)return;drafts=page;if(s.pending===null)controller.setDrafts(page.rows); }
     async function openDraft(address) { controller.bindDraft(address);workers=null;status=null;returnedCash=null;lines=null;comparisons=null;frozenLine=null;shifts=null;breaks=null;usedRates=null;frozenWork=null;rateSchedule=null;netInput=null;statusScope=null;await loadWorkers(); }
-    async function refresh() { let s=controller.snapshot();if(s.confirmed){await loadDrafts();s=controller.snapshot();}if(s.worker_id)await loadStatus();else if(s.run_id){if(s.confirmed){if(s.pay_channel!==null)await loadWorkers();}else if(s.review_revision!==null||reviewObserved)await loadWorkers();if(!s.selection_sealed&&s.candidate_id&&!s.pending){await loadCurrent(s.current_cursor);if(s.case_id){await loadCases(s.case_cursor);await loadCaseComponents(s.case_id,s.component_cursor);}}} }
+    async function refresh() { let s=controller.snapshot();if(s.confirmed){await loadDrafts();s=controller.snapshot();}if(s.worker_id)await loadStatus();else if(s.run_id){if(!s.confirmed&&(s.selection_sealed||s.accepted_prepare!==null||s.pending?.action==='SEAL_ENQUEUE'))await loadAccepted(acceptedCursor);if(s.confirmed){if(s.pay_channel!==null)await loadWorkers();}else if(s.review_revision!==null||reviewObserved)await loadWorkers();if(!s.selection_sealed&&s.candidate_id&&!s.pending){await loadCurrent(s.current_cursor);if(s.case_id){await loadCases(s.case_cursor);await loadCaseComponents(s.case_id,s.component_cursor);}}} }
     function render() {
       if (!controller || !host.isConnected) return;
       win.clearTimeout(progressTimer);
@@ -455,13 +543,13 @@
         body.append(button('Start selection',async()=>{const run=controller.newId();await controller.mutate('CREATE',{run_id:run,pay_date:dateInput.value});},locked||!s.candidate_id));
         // Resume explicitly reviews the existing run; no new preparation identity.
         const [r,ri]=input('Resume run ID','text',resumeInput?.value||'');resumeInput=ri;body.append(r,el('p','Resume asks the server to Review this same sealed preparation; it does not create or prepare a replacement.'),button('Resume',async()=>{await applyReview(await controller.mutate('REVIEW',{run_id:resumeInput.value}));},locked),button('Open confirmed channel Drafts',async()=>{controller.bind({run_id:resumeInput.value});await loadDrafts();workers=null;},locked));
-      }else{body.append(el('p','Run '+s.run_id),button('Refresh progress',refresh,locked));}
+      }else{body.append(el('p','Run '+s.run_id),button('Refresh progress',refresh,locked),button('Read original accepted progress',()=>loadAccepted(),locked));}
       if(current&&!s.selection_sealed&&(!status||status.header.run_status==='PREPARING')){
         const rows=current.rows.map(r=>{const accepted=s.accepted_page_work_ids.includes(r.work_id.toLowerCase());const check=el('input');check.type='checkbox';check.checked=accepted||selection.has(r.work_id);check.disabled=locked||accepted||r.current_revision_id===null;check.setAttribute('aria-label','Include '+(r.timesheet_reference||r.work_id));check.addEventListener('change',()=>{if(check.checked)selection.set(r.work_id,{work_id:r.work_id,expected_revision_id:r.current_revision_id,mode:'ALL'});else selection.delete(r.work_id);});return[check,r.timesheet_reference,r.client_display_name,humanDate(r.week_ending_date),r.approval_state,r.approved_source_ex_vat===null?null:'£'+r.approved_source_ex_vat,r.position_ready?'Current approval applied':'Position pending / not approved'];});
         body.append(el('h3','Current approval facts — explicit Work selection'),table(['Include','Timesheet','Client','Week ending','Approval','Full approval ex VAT','Position fact'],rows));
         body.append(button('Add selected Work page',async()=>{await controller.mutate('WORK_PAGE',{run_id:s.run_id,page_no:String(BigInt(s.selection_pages)+1n),choices:Array.from(selection.values())});selection.clear();},locked||!s.run_id));
         if(!current.complete)body.append(button('Next Work page',()=>loadCurrent(current.next_cursor),locked));
-        if(s.run_id)body.append(el('p','Accepted selected Work: '+s.selection_count),el('p','Accepted sealed Case choices from prior Candidates: '+s.prior_case_selected_count),button('Prepare selected Work',async()=>{await controller.mutate('SEAL_ENQUEUE',{run_id:s.run_id,command_id:controller.newId(),expected_pages:s.selection_pages,expected_count:s.selection_count});current=null;cases=null;components=null;workers=null;reviewObserved=false;preparationPending=false;},locked||(s.selection_count==='0'&&s.case_selected_count==='0'&&s.prior_case_selected_count==='0')||(s.case_pages!=='0'&&!s.case_sealed)));
+        if(s.run_id)body.append(el('p','Accepted selected Work: '+s.selection_count),el('p','Accepted sealed Case choices from prior Candidates: '+s.prior_case_selected_count),button('Prepare selected Work',async()=>{await controller.mutate('SEAL_ENQUEUE',{run_id:s.run_id,command_id:controller.newId(),expected_pages:s.selection_pages,expected_count:s.selection_count});current=null;cases=null;components=null;workers=null;reviewObserved=false;preparationPending=false;await loadAccepted();},locked||(s.selection_count==='0'&&s.case_selected_count==='0'&&s.prior_case_selected_count==='0')||(s.case_pages!=='0'&&!s.case_sealed)));
       }
       if(s.run_id&&s.candidate_id&&!s.selection_sealed){
         body.append(button('Current Case facts',()=>loadCases(s.case_cursor),locked),el('p','Case facts are not an allocation or collection approval. Only explicitly submitted selected / excluded components enter this manifest.'));
@@ -473,6 +561,15 @@
         if(s.case_pages!=='0')body.append(el('p','Accepted Case components: '+s.case_items+' / selected '+s.case_selected_count+' / excluded '+s.case_excluded_count),s.case_sealed?el('p','Case manifest sealed.'):button('Seal Case selection',()=>controller.mutate('CASE_SEAL',{run_id:s.run_id,candidate_id:s.candidate_id,selection_revision:'1',expected_pages:s.case_pages,expected_items:s.case_items}),locked));
       }
       if(s.run_id&&s.selection_sealed&&!s.confirmed){if(!reviewObserved&&s.review_revision===null)body.append(el('p',preparationPending?'Preparation is still pending. Choose Review preparation again after background processing has progressed.':'Preparation accepted. Choose Review preparation to ask the server whether it is complete.'));body.append(button('Review preparation',async()=>{await applyReview(await controller.mutate('REVIEW',{run_id:s.run_id}));},locked));}
+      if(acceptedCandidates){const h=acceptedCandidates.header;
+        body.append(el('h3','Accepted preparation'),el('p','Original command '+h.prepare_command_id+' / sequence '+h.accepted_sequence),el('p','Enrolled Candidates: '+h.enrolled_candidate_count+' / '+h.expected_candidate_count),
+          table(['Candidate','Accepted channel','Pay week','Progress','Issue','Accepted Work'],acceptedCandidates.rows.map(r=>[r.candidate_id,r.target_pay_channel,humanDate(r.pay_week_start),r.progress_state.replaceAll('_',' ').toLowerCase(),r.review_issue_code,button('Open accepted Work',()=>loadAcceptedWork(r.candidate_id),locked)])));
+        if(!acceptedCandidates.complete)body.append(button('Next accepted Candidate page',()=>loadAccepted(acceptedCandidates.next_cursor),locked));
+        body.append(button('First accepted Candidate page',()=>loadAccepted(),locked));
+      }
+      if(acceptedWork){body.append(el('h3','Accepted Work for Candidate '+acceptedCandidate),table(['Work','Original selected revision','Effective revision','Selection','Source Query','Capture'],acceptedWork.rows.map(r=>[r.work_id,r.original_revision_id,r.effective_revision_id,r.selection_mode+' / '+r.selected_line_count+' lines',r.query_disposition,r.cut_state.replaceAll('_',' ').toLowerCase()])));
+        if(!acceptedWork.complete)body.append(button('Next accepted Work page',()=>loadAcceptedWork(acceptedCandidate,acceptedWork.next_cursor),locked));
+      }
       const addresses=drafts?.rows??s.drafts;
       if(s.confirmed&&addresses.length){body.append(el('h3','Frozen channel Drafts'),el('p','Each address opens this same preparation for one frozen pay channel; Source and ordinary Work are not separate Drafts.'));
         for(const address of addresses)body.append(button('Open '+(address.pay_channel==='PAYE'?'PAYE':'Umbrella')+' Draft',()=>openDraft(address),locked));
@@ -515,12 +612,14 @@
       host.replaceChildren(header,body);
       // Only one bounded factual progress read. No enqueue/claim/step/REVIEW
       // mutation, current Work census or financial rebuild in this timer.
-      const progressing=s.selection_sealed&&((!s.worker_id&&workers?.rows.some(r=>r.worker_status==='PREPARING'))||(s.worker_id&&status&&(status.header.net_pending||['PREPARING','CANCELLING'].includes(status.header.worker_status)||status.rows.some(r=>['BUILDING','INTERNAL_PROCESSING'].includes(r.status)))));
-      if(!locked&&progressing)progressTimer=win.setTimeout(()=>{void act(()=>s.worker_id?loadStatus(statusCursor):loadWorkers(workersCursor));},2000);
+      const acceptedProgressing=acceptedCandidates?.rows.some(r=>['WAITING_ENROLLMENT','WAITING_EARLIER_COMMAND','PREPARING','CANCELLING'].includes(r.progress_state));
+      const progressing=s.selection_sealed&&(acceptedProgressing||((!s.worker_id&&workers?.rows.some(r=>r.worker_status==='PREPARING'))||(s.worker_id&&status&&(status.header.net_pending||['PREPARING','CANCELLING'].includes(status.header.worker_status)||status.rows.some(r=>['BUILDING','INTERNAL_PROCESSING'].includes(r.status))))));
+      if(!locked&&progressing&&doc.visibilityState!=='hidden')progressTimer=win.setTimeout(()=>{if(!host.isConnected||doc.visibilityState==='hidden')return;void act(()=>s.worker_id?loadStatus(statusCursor):acceptedCandidates?loadAccepted(acceptedCursor):loadWorkers(workersCursor));},2000);
     }
     function download(result){const blob=new Blob([result.csv_text],{type:'text/csv;charset=utf-8'});const url=win.URL.createObjectURL(blob);const a=el('a');a.href=url;a.download=result.file_name;a.click();win.setTimeout(()=>win.URL.revokeObjectURL(url),0);}
     controller=createController({actorId:options.actorId,storage:options.storage||win.sessionStorage,uuid:options.uuid||(()=>win.crypto.randomUUID()),transport,onChange:render});
     win.addEventListener('cloudtms:bpay-next-owner-changed',render);
+    doc.addEventListener('visibilitychange',render);
     doc.body.append(host);sheet=Object.freeze({focus:()=>host.focus(),close,controller});render();host.focus();
     if(controller.snapshot().run_id)void act(refresh);
     return sheet;

@@ -119,7 +119,7 @@ test('Case lost reply resumes identical bytes once; exact metadata counts block 
 });
 test('complete legacy ALL journal adoption preserves its unknown bytes; partial new case metadata refuses',async()=>{
   const store=storage(),c=makeController({mutation:async()=>{throw new Failure('TIMEOUT');}},store);await assert.rejects(c.mutate('CREATE',{run_id:id(2),pay_date:'2026-10-05'}));
-  const key=[...store.rows.keys()][0],value=JSON.parse(store.getItem(key));value.version=1;delete value.prior_case_selected_count;delete value.drafts;delete value.pay_channel;for(const k of Object.keys(value))if(k.startsWith('case_')||k==='component_cursor'||k.startsWith('accepted_page_component_'))delete value[k];store.setItem(key,JSON.stringify(value));
+  const key=[...store.rows.keys()][0],value=JSON.parse(store.getItem(key));value.version=1;delete value.accepted_prepare;delete value.prior_case_selected_count;delete value.drafts;delete value.pay_channel;for(const k of Object.keys(value))if(k.startsWith('case_')||k==='component_cursor'||k.startsWith('accepted_page_component_'))delete value[k];store.setItem(key,JSON.stringify(value));
   const resumed=makeController({},store);assert.equal(resumed.snapshot().pending.bytes,request());assert.equal(resumed.snapshot().case_pages,'0');
   store.setItem(key,JSON.stringify({...value,case_pages:'0'}));assert.throws(()=>makeController({},store),e=>e.code==='JOURNAL_INVALID');
 });
@@ -137,9 +137,9 @@ test('one confirmed preparation retains two channel addresses across resume and 
 test('complete v2 journal preserves uncertain request bytes without guessing a Draft channel; partial metadata refuses',async()=>{
   const store=storage(),c=makeController({mutation:async()=>{throw new Failure('TIMEOUT');}},store);
   await assert.rejects(c.mutate('CREATE',{run_id:id(2),pay_date:'2026-10-05'}));
-  const key=[...store.rows.keys()][0],v2=JSON.parse(store.getItem(key));v2.version=2;delete v2.drafts;delete v2.pay_channel;
+  const key=[...store.rows.keys()][0],v2=JSON.parse(store.getItem(key));v2.version=2;delete v2.accepted_prepare;delete v2.drafts;delete v2.pay_channel;
   const bytes=v2.pending.bytes;store.setItem(key,JSON.stringify(v2));const resumed=makeController({},store);
-  assert.equal(resumed.snapshot().version,3);assert.equal(resumed.snapshot().pending.bytes,bytes);assert.deepEqual(resumed.snapshot().drafts,[]);assert.equal(resumed.snapshot().pay_channel,null);
+  assert.equal(resumed.snapshot().version,4);assert.equal(resumed.snapshot().pending.bytes,bytes);assert.deepEqual(resumed.snapshot().drafts,[]);assert.equal(resumed.snapshot().pay_channel,null);
   store.setItem(key,JSON.stringify({...v2,pay_channel:null}));assert.throws(()=>makeController({},store),e=>e.code==='JOURNAL_INVALID');
   store.setItem(key,JSON.stringify({...v2,drafts:[]}));assert.throws(()=>makeController({},store),e=>e.code==='JOURNAL_INVALID');
 });
