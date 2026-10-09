@@ -70,7 +70,15 @@
   async function scan(){
     const ctx=contextFromDom(); if(!ctx)return;
     const clientRoot=document.getElementById('clientSettingsForm'); if(ctx.kind==='CLIENT'&&clientRoot)await inject(clientRoot,ctx,'client-settings');
-    const contractRoot=document.getElementById('contractForm'); if(ctx.kind==='CONTRACT'&&contractRoot)await inject(contractRoot,ctx,'contract-main');
+    const contractRoot=document.getElementById('contractForm');
+    if(ctx.kind==='CONTRACT'&&contractRoot){
+      const required=window.contractTimesheetAuthorisersRequired?.(window.modalCtx);
+      if(required===false||required===null){
+        contractRoot.querySelector('.ma-summary[data-ma-location="contract-main"]')?.remove();
+        return;
+      }
+      await inject(contractRoot,ctx,'contract-main');
+    }
   }
   function makeState(data,ctx){
     if(ctx.kind==='CLIENT')return {emails:[...(data.policy?.approved_emails||[])],domains:[...(data.policy?.approved_domains||[])],restricted:data.policy?.allow_free_business_email!==true,contractOnly:false,mode:'CLIENT',version:data.settings_updated_at,dirty:false,error:''};
@@ -138,6 +146,8 @@
   document.addEventListener('click',(event)=>{const manage=event.target?.closest?.('[data-ma-manage]');if(manage){const ctx=contextFromDom();if(ctx)void openManager(ctx).catch((error)=>window.__toast?.(error.message));return;}if(event.target?.closest?.('[data-ma-retry]')){const ctx=contextFromDom();if(ctx){cache.delete(keyOf(ctx));refreshParent(ctx);}}},true);
   const observer=new MutationObserver(()=>void scan()); observer.observe(document.documentElement,{childList:true,subtree:true});
   window.openManagerAuthorisers=openManager;
+  window.addEventListener('contracts-client-settings-loaded',()=>void scan());
+  window.addEventListener('contracts-main-rendered',()=>void scan());
   window.__invalidateManagerAuthorisers=(kind,id)=>{cache.delete(`${String(kind||'').toUpperCase()}:${String(id||'')}`);};
   void scan();
 })();

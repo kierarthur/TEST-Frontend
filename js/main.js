@@ -141070,6 +141070,49 @@ async function runContractModifyAction(action) {
   }
 }
 
+// Presentation only: resolve inherited Client routing before offering hours authorisers.
+// Expense approval and stored authoriser policies remain server-owned and unchanged.
+function contractTimesheetAuthorisersRequired(ctx) {
+  if (!ctx || ctx.entity !== 'contracts') return true;
+  const d = ctx.data || {};
+  const fs = ctx.formState;
+  const sameRecord = !fs?.__forId || String(fs.__forId) === String(d.id || '');
+  const main = sameRecord ? (fs?.main || {}) : {};
+  const read = (key) => Object.prototype.hasOwnProperty.call(main, key) ? main[key] : d[key];
+  const yes = (value) => value === true || ['true', 'on', '1'].includes(String(value ?? '').trim().toLowerCase());
+  let route;
+  if (yes(read('overrideclientsettings'))) {
+    route = { is_nhsp: read('is_nhsp'), autoprocess_hr: read('autoprocess_hr'), no_timesheet_required: read('no_timesheet_required') };
+  } else {
+    if (String(ctx.client_settings_snapshot_client_id || '') !== String(d.client_id || '') || !ctx.client_settings_snapshot) return null;
+    route = canonicalizeClientSettings(ctx.client_settings_snapshot);
+  }
+  return !(yes(route.is_nhsp) || (yes(route.autoprocess_hr) && yes(route.no_timesheet_required)));
+}
+window.contractTimesheetAuthorisersRequired = contractTimesheetAuthorisersRequired;
+
+function markContractModalSaved(fr) {
+  if (fr?.entity !== 'contracts') return;
+  fr.__contractSaveRevision = Number(fr.__contractSaveRevision || 0) + 1;
+  fr.isDirty = false;
+  fr._snapshot = null;
+  const ctx = fr._ctxRef || window.modalCtx;
+  if (ctx?.entity === 'contracts') {
+    ctx.__calendarDirty = false;
+    ctx.__nonCalendarDirty = false;
+    ctx.__contractSettingsDirty = false;
+    ctx.__calendarOnly = false;
+  }
+}
+
+function restoreModalDirtyAfterRender(fr, previousDirty, contractSaveRevision) {
+  if (fr.entity !== 'contracts') { fr.isDirty = previousDirty; return; }
+  // A render begun before Save must not resurrect that draft's dirty flag.
+  // A subsequent genuine edit still survives renders of the saved record.
+  if (fr.mode === 'view') { fr.isDirty = false; return; }
+  if (Number(fr.__contractSaveRevision || 0) === contractSaveRevision) fr.isDirty = !!(fr.isDirty || previousDirty);
+}
+
 function renderContractMainTab(ctx) {
   const LOGC = (typeof window.__LOG_CONTRACTS === 'boolean') ? window.__LOG_CONTRACTS : true;
 
@@ -298161,9 +298204,10 @@ function openContract(row, openOptions = {}) {
 
 
   // ✅ NEW: load and store client_settings snapshot when opening the contract (or after reload)
+  const contractClientSettingsCtx = window.modalCtx;
   (async () => {
     try {
-      const cid = window.modalCtx?.data?.client_id || null;
+      const cid = contractClientSettingsCtx?.data?.client_id || null;
       if (!cid) return;
 
       const existingFor = window.modalCtx?.client_settings_snapshot_client_id || null;
@@ -298171,10 +298215,11 @@ function openContract(row, openOptions = {}) {
 
       const client = await getClient(cid);
       const cs = client?.client_settings || null;
-
+      if (!client || String(contractClientSettingsCtx.data?.client_id || '') !== String(cid)) return;
+      contractClientSettingsCtx.client_settings_snapshot = cs && typeof cs === 'object' ? cs : {};
+      contractClientSettingsCtx.client_settings_snapshot_client_id = String(cid);
+      if (window.modalCtx === contractClientSettingsCtx) window.dispatchEvent(new Event('contracts-client-settings-loaded'));
       if (cs && typeof cs === 'object') {
-        window.modalCtx.client_settings_snapshot = cs;
-        window.modalCtx.client_settings_snapshot_client_id = String(cid);
         if (LOGC) console.log('[CONTRACTS] stored client_settings snapshot (open)', { client_id: cid });
       } else {
         if (LOGC) console.warn('[CONTRACTS] client_settings snapshot missing on client payload (open)', { client_id: cid });
@@ -328547,6 +328592,7 @@ async setTab(k) {
   }
 
   const prevDirty = this.isDirty;
+  const contractSaveRevision = Number(this.__contractSaveRevision || 0);
   this._suppressDirty = true;
   this.__bulkProcessSetTabRebaseTransition = false;
 
@@ -328557,7 +328603,7 @@ async setTab(k) {
   const abortIfModalSurfaceOwnershipChanged = () => {
     if (stillOwnsModalSurface()) return false;
     this._suppressDirty = false;
-    this.isDirty = prevDirty;
+    restoreModalDirtyAfterRender(this, prevDirty, contractSaveRevision);
     GE();
     return true;
   };
@@ -332087,7 +332133,7 @@ try {
 
 this._hasMountedOnce = true;
 this._suppressDirty  = false;
-this.isDirty         = prevDirty;
+restoreModalDirtyAfterRender(this, prevDirty, contractSaveRevision);
 
 if (typeof this._updateButtons === 'function') this._updateButtons();
 
@@ -337105,6 +337151,8 @@ async function saveForFrame(fr) {
     fr._updateButtons && fr._updateButtons();
     return;
   }
+
+  markContractModalSaved(fr);
 
   // ✅ NEW: Patch Summary in-place (filter parity + obey current sort), with minimal server calls.
   // This runs BEFORE modal close/view flip so the grid updates immediately.
