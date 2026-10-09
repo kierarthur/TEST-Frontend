@@ -5056,10 +5056,43 @@ async function refreshOpenWeeklyImportSummariesAfterContractSave() {
 }
 
 
+let bpayNextOwnerClient = null;
+let bpayNextOwnerActor = null;
+function bankingNextOwnerClient() {
+  const actor = SESSION?.user?.id || null;
+  if (!actor || SESSION?.user?.role !== 'admin' || !window.CloudTMSBpayNextOwner) return null;
+  if (bpayNextOwnerActor !== actor) {
+    bpayNextOwnerClient?.close(); bpayNextOwnerActor = actor;
+    bpayNextOwnerClient = window.CloudTMSBpayNextOwner.create({api:API,authFetch,actorId:actor,
+      currentActorId:()=>SESSION?.user?.id || null,
+      onChange:()=>queueMicrotask(()=>{
+        if (SESSION?.user?.id !== actor) return;
+        try { currentFrame()?._updateButtons?.(); } catch {}
+        window.dispatchEvent(new CustomEvent('cloudtms:bpay-next-owner-changed'));
+      })});
+  }
+  return bpayNextOwnerClient;
+}
+function bankingNextOwnerMessage(status, legacy=false) {
+  return window.CloudTMSBpayNextOwner?.message(status,legacy) || 'Banking ownership is unavailable. Money controls are disabled.';
+}
 async function authFetch(input, init = {}) {
+  const url = (typeof input === 'string') ? input : (input?.url || '');
+  const nextBankingPath = (() => {
+    try {
+      const path = '/' + new URL(url, 'https://local.invalid').pathname.split('/').filter(Boolean).join('/');
+      const method = String(init?.method || input?.method || 'GET').toUpperCase();
+      return (method === 'POST' && ['/api/banking/pay/next/command','/api/banking/pay/next/preparation','/api/banking/pay/next/history-page','/api/banking/pay/next/frozen-detail'].includes(path))
+        || (method === 'GET' && ['/api/banking/pay/next/preparation-page','/api/banking/pay/next/owner-status'].includes(path))
+        || (method === 'GET' && /^\/api\/banking\/pay\/next\/advice\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(path));
+    }
+    catch { return false; }
+  })();
+  // NEXT raw pages/advice must remain streaming even when opt-in API debug
+  // logging is enabled. Never clone.text() or log their financial payloads.
   const APILOG =
-    (typeof window !== 'undefined' && !!window.__LOG_API) ||
-    (typeof __LOG_API !== 'undefined' && !!__LOG_API);
+    !nextBankingPath && ((typeof window !== 'undefined' && !!window.__LOG_API) ||
+    (typeof __LOG_API !== 'undefined' && !!__LOG_API));
 
   const {
     auth401Mode,
@@ -5069,7 +5102,6 @@ async function authFetch(input, init = {}) {
   const headers = new Headers(fetchInit.headers || {});
   if (SESSION?.accessToken) headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
 
-  const url = (typeof input === 'string') ? input : (input?.url || '');
   const method = String(fetchInit.method || 'GET').trim().toUpperCase() || 'GET';
 
   const auth401ModeNorm = String(auth401Mode || '').trim().toLowerCase();
@@ -6329,6 +6361,13 @@ function initAuthUI() {
 
 
 function clearSession() {
+  // Close only the isolated NEXT sheet; its actor-namespaced uncertainty
+  // journal is deliberately retained for an explicit same-request retry.
+  try { if (typeof window !== 'undefined') window.CloudTMSBpayNextOffice?.close?.(); } catch {}
+  try { if (typeof window !== 'undefined') window.CloudTMSBpayNextHistory?.close?.(); } catch {}
+  try { if (currentFrame()?.kind === 'banking-pay-history') closeModal(); } catch {}
+  try { bpayNextOwnerClient?.close(); } catch {}
+  bpayNextOwnerClient = null; bpayNextOwnerActor = null;
   // stop refresh timers
   try { clearTimeout(refreshTimer); } catch {}
   refreshTimer = 0;
@@ -6982,12 +7021,31 @@ function renderTopNav(){
         menu.setAttribute('role', 'menu');
         menu.setAttribute('aria-label', 'Banking destinations');
         menu.innerHTML = `
+          <button type="button" role="menuitem" data-banking-destination="pay_next" hidden disabled>Banking Pay NEXT</button>
           <button type="button" role="menuitem" data-banking-destination="pay">Banking Pay</button>
           <button type="button" role="menuitem" data-banking-destination="payment_batches">Payment Batches</button>
           <button type="button" role="menuitem" data-banking-destination="loans_snoozes">Loans and Snoozes</button>
           <button type="button" role="menuitem" data-banking-destination="id">Invoice Discounting</button>
         `;
         document.body.appendChild(menu);
+        const ownerClient = bankingNextOwnerClient();
+        const ownerNotice = document.createElement('p'); ownerNotice.setAttribute('role','status');
+        ownerNotice.textContent = 'Reading Banking ownership…'; menu.appendChild(ownerNotice);
+        for (const item of menu.querySelectorAll('[data-banking-destination]')) {
+          if (item.dataset.bankingDestination !== 'id') item.disabled = true;
+        }
+        const ownerScope = 'banking:' + crypto.randomUUID();
+        const ownerActor = SESSION?.user?.id || null;
+        const ownerRead = ownerClient ? ownerClient.begin(ownerScope) : Promise.reject(new Error('OWNER_UNAVAILABLE'));
+        void ownerRead.then(status=>{
+          if (!menu.isConnected || SESSION?.user?.id !== ownerActor || ownerClient.snapshot().scope !== ownerScope) return;
+          ownerNotice.textContent = bankingNextOwnerMessage(status);
+          const nextItem=menu.querySelector('[data-banking-destination="pay_next"]');
+          nextItem.hidden=status.active_owner!=='NEXT'; nextItem.disabled=status.active_owner!=='NEXT';
+          for(const item of menu.querySelectorAll('[data-banking-destination]')) {
+            if(!['id','pay_next'].includes(item.dataset.bankingDestination)) item.disabled=status.active_owner==='DISABLED';
+          }
+        }).catch(()=>{if(menu.isConnected && SESSION?.user?.id===ownerActor)ownerNotice.textContent=bankingNextOwnerMessage(null);});
         const rect = b.getBoundingClientRect();
         menu.style.left = `${Math.round(window.scrollX + rect.left)}px`;
         menu.style.top = `${Math.round(window.scrollY + rect.bottom + 6)}px`;
@@ -7005,11 +7063,31 @@ function renderTopNav(){
           }
 
           try {
+            const ownerClient = bankingNextOwnerClient();
+            const owner = ownerClient?.peek() || null;
+            if (destination !== 'id' && (destination !== 'pay_next' || owner?.active_owner !== 'NEXT')) {
+              alert(bankingNextOwnerMessage(owner, destination !== 'pay_next')); return;
+            }
+            if (destination === 'pay_next') {
+              if (!window.CloudTMSBpayNextOffice || !SESSION?.user?.id) {
+                alert('Banking Pay NEXT is unavailable. Please sign in again.');
+                return;
+              }
+              window.CloudTMSBpayNextOffice.open({
+                document, window, api: API, authFetch, actorId: SESSION.user.id,
+                currentActorId: () => SESSION?.user?.id || null,
+                pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
+                openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
+                ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT',
+                onOwnerStale: (code) => ownerClient.invalidate(code)
+              });
+              return;
+            }
             if (typeof openBanking !== 'function') {
               alert('Banking modal not yet implemented.');
               return;
             }
-            await openBanking(destination);
+            await openBanking(destination, {ownerQualified:true});
           } catch (e) {
             console.error('[NAV][BANKING] openBanking failed', e);
             alert(e?.message || 'Failed to open Banking.');
@@ -143284,7 +143362,14 @@ async function showImportFlowConfirm(message, opts = {}) {
   return !!(result && result.confirmed === true);
 }
 
-async function openBanking(startTabKey = 'pay') {
+async function openBanking(startTabKey = 'pay', nextOptions = {}) {
+  const ownerClient = bankingNextOwnerClient();
+  if (nextOptions.ownerQualified !== true) {
+    try { await ownerClient?.begin('banking:' + crypto.randomUUID()); } catch {}
+  }
+  if (String(startTabKey || 'pay').trim() !== 'id') {
+    alert(bankingNextOwnerMessage(ownerClient?.peek() || null, true)); return;
+  }
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const MODAL_CLASS = 'banking-modal';
@@ -327037,6 +327122,7 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       'btnEditModal',
       'btnSave',
       'btnRelated',
+      'btnPaymentHistory',
 
       // ✅ Keep ONLY non-conversion footer actions
       'btnTsDeleteTimesheet',
@@ -327060,6 +327146,12 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
         }
       }
     } catch {}
+
+    // The history utility has read-only explicit paging controls, never edits.
+    if (ro && currentFrame()?.kind === 'banking-pay-history' && el.hasAttribute('data-payment-history-action')) {
+      el.disabled = el.dataset.historyBusy === '1';
+      return;
+    }
 
     // Candidate Finance Report is a read-only navigation action. It must remain
     // available while the Candidate itself is in View mode; opening a report
@@ -333350,6 +333442,35 @@ top._updateButtons = ()=> {
   const ownsPrimaryRecordWorkflow = !!(
     !isChild || (top.noParentGate === true && isPrimaryRecordFrame(top))
   );
+  // Explicit record history entry; no history read on ordinary modal/Banking load.
+  const paymentHistoryButton = byId('btnPaymentHistory');
+  if (paymentHistoryButton) {
+    const data = top._ctxRef?.data || {};
+    const scopeId = String(top.entity === 'candidates' ? data.id : data.timesheet_id || '').toLowerCase();
+    const genuineScope = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(scopeId);
+    const historyEligible = SESSION?.user?.role === 'admin' && genuineScope && top.mode === 'view'
+      && ((top.entity === 'candidates' && ownsPrimaryRecordWorkflow) || (top.entity === 'timesheets' && top.kind === 'timesheets'));
+    const ownerClient = historyEligible ? bankingNextOwnerClient() : null;
+    const historyActor = SESSION?.user?.id || null;
+    if (historyEligible && ownerClient && !top._bpayNextOwnerRequested) {
+      top._bpayNextOwnerRequested = true;
+      void ownerClient.qualify('record:' + top.entity + ':' + scopeId + ':' + crypto.randomUUID())
+        .catch(()=>{}).finally(()=>{if(currentFrame()===top && SESSION?.user?.id===historyActor)top._updateButtons?.();});
+    }
+    const showHistory = historyEligible && ownerClient?.peek()?.active_owner === 'NEXT';
+    paymentHistoryButton.style.display = showHistory ? '' : 'none';
+    paymentHistoryButton.disabled = !showHistory || !!top._saving;
+    paymentHistoryButton.onclick = showHistory ? () => {
+      if (currentFrame() !== top || paymentHistoryButton.disabled || !window.CloudTMSBpayNextHistory) return;
+      window.CloudTMSBpayNextHistory.open({
+        document, window, showModal, api: BROKER_BASE_URL, authFetch, actorId: SESSION.user.id,
+        ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT',
+        currentActorId: () => SESSION?.user?.id || null,
+        scope: {candidate_id: top.entity === 'candidates' ? scopeId : null,
+          timesheet_id: top.entity === 'timesheets' ? scopeId : null}
+      });
+    } : null;
+  }
   const isExistingContractFrame = !!(
     ownsPrimaryRecordWorkflow && top.kind === 'contracts' && top.entity === 'contracts' && top.hasId
   );
