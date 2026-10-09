@@ -27,4 +27,19 @@ Executable focused proof: frontend Contract/source-action suite 42/42; backend d
 
 Policy X: unchanged. This is new-placement eligibility and UI reachability only, with no financial amount, rate, headroom, selection/Draft, frozen artifact, provider, payment, settlement or remittance changes. No SQL definition, migration, trigger, token, Google script, old webapp or mobile build changes.
 
-Duplication publication and deployed browser acceptance remain pending at this preparation checkpoint.
+## Duplication: deployed and browser-checked
+
+Managed TEST release completed on 9 October 2026: backend `20f9c8a29ab5375bc3beccc1c3d80d7ada8318b3`, Office `87b385c849f400c73e711e21fb6b41cb65f77357`, protected database run `37935132374`, Office Pages build `1271803961`. The database route verified the unchanged contract without reinstalling SQL. Fresh Cloudflare read-back resolved each active version to a successful build of that exact backend commit:
+
+| TEST Worker | Active version |
+| --- | --- |
+| Normal backend | `757b2412-752b-4a9b-be90-e589acf4befa` |
+| Candidate private | `f0d66b71-3641-4c0d-9be1-d747f17e7484` |
+| Candidate synthetic private | `18cf734e-3867-4d29-8c55-2d4e658da576` |
+| Candidate public broker | `1e7e5609-2e2b-4fce-8e3e-48cf9c95bb45` |
+
+Deployed browser acceptance: Kier's Berkshire PAYE source offers PAYE-only candidates, searching Baljit returns no matching candidates, and Kier remains selectable. An existing Baljit Umbrella source offers Umbrella-only candidates, excludes Kier, and includes Baljit. The initial unassigned slot has an enabled Create contracts button and no inherited source lock badge. An existing unassigned, unworked July Contract opens Edit with enabled pay method and start/end dates. No final copy creation, existing-contract save, booking or financial action was performed in the browser; actual insertion/rejection behavior is proved by the isolated executable handler tests above, not a durable end-to-end fixture.
+
+The import Create Contract journey was retested after this deployment: Baljit/Berkshire names remain populated and both dates were changed to `20/09/2026` and `27/09/2026`, remained editable after blur, then the unsaved draft was closed. Screenshots `contract-duplicate-fixed-20261009.png` and `contract-create-dates-fixed-20261009.png` are saved in this task's visualizations directory. The focused frontend suite was rerun and passed 42/42. Existing worked-history protection remains covered by executable regression tests; no LIVE, Google, old-webapp or mobile deployment was performed.
+
+The coordinator receipt retains its generic `DEPLOYED_ACCEPTANCE_PENDING` status; the later bounded browser acceptance and its limits are recorded here rather than rewriting protected deployment evidence. This evidence-only report update is pushed on the task branch; the installed Office source identity remains the release commit above.
