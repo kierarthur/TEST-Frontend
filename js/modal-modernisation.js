@@ -1023,7 +1023,7 @@
         finance: ['Finance', 'Review calculated pay, charge and margin details.'],
         audit: ['Audit history', 'Review changes recorded for this timesheet.']
       }[key] || ['Timesheet', 'Review the timesheet details.'];
-      intro(body, `timesheet-${key}`, content[0], content[1]);
+      intro(body, `timesheet-${key}`, content[0], window.__getModalFrame?.()?._bpayNextEvidenceNavigation === true ? '' : content[1]);
       // The server-owned phase title is now the tab's primary heading.  Keep
       // the card and its authority badge, but do not print the title twice.
       if (weeklySourceLines && sourceLifecycleHeading && sourceLifecycleTitle === safeText(sourceLifecycleHeading.textContent)) {

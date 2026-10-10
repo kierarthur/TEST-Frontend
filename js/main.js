@@ -7163,10 +7163,43 @@ function renderTopNav(){
                 pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
                 openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
                 issueOwners: {
-                  timesheet: (issue) => {
-                    if (String(SESSION?.user?.id || '').toLowerCase() !== issue.context.actor_user_id
-                        || ownerClient.peek()?.active_owner !== 'NEXT' || !issue.physical_timesheet_id) throw new Error('Payment unavailable');
-                    return openTimesheet({ timesheet_id: issue.physical_timesheet_id });
+                  timesheet: async (issue) => {
+                    const actor = String(SESSION?.user?.id || '').toLowerCase();
+                    if (actor !== issue.context.actor_user_id || ownerClient.peek()?.active_owner !== 'NEXT'
+                        || !issue.physical_timesheet_id || issue.accepted_run_id) throw new Error('Payment unavailable');
+                    const parentFooter = document.querySelector('[data-next-window-footer]');
+                    const parent = window.__modalStack?.at(-1);
+                    if (!parent || parent.kind !== 'bpay-next-read') throw new Error('Payment unavailable');
+                    const opening = openTimesheet({ timesheet_id: issue.physical_timesheet_id,
+                      __bpayNextExactPhysicalId: issue.physical_timesheet_id,
+                      __bpayNextExactPhysicalVersion: issue.physical_timesheet_version ?? null,
+                      candidate_id: issue.candidate_id, reference_number: issue.timesheet_reference ?? null, source_root_timesheet_id: issue.source_root_timesheet_id ?? null,
+                      source_week_ending_date: issue.source_week_ending_date ?? null });
+                    const child = window.__modalStack?.at(-1);
+                    if (!child || child === parent || child.kind !== 'timesheets') {
+                      await opening; throw new Error('Timesheet unavailable');
+                    }
+                    // Parent's managed footer and hidden-tab chrome belong only
+                    // to that frame. Its onMount restores them on child close.
+                    child._bpayNextEvidenceNavigation = true;
+                    document.getElementById('modal').classList.add('bpay-next-timesheet-evidence');
+                    parentFooter?.remove();
+                    const tabs = document.getElementById('modalTabs');
+                    tabs.hidden = false; tabs.style.display = '';
+                    document.getElementById('modal').classList.remove('ctms-kind-bpay-next-read',
+                      'bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');
+                    const dismissed = new Promise(resolve => {
+                      const previousDismiss = child._onDismiss;
+                      child._onDismiss = function (...args) {
+                        try { previousDismiss?.apply(this, args); } finally {
+                          document.getElementById('modal')?.classList.remove('bpay-next-timesheet-evidence'); resolve();
+                        }
+                      };
+                    });
+                    await opening; await dismissed;
+                    if (String(SESSION?.user?.id || '').toLowerCase() !== actor
+                        || ownerClient.peek()?.active_owner !== 'NEXT'
+                        || !window.__modalStack?.includes(parent)) throw new Error('Payment unavailable');
                   }
                 },
                 ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT',
@@ -148780,6 +148813,15 @@ try {
       ''
     ).trim();
 
+    // WB17 Banking navigation never silently replaces its exact reader origin.
+    if (baseRow.__bpayNextExactPhysicalId && (
+      fetchedCurrentId !== baseRow.__bpayNextExactPhysicalId
+      || (baseRow.__bpayNextExactPhysicalVersion != null
+        && String(details.timesheet?.version ?? details.current_version ?? '') !== String(baseRow.__bpayNextExactPhysicalVersion))
+    )) {
+      throw new Error('This Timesheet changed; return to Banking Pay and refresh.');
+    }
+
     if (fetchedCurrentId) {
       if (details.timesheet && typeof details.timesheet === 'object') {
         details.timesheet.timesheet_id = fetchedCurrentId;
@@ -154725,7 +154767,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
       ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT'].includes(weeklySourceCategory)
     );
     const title = hasTs
-      ? (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`)
+      ? (baseRow.__bpayNextExactPhysicalId && baseRow.reference_number ? `Timesheet · ${baseRow.reference_number}` : (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`))
       : `Weekly timesheet (planned) ${String(weekId).slice(0, 8)}…`;
 
  const hasRelatedId = !!(tsId || weekId);
@@ -365005,7 +365047,7 @@ function renderTimesheetOverviewTab(ctx) {
           <div class="mini">
             ${
               weYmd
-                ? `Week ending: ${fmtDow(weYmd)} ${fmtYmdToDmy(weYmd)}`
+                ? `Week ending: ${row.__bpayNextExactPhysicalId ? weYmd.split('-').reverse().join('/') : fmtDow(weYmd)+' '+fmtYmdToDmy(weYmd)}`
                 : '<span class="mini">Week ending: Unknown</span>'
             }
           </div>
@@ -367600,7 +367642,7 @@ async function openTimesheet(row) {
       ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT'].includes(weeklySourceCategory)
     );
     const title = hasTs
-      ? (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`)
+      ? (baseRow.__bpayNextExactPhysicalId && baseRow.reference_number ? `Timesheet · ${baseRow.reference_number}` : (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`))
       : `Weekly timesheet (planned) ${String(weekId).slice(0, 8)}…`;
 
     const hasRelatedId = !!(tsId || weekId);
@@ -367851,7 +367893,7 @@ function isActiveTimesheetModalToken(openToken) {
   }
 }
 
-function renderTimesheetLoadingCard(label, message) {
+function renderTimesheetLoadingCard(label, message, isExactNavigationError = false) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : ((v) => String(v == null ? '' : v)
@@ -367869,7 +367911,7 @@ function renderTimesheetLoadingCard(label, message) {
       <div class="card">
         <div class="row">
           <label>${enc(title)}</label>
-          <div class="controls"><span class="mini">${enc(msg)}</span></div>
+          <div class="controls"><span class="mini"${isExactNavigationError ? ' role="alert"' : ''}>${enc(msg)}</span></div>
         </div>
       </div>
     </div>`;
@@ -367938,7 +367980,7 @@ function makeTimesheetFastOpenRenderTab(openToken, baseRowArg) {
     const detailsError = String(hydration.detailsError || '').trim();
 
     if (detailsError) {
-      return renderTimesheetLoadingCard('Timesheet details', detailsError);
+      return renderTimesheetLoadingCard('Timesheet details', detailsError, baseRow.__bpayNextExactPhysicalId != null);
     }
 
     const detailsLoaded = hydration.detailsLoaded === true;

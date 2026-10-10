@@ -225,7 +225,7 @@ const ROWS=Object.freeze({
     "recovery_source_ex_vat": "decimal?",
     "included_source_ex_vat": "decimal?",
     "gross_due_source_ex_vat": "decimal?"
-  },
+  ,"physical_revision_id":"uuid?","physical_timesheet_version":"positive?","source_kind":"sourceKind?","source_head_id":"uuid?","source_root_timesheet_id":"uuid?","source_root_timesheet_version":"positive?","source_week_ending_date":"date?"},
   "GROUP_LINES": {
     "item_id": "uuid",
     "group_key": "text",
@@ -393,7 +393,7 @@ const ROWS=Object.freeze({
     "eligible_from_date": "date?",
     "pay_hold_reason": "text?",
     "reason_priority": "small"
-  }
+  ,"physical_revision_id":"uuid?","physical_timesheet_version":"positive?","source_kind":"sourceKind?","source_head_id":"uuid?","source_root_timesheet_id":"uuid?","source_root_timesheet_version":"positive?","source_week_ending_date":"date?"}
 });
 const SCOPE=Object.freeze(Object.fromEntries(Object.entries(COMMON).filter(([k])=>!['after','limit'].includes(k))));
 const CONTEXT={kind:'kind',agency_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',official_pay_date:'date',workbench_revision:'integer',adoption_revision:'integer',scope:'scope'};
@@ -418,6 +418,7 @@ function field(v,type){
   if(type==='date'){if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v)||v.startsWith('0000'))return false;const d=new Date(`${v}T00:00:00Z`);return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===v;}
   if(type==='countSelection')return exact(v,['mode','candidate_ids'])&&['ALL','NONE'].includes(v.mode)&&Array.isArray(v.candidate_ids)&&v.candidate_ids.every(id=>field(id,'uuid'))&&new Set(v.candidate_ids).size===v.candidate_ids.length&&ENCODER.encode(JSON.stringify(v)).byteLength<=32768;
   if(type==='scope')return shape(v,SCOPE);
+  if(type==='sourceKind')return ['ORDINARY','SOURCE','PROTECTED','EXPENSE','ADJUSTMENT'].includes(v);
   if(type==='cursor')return exact(v,['context','key'])&&shape(v.context,CONTEXT)&&validKey(v.key,v.context.kind,v.context.scope.sort);
   if(type==='refusal')return FAILURE_CODES.includes(v);
   return false;
@@ -499,6 +500,13 @@ function validateWorkbenchResponse(payload,kind,args,actorId=null){
     if(kind==='GROUP_LINES'){
       const facts=['approved_line_no','job_title','band_label','original_work_ref','original_timesheet_id','is_adjustment','component_amount_known','component_ready_amount','component_waiting_amount','component_reserved_amount'];
       if(row.work_id===null&&facts.some(k=>row[k]!==null)||(row.shift_detail_id===null)!==(row.shift_detail_no===null)||row.approved_segment_id===null&&row.shift_detail_id!==null||row.original_timesheet_id===null&&row.original_work_ref!==null||row.component_amount_known!==true&&['component_ready_amount','component_waiting_amount','component_reserved_amount'].some(k=>row[k]!==null)||row.component_amount_known===true&&['component_ready_amount','component_waiting_amount','component_reserved_amount'].some(k=>row[k]===null))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+    }
+    if(['CANDIDATE_GROUPS','ISSUE_DETAIL'].includes(kind)){
+      const ids=['physical_revision_id','physical_timesheet_id','physical_timesheet_version'];
+      if(ids.some(k=>row[k]===null)&&ids.some(k=>row[k]!==null)||row.work_id===null&&[...ids,'source_kind','source_head_id','source_root_timesheet_id','source_root_timesheet_version','source_week_ending_date'].some(k=>row[k]!==null)
+        ||(row.source_root_timesheet_id===null)!==(row.source_root_timesheet_version===null)
+        ||!['SOURCE','PROTECTED'].includes(row.source_kind)&&['source_head_id','source_root_timesheet_id','source_root_timesheet_version','source_week_ending_date'].some(k=>row[k]!==null)
+        ||['SOURCE','PROTECTED'].includes(row.source_kind)&&row.source_week_ending_date===null)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     }
     if(kind==='CANDIDATE_GROUPS'){
       if(row.group_key!==row.group_kind+':'+row.presentation_id||row.parent_group_key!==(row.work_id!==null?'WORK:'+row.work_id:'CASE:'+row.case_id)||(row.group_kind==='ROW')!==(row.case_component_id!==null)||row.group_kind==='ROW'&&row.presentation_id!==row.case_component_id||(row.accepted_run_id===null)!==(row.accepted_command_id===null)||(row.accepted_run_id===null)!==(row.accepted_module_epoch===null)||['ready_net_add_amount','gross_deduction_balance','net_deduction_balance','waiting_amount','waiting_net_add_amount'].some(k=>(row[k]===null)!==(row.group_amount===null)))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
@@ -829,8 +837,8 @@ function mountIssueView(options){
  function available(){return Boolean(current()&&context&&!busy&&!error&&options.parentAvailable?.()!==false&&(!options.parentContext?.()||sameWorkbenchRevision(context,options.parentContext())));}
  function notify(){try{options.onAvailability?.({available:available(),context});}catch{}}
  function args(after){return {...scope,section:detail?section:'ALL',search,sort,after,limit:100,...(detail?{group_key:detail.group_key,reason_code:detail.reason_code,item_id:detail.item_id??null}: {})};}
- function address(row){return Object.freeze({item_id:row.item_id,group_key:row.group_key,candidate_id:row.candidate_id,work_id:row.work_id,case_id:row.case_id,case_component_id:row.case_component_id,physical_timesheet_id:row.physical_timesheet_id,revision_id:row.revision_id,reason_code:row.reason_code,section:row.section,context,scope:{...scope}});}
- async function invoke(callback,row){if(!available()||options.canInteract?.()===false||typeof callback!=='function'||detail&&callback===options.openPayment&&row.physical_timesheet_id===null)return;const captured=context;try{await callback(address(row),row);}catch{if(current()&&context===captured){error='Could not open this payment; try again.';render();}}}
+ function address(row){return Object.freeze({item_id:row.item_id,group_key:row.group_key,candidate_id:row.candidate_id,work_id:row.work_id,case_id:row.case_id,case_component_id:row.case_component_id,physical_timesheet_id:row.physical_timesheet_id,timesheet_reference:row.timesheet_reference,...(kind==='ISSUE_DETAIL'?{physical_revision_id:row.physical_revision_id,physical_timesheet_version:row.physical_timesheet_version,source_kind:row.source_kind,source_head_id:row.source_head_id,source_root_timesheet_id:row.source_root_timesheet_id,source_root_timesheet_version:row.source_root_timesheet_version,source_week_ending_date:row.source_week_ending_date}:{}),revision_id:row.revision_id,reason_code:row.reason_code,section:row.section,context,scope:{...scope}});}
+ async function invoke(callback,row){if(!available()||options.canInteract?.()===false||typeof callback!=='function'||detail&&callback===options.openPayment&&row.physical_timesheet_id===null)return;const captured=context;let opened=false;try{await callback(address(row),row);opened=true;if(detail&&callback===options.issueOwners?.timesheet&&current()&&context===captured){const request={...scope,candidate_id:row.candidate_id,section:'ALL'},page=await client.loadWorkbenchPage('HEADER',request);if(!current()||context!==captured)return;validateWorkbenchResponse(page,'HEADER',normalizeWorkbenchInput('HEADER',request),options.actorId.toLowerCase());if(!sameWorkbenchRevision(captured,page.context)){const top=scroller.scrollTop;error='Newer information is available.';options.onIssueChanged?.();render();scroller.scrollTop=top;}}}catch{if(current()&&context===captured){error=opened?'Could not check for newer information; refresh to continue.':'Could not open this payment; try again.';render();}}}
  function pageHeight(page){const ids=new Set(page.rows.map(r=>r.item_id));return Array.from(scroller.querySelectorAll('tr[data-item-id]')).filter(n=>ids.has(n.dataset.itemId)).reduce((sum,n)=>sum+n.getBoundingClientRect().height,0);}
  function render(){
   const focus=ui.capture(root,doc),usable=available(),table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),thead=el('thead'),head=el('tr'),tbody=el('tbody');
@@ -1013,13 +1021,13 @@ function openCandidateWindow(options,address){
  const button=(text,fn)=>{const b=el('button',text,'btn');b.type='button';b.addEventListener('click',fn);return b;};
  const root=el('section',undefined,'bpay-next-candidate-window'),identity=el('p',address.candidate_name??'Candidate','bpay-next-candidate-identity'),strip=el('div',undefined,'bpay-next-candidate-strip'),facts=el('div'),tabs=el('div',undefined,'bpay-next-workbench-tabs'),mobile=el('label','Sort by','bpay-next-candidate-mobile-sort'),select=el('select'),scroller=el('div',undefined,'ctms-universal-table-host bpay-next-candidate-scroll'),status=el('p'),foot=el('p','', 'bpay-next-candidate-foot'),footer=el('div',undefined,'bpay-next-window-actions');
  if(address.candidate_reference!==null)identity.append(el('span',' · TMS '+address.candidate_reference));
- let frame,closed=false,generation=0,busy=false,error='',notice='',section='READY',sort='PAYMENT_DESC',pages=[],history=[],context=null,headers=null,anchorKey=null,highlight=null,opening=true,pending={direction:'reset',after:null,anchor:null};
+ let frame,closed=false,generation=0,busy=false,error='',notice='',newerInformation=false,section='READY',sort='PAYMENT_DESC',pages=[],history=[],context=null,headers=null,anchorKey=null,highlight=null,opening=true,pending={direction:'reset',after:null,anchor:null};
  const details=new Map();
  function clearDetails(){for(const detail of details.values())detail.controller?.close();details.clear();}
  function toggleDetail(row){if(!interactive()||row.accepted_run_id!==null||!options.preparationTransport)return;const existing=details.get(row.group_key);if(existing){existing.controller.close();details.delete(row.group_key);}else details.set(row.group_key,{host:el('div'),controller:null,row,context});render();}
  const scope={candidate_id:address.candidate_id,client_id:address.scope.client_id,channel:address.scope.channel};
  const current=()=>{try{return !closed&&frame?.alive()===true&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}};
- const usable=()=>current()&&!busy&&!error&&context&&headers;
+ const usable=()=>current()&&!busy&&!error&&!newerInformation&&context&&headers;
  const interactive=()=>usable()&&frame.active();
  const refresh=button('Refresh',()=>{if(current()&&frame.active()&&!busy)void read('refresh',null,captureAnchor());}),include=button('Include all eligible payments',()=>{if(!interactive()||headers.READY.payable_count==='0')return;try{store.includeCandidatePayments(address.candidate_id);options.onSelection?.();notice='All eligible payments are included.';render();}catch{error='Too many choices; clear some choices and try again.';render();}}),retry=button('Try again',()=>{if(current()&&frame.active()&&!busy)void read(pending.direction,pending.after,pending.anchor);});
  refresh.setAttribute('data-next-focus-key','candidate-refresh');include.setAttribute('data-next-focus-key','candidate-include');include.classList.add('primary');strip.append(facts,refresh);footer.append(include);mobile.append(select);scroller.tabIndex=0;scroller.setAttribute('role','region');scroller.setAttribute('aria-label','Candidate payments');status.setAttribute('role','status');status.setAttribute('data-next-live-copy','');foot.setAttribute('data-next-live-copy','');root.append(strip,tabs,mobile,scroller,status,retry,foot);
@@ -1030,7 +1038,15 @@ function openCandidateWindow(options,address){
  function captureAnchor(){const rows=Array.from(scroller.querySelectorAll('tr[data-presentation-key]')),top=scroller.getBoundingClientRect().top,row=rows.find(n=>n.getBoundingClientRect().bottom>top);return row?{key:row.dataset.presentationKey,offset:row.getBoundingClientRect().top-top}:null;}
  function pageHeight(page){const ids=new Set(page.rows.map(row=>row.group_key));return Array.from(scroller.querySelectorAll('tr[data-presentation-key]')).filter(n=>ids.has(n.dataset.presentationKey)).reduce((sum,n)=>sum+n.getBoundingClientRect().height,0);}
  function opener(row){if(row.accepted_run_id!==null&&section==='WAITING')return typeof options.openDraft==='function'?()=>options.openDraft({run_id:row.accepted_run_id,command_id:row.accepted_command_id,module_epoch:row.accepted_module_epoch,candidate_id:row.candidate_id,context}):null;if(typeof options.openGroup==='function')return ()=>options.openGroup({...row,context,scope:{...scope},choiceStore:store});if(row.physical_timesheet_id!==null&&typeof options.issueOwners?.timesheet==='function')return ()=>options.issueOwners.timesheet({...row,context});return null;}
- async function open(row){if(!interactive())return;const fn=opener(row);if(!fn)return;try{await fn();}catch{if(current()){error='Could not open this payment; try again.';render();}}}
+ async function checkAfterTimesheet(captured,ticket){
+  if(!current()||ticket!==generation||context!==captured)return;
+  const request={...scope,section:'ALL'},page=await client.loadWorkbenchPage('HEADER',request);
+  if(!current()||ticket!==generation||context!==captured)return;
+  validateWorkbenchResponse(page,'HEADER',normalizeWorkbenchInput('HEADER',request),options.actorId.toLowerCase());
+  if(!sameWorkbenchRevision(captured,page.context)){const scroll=scroller.scrollTop;newerInformation=true;notice='Newer information is available.';options.onChanged?.();render();scroller.scrollTop=scroll;}
+ }
+ async function open(row){if(!interactive())return;const fn=opener(row);if(!fn)return;const captured=context,ticket=generation,physical=row.accepted_run_id===null&&row.physical_timesheet_id!==null&&typeof options.openGroup!=='function';let opened=false;try{await fn();opened=true;if(physical)await checkAfterTimesheet(captured,ticket);}catch{if(current()&&ticket===generation&&context===captured){error=opened?'Could not check for newer information; refresh to continue.':'Could not open this payment; try again.';render();}}}
+
  function render(){
   const saved=ui.capture(root,doc),available=usable(),active=interactive();facts.replaceChildren(el('small','Ready to pay'));
   if(headers){const n=el('strong',displayPounds(headers.READY.amount));n.setAttribute('data-next-formatted-money','');facts.append(n);if(headers.READY.ready_net_add_amount!==null&&decimalCompare(headers.READY.ready_net_add_amount,'0')!==0){const net=el('small','Payment addition '+displayPounds(headers.READY.ready_net_add_amount));net.setAttribute('data-next-formatted-money','');facts.append(net);}}
@@ -1053,12 +1069,12 @@ function openCandidateWindow(options,address){
   }
   const present=new Set(pages.flatMap(p=>p.rows).map(row=>row.group_key));for(const [key,detail]of details)if(!present.has(key)){detail.controller?.close();details.delete(key);}
   table.append(thead,tbody);scroller.replaceChildren(table);
-  for(const [key,detail]of details)if(!detail.controller)detail.controller=mountPaymentDetail({document:doc,host:detail.host,client,preparationTransport:options.preparationTransport,showReadWindow:options.showReadWindow,current:()=>current()&&sameWorkbenchRevision(context,detail.context)&&details.get(key)===detail,interactive}, {...detail.row,context:detail.context,scope:{...scope}});
+  for(const [key,detail]of details)if(!detail.controller)detail.controller=mountPaymentDetail({document:doc,host:detail.host,client,preparationTransport:options.preparationTransport,showReadWindow:options.showReadWindow,current:()=>current()&&!newerInformation&&sameWorkbenchRevision(context,detail.context)&&details.get(key)===detail,interactive}, {...detail.row,context:detail.context,scope:{...scope}});
 scroller.classList.toggle('bpay-next-stale',!available);if(available&&!pages.some(page=>page.rows.length))scroller.append(el('p',section==='READY'?'No payments are ready.':section==='WAITING'?'No payments are waiting.':section==='BLOCKED'?'No payments are blocked.':'No payments need a decision.'));
   status.setAttribute('role',error?'alert':'status');status.textContent=error||(busy?(pending.direction==='forward'||pending.direction==='back'?'Loading more…':'Loading…'):notice);retry.hidden=!error;root.setAttribute('aria-busy',String(busy));foot.textContent=available?'Sorted by '+(columns().find(([key])=>sort.startsWith(key+'_'))?.[1]??'Payment')+(sort.endsWith('ASC')?', ascending':', descending'):'';if(saved&&current()&&root.isConnected)ui.restore(root,saved,scroller);
  }
  async function read(direction,after,anchor){
-  if(busy||!current())return;const ticket=++generation,readSection=section,readSort=sort,scroll=scroller.scrollTop;let adjustment=0,newAnchor=direction==='refresh'?anchor?.key??null:['reset','restart'].includes(direction)?null:anchorKey;const request={...scope,section:readSection,sort:readSort,group_key:newAnchor,after,limit:10};if(['reset','restart','refresh'].includes(direction))clearDetails();busy=true;error='';notice='';pending={direction,after,anchor};render();
+  if(busy||!current())return;const ticket=++generation,readSection=section,readSort=sort,scroll=scroller.scrollTop;let adjustment=0,newAnchor=direction==='refresh'?anchor?.key??null:['reset','restart'].includes(direction)?null:anchorKey;const request={...scope,section:readSection,sort:readSort,group_key:newAnchor,after,limit:10};if(['reset','restart','refresh'].includes(direction))clearDetails();busy=true;error='';notice='';if(['reset','restart','refresh'].includes(direction))newerInformation=false;pending={direction,after,anchor};render();
   try{
    let page;try{page=await client.loadWorkbenchPage('CANDIDATE_GROUPS',request);}catch(e){if(direction!=='refresh'||!newAnchor||e?.code!=='BPAY_NEXT_WORKBENCH_CURSOR_STALE'||ticket!==generation||!current())throw e;newAnchor=null;request.group_key=null;page=await client.loadWorkbenchPage('CANDIDATE_GROUPS',request);notice='That payment moved; showing the first payments.';}
    if(ticket!==generation||!current())return;validateWorkbenchResponse(page,'CANDIDATE_GROUPS',normalizeWorkbenchInput('CANDIDATE_GROUPS',request),options.actorId.toLowerCase());
@@ -1086,7 +1102,7 @@ function openIssueWindow(options,issue){
  const current=()=>!closed&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();
  const refresh=doc.createElement('button');refresh.type='button';refresh.className='btn';refresh.textContent='Refresh';const refreshDetail=()=>{if(current()&&frame.active()){openingContext=null;view.reload();}};refresh.addEventListener('click',refreshDetail);footer.append(refresh);
  frame=options.showReadWindow({title:issue.section==='BLOCKED'?'Why it is blocked':'What needs attention',content:body,footer,canFocus:current,onDismiss:()=>{closed=true;view?.close();win.setTimeout(()=>{if(options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase()&&previous?.isConnected)previous.focus({preventScroll:true});},0);}});
- view=mountIssueView({...options,host:body,scope:{...issue.scope},detail:{group_key:issue.group_key,reason_code:issue.reason_code,item_id:null,section:issue.section},parentContext:()=>openingContext,onAvailability:value=>{if(value.available&&!changed&&!sameWorkbenchRevision(value.context,issue.context)){changed=true;options.onIssueChanged?.();}},windowAlive:()=>frame.alive(),canInteract:()=>frame.active(),refreshDetail,openPayment:options.issueOwners?.timesheet});
+ view=mountIssueView({...options,host:body,scope:{...issue.scope},detail:{group_key:issue.group_key,reason_code:issue.reason_code,item_id:null,section:issue.section},parentContext:()=>openingContext,onAvailability:value=>{if(value.available&&!changed&&!sameWorkbenchRevision(value.context,issue.context)){changed=true;options.onIssueChanged?.();}},windowAlive:()=>frame.alive(),canInteract:()=>frame.active(),refreshDetail,openPayment:options.issueOwners?.timesheet,onIssueChanged:options.onIssueChanged});
  return Object.freeze({close:()=>frame.close(),refresh:refreshDetail,alive:()=>frame.alive()});
 }
 

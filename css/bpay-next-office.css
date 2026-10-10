@@ -244,3 +244,9 @@
 
 #modal.ctms-kind-bpay-next-read .bpay-next-detail-table td:is([data-label="Original rate"],[data-label="Original charge"],[data-label="Suggested rate"],[data-label="Suggested margin"],[data-label="Units"],[data-label="PAYE"],[data-label="Umbrella"],[data-label="Charge"]) {text-align:right;font-variant-numeric:tabular-nums;}
 @media(max-width:720px){#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label] {text-align:left;}}
+
+/* WB17: only the existing Timesheet child opened from Banking Pay. */
+@media(max-width:700px){
+ #modal.bpay-next-timesheet-evidence #modalTabs{display:flex;flex-wrap:wrap;overflow:visible;white-space:normal;}
+ #modal.ctms-modern-modal.bpay-next-timesheet-evidence #modalTabs button,#modal.bpay-next-timesheet-evidence #btnCloseModal{min-height:44px;min-width:44px;}
+}
