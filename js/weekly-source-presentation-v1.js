@@ -2315,6 +2315,54 @@
     });
   };
 
+  // Presentation of the real Worker-confirmed result; never financial admission.
+  const protectedActionConfirmation = (value) => {
+    const unknown = { confirmed: false, message: 'The save could not be confirmed. Retry exact request.' };
+    if (!isObject(value) || value.ok !== true) return unknown;
+    const uuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(v);
+    const int64Text = (v) => typeof v === 'string' && /^[1-9]\d*$/.test(v)
+      && (v.length < 19 || (v.length === 19 && v <= '9223372036854775807'));
+    const version = (v) => int64Text(v) || (typeof v === 'number' && Number.isSafeInteger(v) && v > 0);
+    const exact = (keys) => Object.keys(value).length === keys.length && keys.every(k => Object.hasOwn(value, k));
+    if (typeof value.idempotent_replay !== 'boolean' || !uuid(value.family_id)) return unknown;
+    if (value.outcome === 'WAITING_FOR_SOURCE') {
+      const keys = ['ok','outcome','idempotent_replay','family_id','family_bound_version'];
+      if (!value.idempotent_replay) keys.push('target_vector_sha256');
+      if (!exact(keys) || !version(value.family_bound_version)
+          || (!value.idempotent_replay && !(typeof value.target_vector_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.target_vector_sha256)))) return unknown;
+      return { confirmed: true, message: 'Decision saved. Waiting for Source.' };
+    }
+    if (value.outcome === 'PUBLISHED_NEXT') {
+      const keys = ['ok','outcome','idempotent_replay','family_id','orchestration_run_id','approval_id','generation_id','work_id','revision_id','command_id','agency_sequence','new_family_bound_version','approved_pay_ex_vat','state'];
+      if (!exact(keys) || value.state !== 'NEXT_PUBLISHED'
+          || !['orchestration_run_id','approval_id','generation_id','work_id','revision_id','command_id'].every(k => uuid(value[k]))
+          || !int64Text(value.agency_sequence) || !int64Text(value.new_family_bound_version)
+          || typeof value.approved_pay_ex_vat !== 'string' || !/^-?(?:0|[1-9]\d*)\.\d{2}$/.test(value.approved_pay_ex_vat)) return unknown;
+      return { confirmed: true, message: 'Protected hours saved. Payment processing will update separately.' };
+    }
+    if (!['PUBLISHED','SAVED_PENDING_FREEZE'].includes(value.outcome)
+        || !uuid(value.generation_id) || !uuid(value.publication_request_id) || !version(value.family_bound_version)
+        || typeof value.requires_first_authorisation !== 'boolean'
+        || value.state !== (value.outcome === 'SAVED_PENDING_FREEZE' ? 'PENDING' : 'LIVE')) return unknown;
+    const keys = ['ok','outcome','idempotent_replay','family_id','generation_id','publication_request_id','state','family_bound_version','authority','requires_first_authorisation'];
+    if (value.authority === 'UNAUTHORISED_TSFIN') {
+      keys.push('timesheet_financials_id');
+      if (!value.requires_first_authorisation || !uuid(value.timesheet_financials_id) || value.outcome !== 'PUBLISHED') return unknown;
+    } else if (value.authority === 'COMMON_ENTITLEMENT_HEAD') {
+      keys.push('decision_bundle_id','publication');
+      if (value.requires_first_authorisation || !uuid(value.decision_bundle_id) || !isObject(value.publication) || value.publication.ok !== true) return unknown;
+      if (Object.hasOwn(value, 'deferred_release_receipt_id')) {
+        keys.push('deferred_release_receipt_id');
+        if (!uuid(value.deferred_release_receipt_id) || value.outcome !== 'PUBLISHED') return unknown;
+      }
+    } else return unknown;
+    if (!exact(keys)) return unknown;
+    return { confirmed: true, message: value.outcome === 'SAVED_PENDING_FREEZE'
+      ? 'Decision saved. Waiting for the existing payment process to finish.'
+      : value.requires_first_authorisation ? 'Protected hours saved. Authorise the Timesheet before payment.'
+      : 'Protected hours saved.' };
+  };
+
   const renderSelectionHeaderCheckbox = (options) => {
     const opts = isObject(options) ? options : {};
     const checked = opts.checked === true;
@@ -2401,6 +2449,7 @@
     renderManageApprovedHoursDialog,
     approvedHoursActionAllowsSchedule,
     buildApprovedHoursCommand,
+    protectedActionConfirmation,
     renderSelectionHeaderCheckbox,
     applySelectionHeaderState,
     renderUnavailable

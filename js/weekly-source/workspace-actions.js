@@ -67,35 +67,24 @@
   const knownProtectedRefusal = (error) => (error?.status === 400
       && /weekly_source_target_managed_root_prepare_atomic_v1 failed 400:[\s\S]*WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH/i.test(asText(error?.message)))
     || ['WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED', 'WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED',
-      'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID', 'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID'].includes(error?.code);
+      'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID', 'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID', 'LOCAL_OWNER_REQUIRED', 'BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(error?.code);
   const localPublisherRefusal = (error) => error?.code === 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY'
     || (error?.status === 400 && /weekly_exceptional_pay_complete_local_v1 failed 400:[\s\S]*\bWEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY\b/i.test(asText(error?.message)));
 
+  function confirmedProtectedResult(result) {
+    const confirmed = root.CloudTMSWeeklySourcePresentationV1?.protectedActionConfirmation?.(result);
+    if (confirmed?.confirmed === true) return confirmed;
+    const code = asText(result?.code || result?.error_code);
+    const error = new Error(['LOCAL_OWNER_REQUIRED', 'BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(code)
+      ? 'Save this change through the Source editor. No payment change was accepted.'
+      : confirmed?.message || 'The save could not be confirmed. Retry exact request.');
+    error.code = code;
+    error.retryable = result?.retryable === true;
+    throw error;
+  }
+
   async function saveProtectedOnce(pending) {
-    const command = pending.action;
-    const payload = pending.payload;
-    if (!pending.attempted) {
-      pending.attempted = true;
-      try { return await workspaceApi().issueCommand(command, payload); }
-      catch (error) {
-        if (localPublisherRefusal(error)) {
-          // The completion transaction refused before accepting a decision.
-          // Earlier preparation remains: retry this exact request, not a new key.
-          pending.attempted = false;
-          throw error;
-        }
-        if (knownProtectedRefusal(error)) throw error;
-      }
-    }
-    try {
-      return await workspaceApi().issueCommand(command, { ...payload, recover_unknown_outcome: true });
-    } catch (error) {
-      if (localPublisherRefusal(error)) { pending.attempted = false; throw error; }
-      if (error?.code !== 'C1_DURABLE_RECOVERY_NOT_REQUIRED') throw error;
-      // The same Office command is safe to resume with its original key when
-      // the durable owner proves that no publication requires recovery.
-      return workspaceApi().issueCommand(command, payload);
-    }
+    return await workspaceApi().issueCommand(pending.action, pending.payload);
   }
 
   function plainMessage(value, fallback = 'This item needs attention before you can continue.') {
@@ -452,12 +441,20 @@
     frame._updateButtons?.();
   }
 
-  async function finishAction() {
+  function protectedCaller(kind, actor, frame) {
+    const workspace = workspaceApi();
+    return () => !!actor && !!frame && currentChild(kind) === frame && workspaceApi() === workspace
+      && (typeof SESSION !== 'undefined' ? SESSION?.user?.id : null) === actor;
+  }
+
+  async function finishAction(confirmation, callerCurrent) {
+    if (callerCurrent && !callerCurrent()) return;
     // The shared modal shell treats changes to confirmation controls as form
     // edits. Once the server has completed the requested action, this child no
     // longer owns unsaved input and must close without a discard prompt.
     markCompletedChildClean();
     closeChild();
+    if (confirmation?.message) root.__toast?.(confirmation.message);
     await workspaceApi()?.refresh?.();
   }
 
@@ -983,22 +980,29 @@
     const editor = root.CloudTMSProtectedShiftEditorV1;
     if (!editor) return openDetail({ detail: { problem: 'Refresh the page to review protected pay.' } });
     const initial = asObject(payloadValue);
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
     const selection = { client_id: initial.client_id, candidate_id: initial.candidate_id,
       source_group_id: initial.source_group_id, work_date: initial.work_date, work_event_id: initial.work_event_id };
     let context = { ...initial, allowed: false };
     const values = { reason: '' }, state = { busy: true, pending: null, error: '' };
     const kind = 'weekly-source-protected-review-v1';
+    let initiatingFrame = null;
+    const frameCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const load = async () => {
+      if (!frameCurrent()) return;
       state.busy = true; rerender(kind);
       try {
         const result = await workspaceApi().issueCommand('PROTECTED_EDITOR_CONTEXT', selection);
+        if (!frameCurrent()) return;
         if (result?.contract !== 'WEEKLY_PROTECTED_EDITOR_V1') throw new Error('The protected shift could not be verified.');
         context = result;
-      } catch (error) { state.error = plainMessage(error?.message, 'Recheck the protected shift.'); }
-      finally { state.busy = false; rerender(kind); }
+      } catch (error) { if (!frameCurrent()) return; state.error = plainMessage(error?.message, 'Recheck the protected shift.'); }
+      finally { state.busy = false; if (frameCurrent()) rerender(kind); }
     };
     const submit = async (mode) => {
       if (state.busy) return;
+      const callerCurrent = protectedCaller(kind, initiatingActor, initiatingFrame);
+      if (!callerCurrent()) return;
       state.error = '';
       try {
         state.busy = true; rerender(kind);
@@ -1008,16 +1012,19 @@
           state.pending = { ...editor.request(context, values, root.crypto.randomUUID(), mode), mode };
         }
         const result = await saveProtectedOnce(state.pending);
-        if (result?.ok !== true) throw new Error('The protected-pay decision has not completed.');
+          if (!callerCurrent()) return;
+        const confirmation = confirmedProtectedResult(result);
         state.pending = null;
-        await finishAction();
+        await finishAction(confirmation, callerCurrent);
       } catch (error) {
+        if (!callerCurrent()) return;
         if(error?.code==='WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED'){
           // Both server refusals with this exact code precede calculation and
           // durable publication. Do not treat a known stale review as an
           // unknown payment outcome, or silently accept the replacement facts.
           state.pending=null;
           await load();
+          if (!callerCurrent()) return;
           state.error='The imported hours have changed. Review the updated details and choose again.';
         } else if(error?.code==='C1_DURABLE_RECOVERY_NOT_REQUIRED'){
           // The server proved there is no staged publication for this exact
@@ -1025,13 +1032,16 @@
           state.error='No submitted result needs recovery. You can retry the saved request.';
         } else {
           if (knownProtectedRefusal(error)) state.pending = null;
-          state.error = plainMessage(localPublisherRefusal(error)
+          state.error = ['LOCAL_OWNER_REQUIRED','BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(error?.code)
+            ? 'Save this change through the Source editor. No payment change was accepted.'
+            : plainMessage(localPublisherRefusal(error)
             ? 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY' : error?.message,
-            'The save could not be confirmed. Retry the same decision.');
+            'The save could not be confirmed. Retry exact request.');
         }
-      } finally { state.busy = false; rerender(kind); }
+      } finally { state.busy = false; if (callerCurrent()) rerender(kind); }
     };
     const wire = () => {
+      if (!frameCurrent()) return;
       const host = root.document?.querySelector('[data-protected-review]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1';
@@ -1041,6 +1051,7 @@
     };
     const opened = openChild({ title: 'Review protected pay', kind,
       render: () => editor.renderReview(context, values, state), wire });
+    initiatingFrame = currentChild(kind);
     if (opened) void load();
     return opened;
   }
@@ -1049,6 +1060,7 @@
     const editor = root.CloudTMSProtectedShiftEditorV1;
     if (!editor) return openDetail({ detail: { problem: 'The protected shift editor is unavailable. Refresh the page.' } }, 'Protect shift pay');
     const initial = asObject(payloadValue);
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
     let context = { ...initial, allowed: false, contracts: [] };
     const values = { work_date: asText(initial.work_date), start: asText(initial.start || initial.start_at_local),
       end: asText(initial.end || initial.end_at_local), break_minutes: initial.break_minutes ?? '',
@@ -1057,17 +1069,20 @@
       protectedSaved: false, userChanged: false, lastOverlapSignature: '' };
     let readSequence = 0;
     const kind = 'weekly-source-protected-shift-v1';
+    let initiatingFrame = null;
+    const frameCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const selection = () => ({ client_id: context.client_id, candidate_id: context.candidate_id,
       work_date: values.work_date, ...(context.source_group_id ? { source_group_id: context.source_group_id } : {}),
       ...(values.shift_choice && values.shift_choice !== 'NEW' ? { work_event_id: values.shift_choice } : {}) });
     const reload = async () => {
+      if (!frameCurrent()) return;
       const sequence = ++readSequence;
       context.allowed = false; context.contracts = []; context.history = [];
       if (!context.client_id || !context.candidate_id || !values.work_date) { rerender(kind); return; }
       state.busy = true; state.error = ''; rerender(kind);
       try {
         const result = await workspaceApi().issueCommand('PROTECTED_EDITOR_CONTEXT', selection());
-        if (sequence !== readSequence) return;
+        if (sequence !== readSequence || !frameCurrent()) return;
         if (result?.contract !== 'WEEKLY_PROTECTED_EDITOR_V1') throw new Error('Recheck the candidate, client and work date.');
         context = { ...result,
           client: asText(result.client) || context.client,
@@ -1078,8 +1093,8 @@
           const original = context.resume_request;
           for (const field of ['work_date', 'start', 'end', 'break_minutes', 'reason', 'contract_id']) values[field] = original[field];
         }
-      } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
-      finally { if (sequence === readSequence) { state.busy = false; rerender(kind); setTimeout(() => warnIfOverlapping(), 30); } }
+      } catch (error) { if (sequence === readSequence && frameCurrent()) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
+      finally { if (sequence === readSequence && frameCurrent()) { state.busy = false; rerender(kind); setTimeout(() => { if (frameCurrent()) warnIfOverlapping(); }, 30); } }
     };
     const render = () => editor.render(context, values, { ...state, mode,
       lockedIdentity: !!initial.work_event_id })
@@ -1136,6 +1151,8 @@
     };
     const submit = async () => {
       if (state.busy) return;
+      const callerCurrent = protectedCaller(kind, initiatingActor, initiatingFrame);
+      if (!callerCurrent()) return;
       state.error = '';
       try {
         if (!state.pending && !state.protectedSaved && warnIfOverlapping(true)) return;
@@ -1147,33 +1164,39 @@
         state.busy = true; rerender(kind);
         if (!state.pending && !state.protectedSaved) {
           const prepared = await workspaceApi().issueCommand('PREPARE_PROTECTED_EDITOR', selection());
+          if (!callerCurrent()) return;
           context = { ...context, ...prepared };
           state.idempotencyKey = context.resume_request?.idempotency_key || root.crypto.randomUUID();
           state.pending = editor.request(context, values, state.idempotencyKey, mode);
         }
         if (!state.protectedSaved) {
           const result = await saveProtectedOnce(state.pending);
-          if (result?.ok !== true) throw new Error('The protected-pay save has not completed.');
+          if (!callerCurrent()) return;
+          state.confirmation = confirmedProtectedResult(result);
           state.pending = null; state.protectedSaved = true;
         }
         // The server closes the matching manual query in the save transaction.
         // A second browser command cannot qualify or repair a failed save.
-        await finishAction();
+        await finishAction(state.confirmation, callerCurrent);
       } catch (error) {
+        if (!callerCurrent()) return;
         // These exact refusals occur in the first transactional family prepare,
         // before an orchestration run or pay publication can survive. Unknown
         // outcomes still retain their original command for explicit recovery.
         if (knownProtectedRefusal(error)) state.pending = null;
         state.error = state.protectedSaved
           ? 'Protected pay was saved, but the screen did not refresh. Close and refresh Queries.'
+          : ['LOCAL_OWNER_REQUIRED','BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(error?.code)
+            ? 'Save this change through the Source editor. No payment change was accepted.'
           : localPublisherRefusal(error)
             ? plainMessage(error?.code === 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY' ? error.code : error?.message)
           : state.pending
-            ? 'The save could not be confirmed. Select Protect pay again to retry this same request.'
+            ? 'The save could not be confirmed. Retry exact request.'
             : plainMessage(error?.message, 'Recheck the selected contract and shift details.');
-      } finally { state.busy = false; rerender(kind); }
+      } finally { state.busy = false; if (callerCurrent()) rerender(kind); }
     };
     const wire = () => {
+      if (!frameCurrent()) return;
       const host = root.document?.querySelector('[data-protected-editor]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1';
@@ -1211,6 +1234,7 @@
       });
     };
     const opened = openChild({ title: mode === 'amend' ? 'Change protected shift' : 'Protect shift pay', kind, render, wire });
+    initiatingFrame = currentChild(kind);
     if (opened) void reload();
     return opened;
   }

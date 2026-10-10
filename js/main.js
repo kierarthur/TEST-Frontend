@@ -178820,10 +178820,21 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
     !vm || vm.mount !== true || vm.manage_approved_hours_allowed !== true || !vm.manage_approved_hours
   ) return false;
 
+  const initiatingActor = SESSION?.user?.id || null;
+  const initiatingParent = window.__modalStack?.[window.__modalStack.length - 1] || null;
+  let initiatingFrame = null;
+  const parentCurrent = () => actorCurrent()
+    && (window.__modalStack?.[window.__modalStack.length - 1] || null) === initiatingParent;
+  const actorCurrent = () => !!initiatingActor && SESSION?.user?.id === initiatingActor;
+  const callerCurrent = () => actorCurrent() && !!initiatingFrame
+    && window.__modalStack?.[window.__modalStack.length - 1] === initiatingFrame;
+
   const modalState = {
     view_model: vm,
     surface: String(opts.surface || 'SIMPLE_TIMESHEET').trim().toUpperCase(),
     busy: false,
+    pending: null,
+    confirmation: null,
     needs_refresh: false,
     refresh_reason: ''
   };
@@ -178837,20 +178848,23 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
 
   const renderTab = () => presentationApi.renderManageApprovedHoursDialog(modalState.view_model);
   const refreshOwner = async () => {
-    if (!modalState.needs_refresh) return;
+    if (!modalState.needs_refresh || !parentCurrent()) return;
     try {
       if (modalState.surface === 'BULK_AUTHORISE') await refreshBulkWeeklySourcePresentation(opts.bulkState);
       else await refreshSimpleWeeklySourcePresentation();
+      if (!parentCurrent()) return;
       const message = modalState.refresh_reason === 'CONFLICT'
         ? 'The Timesheet changed. Review the latest approved hours.'
-        : 'Approved hours updated.';
+        : (modalState.confirmation?.message || 'Approved hours updated.');
       try { if (typeof toast === 'function') toast(message); } catch {}
     } catch {
+      if (!parentCurrent()) return;
       try { if (typeof toast === 'function') toast('Refresh the Timesheet to see the latest approved hours.'); } catch {}
     }
   };
 
   const closeChild = () => {
+    if (!callerCurrent()) return;
     try {
       if (typeof window.closeCurrentModalFrameSafely === 'function') {
         const closed = window.closeCurrentModalFrameSafely({ expectedKind: 'weekly-source-approved-hours' });
@@ -178863,6 +178877,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
     } catch {}
   };
   const closeAndRefreshOwner = () => {
+    if (!callerCurrent()) return;
     closeChild();
     setTimeout(() => { Promise.resolve(refreshOwner()).catch(() => {}); }, 0);
   };
@@ -178874,6 +178889,14 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
     });
     const close = document.getElementById('btnCloseModal');
     if (close) close.disabled = modalState.busy;
+  };
+
+  const retainExactRequestControls = (root) => {
+    if (!modalState.pending) return;
+    root?.querySelectorAll?.('button, input, select, textarea').forEach(control => {
+      control.disabled = control !== modalState.pending.trigger;
+    });
+    modalState.pending.trigger.textContent = 'Retry exact request';
   };
 
   const updateScheduleAvailability = (card) => {
@@ -178888,6 +178911,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
   const wire = () => {
     const root = document.querySelector('[data-weekly-source-manage-dialog="1"]');
     if (!root || root.dataset.boundWeeklySourceManageDialog === '1') return;
+    if (!callerCurrent()) return;
     root.dataset.boundWeeklySourceManageDialog = '1';
     root.querySelectorAll('[data-weekly-source-manage-item]').forEach((card) => updateScheduleAvailability(card));
     root.addEventListener('change', (event) => {
@@ -178899,7 +178923,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
       const direct = event.target?.closest?.('[data-weekly-source-submit-action]') || null;
       const selected = event.target?.closest?.('[data-weekly-source-submit-selected]') || null;
       const submit = direct || selected;
-      if (!submit || modalState.busy) return;
+      if (!submit || modalState.busy || !callerCurrent()) return;
       event.preventDefault();
       const card = submit.closest('[data-weekly-source-manage-item]');
       if (!card) return;
@@ -178915,9 +178939,9 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         break_minutes: field('break_minutes')?.value || '',
         reason: card.querySelector('[data-weekly-source-reason]')?.value || ''
       };
-      let command;
+      let command = modalState.pending?.command;
       try {
-        command = presentationApi.buildApprovedHoursCommand(modalState.view_model, {
+        if (!command) command = presentationApi.buildApprovedHoursCommand(modalState.view_model, {
           item_id: itemId,
           action,
           edits,
@@ -178928,18 +178952,36 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         return;
       }
 
+      if (!modalState.pending) modalState.pending = { command, trigger: submit };
       setWeeklySourceApprovedHoursStatus(root, 'Saving…', 'working');
       setBusy(root, true);
       try {
         const response = await apiPostJson(command.endpoint, command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
-        if (!response || response.ok !== true) throw new Error('COMMAND_FAILED');
+        if (!callerCurrent()) return;
+        const confirmation = presentationApi.protectedActionConfirmation(response);
+        if (!confirmation.confirmed) {
+          const failure = new Error(confirmation.message);
+          failure.json = response;
+          throw failure;
+        }
+        modalState.confirmation = confirmation;
+        modalState.pending = null;
         modalState.needs_refresh = true;
         modalState.refresh_reason = 'SUCCESS';
-        setWeeklySourceApprovedHoursStatus(root, 'Approved hours updated.', 'success');
+        setWeeklySourceApprovedHoursStatus(root, confirmation.message, 'success');
         setBusy(root, false);
         closeAndRefreshOwner();
       } catch (error) {
-        const conflict = Number(error?.status || error?.response?.status || 0) === 409;
+        if (!callerCurrent()) return;
+        const body = error?.json || error?.response || {};
+        const code = String(body.code || body.error_code || error?.code || '').trim();
+        const status = Number(error?.status || error?.response?.status || 0);
+        const localOwnerRequired = ['LOCAL_OWNER_REQUIRED','BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(code);
+        const definite = localOwnerRequired || (body.ok === false && !!code
+          && body.retryable !== true && !/UNKNOWN|OUTCOME_UNCERTAIN/.test(code)
+          && (body.retryable === false || [400,403,409,422].includes(status)));
+        if (definite) modalState.pending = null;
+        const conflict = definite && !localOwnerRequired && status === 409;
         if (conflict) {
           modalState.needs_refresh = true;
           modalState.refresh_reason = 'CONFLICT';
@@ -178949,7 +178991,11 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         }
         setBusy(root, false);
         root.querySelectorAll('[data-weekly-source-manage-item]').forEach((item) => updateScheduleAvailability(item));
-        setWeeklySourceApprovedHoursStatus(root, 'The change could not be saved. Please try again.', 'error');
+        retainExactRequestControls(root);
+        setWeeklySourceApprovedHoursStatus(root, localOwnerRequired
+          ? 'Save this change through the Source editor. No payment change was accepted.'
+          : modalState.pending ? 'The save could not be confirmed. Retry exact request.'
+          : (weeklySourceCommandRefusalMessage(body) || 'The change was refused. Review the details before trying again.'), 'error');
       }
     });
   };
@@ -178968,6 +179014,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
       stayOpenOnSave: false
     }
   );
+  initiatingFrame = window.__modalStack?.[window.__modalStack.length - 1] || null;
   try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   return true;
 }

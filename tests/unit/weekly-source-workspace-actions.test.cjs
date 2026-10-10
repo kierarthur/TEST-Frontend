@@ -37,7 +37,7 @@ test('a pending source-absent retry is not redirected to its own overlap; new wo
     reason: 'Office confirmed', contract_id: id(4) };
   async function opened(pending) {
     const titles = [], timers = [];
-    const root = { module: { exports: {} }, CloudTMSProtectedShiftEditorV1: editor,
+    const root = { module: { exports: {} }, SESSION: { user: { id: id(6) } }, CloudTMSProtectedShiftEditorV1: editor,
       __modalStack: [], document: { querySelector: () => null },
       setTimeout: callback => timers.push(callback),
       CloudTMSWeeklySourceImportWorkspaceV1: { issueCommand: async action => {

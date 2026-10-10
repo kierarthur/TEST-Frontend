@@ -190,7 +190,7 @@
       <p>This changes the candidate’s pay position. It does not change the client source or invoice.</p>
       ${state.error ? `<div class="ws-notice ws-notice--danger" role="alert">${escape(state.error)}</div>` : ''}
       ${context.pending_approval ? `<p role="status">${context.resume_request ? 'Complete the original save before changing these details.' : 'The original protected-pay request could not be verified. No new protection has been created.'}</p>` : ''}
-      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-cancel${state.busy ? disabledLock : ''}>Cancel</button><button type="button" class="btn primary" data-protected-submit${state.busy || context.allowed !== true || (context.pending_approval && !context.resume_request) ? disabledLock : ''}>${state.busy ? 'Saving…' : state.protectedSaved ? 'Refresh result' : context.pending_approval ? 'Save' : state.mode === 'amend' ? 'Change protected shift' : 'Protect pay'}</button></div></div>`;
+      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-cancel${state.busy ? disabledLock : ''}>Cancel</button><button type="button" class="btn primary" data-protected-submit${state.busy || context.allowed !== true || (context.pending_approval && !context.resume_request) ? disabledLock : ''}>${state.busy ? 'Saving…' : state.protectedSaved ? 'Refresh result' : state.pending ? 'Retry exact request' : context.pending_approval ? 'Save' : state.mode === 'amend' ? 'Change protected shift' : 'Protect pay'}</button></div></div>`;
   }
   function renderReview(context = {}, values = {}, state = {}) {
     const proposal = context.final_source_proposal;
@@ -210,7 +210,7 @@
       ${renderHistory(context)}
       ${decisionAvailable ? `<label>Reason for this decision<textarea data-protected-review-reason maxlength="1000"${disabled || state.pending ? ' disabled' : ''}>${escape(values.reason)}</textarea></label>` : ''}
       ${state.error ? `<div class="ws-notice ws-notice--danger" role="alert">${escape(state.error)}</div>` : ''}
-      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-review-close${state.busy ? ' disabled' : ''}>Close</button>${decisionAvailable ? `<button type="button" class="btn btn-outline" data-protected-review-action="wait"${disabled || state.pending?.mode === 'reconcile' ? ' disabled' : ''}>Wait</button><button type="button" class="btn primary" data-protected-review-action="reconcile"${disabled || (!context.can_reconcile && state.pending?.mode !== 'reconcile') || state.pending?.mode === 'wait' ? ' disabled' : ''}>Accept system hours and reconcile</button>` : ''}</div></div>`;
+      <div class="ws-child-actions"><button type="button" class="btn btn-outline" data-protected-review-close${state.busy ? ' disabled' : ''}>Close</button>${decisionAvailable ? `<button type="button" class="btn btn-outline" data-protected-review-action="wait"${disabled || state.pending?.mode === 'reconcile' ? ' disabled' : ''}>${state.pending?.mode === 'wait' ? 'Retry exact request' : 'Wait'}</button><button type="button" class="btn primary" data-protected-review-action="reconcile"${disabled || (!context.can_reconcile && state.pending?.mode !== 'reconcile') || state.pending?.mode === 'wait' ? ' disabled' : ''}>${state.pending?.mode === 'reconcile' ? 'Retry exact request' : 'Accept system hours and reconcile'}</button>` : ''}</div></div>`;
   }
   return Object.freeze({ schedule, contractChoice, overlappingEvents, request, render, renderReview });
 });
