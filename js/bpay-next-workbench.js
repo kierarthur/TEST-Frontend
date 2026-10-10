@@ -673,23 +673,61 @@ function mountWorkbenchShell(options){
  return Object.freeze({readyHost,issueHost,client,load,setTab,openFilters,refreshSelectionLabel(){if(current())render();},setIssueAvailability(value){if(!current())return;issueAvailability=value;render();},snapshot:()=>Object.freeze({scope:{...scope},labels:{...labels},tab,available:Boolean(bundle&&!busy&&!error&&current()),context:bundle?.READY.context??null,headers:bundle}),invalidate(){if(!current())return;generation++;bundle=null;busy=false;error='Payments changed; refresh to continue.';render();},close(){closed=true;generation++;dialog?.close();dialog?.close();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}});
 }
 
+// WB21: one bounded native choice store per authenticated business namespace.
+// This contains intent only. Readers and the preparation intake own money.
+const choiceMemory=new Map();
+function createChoiceStore(options){
+ const c=options?.context;
+ if(!shape(c,CONTEXT)||!record(options))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
+ const namespace={agency_id:c.agency_id,owner_epoch:c.owner_epoch,actor_user_id:c.actor_user_id,official_pay_date:c.official_pay_date,scope:{candidate_id:c.scope.candidate_id,client_id:c.scope.client_id,channel:c.scope.channel}};
+ const key='cloudtms.bpay-next.choices.v1.'+JSON.stringify(namespace),clone=v=>JSON.parse(JSON.stringify(v));
+ const immutable=v=>{if(v&&typeof v==='object'){for(const x of Object.values(v))immutable(x);Object.freeze(v);}return v;};
+ const empty=()=>({mode:'ALL_MATCHING',candidates:[],works:[],components:[],cases:[]});
+ function validIntent(v){
+  if(!exact(v,['mode','candidates','works','components','cases'])||!['ALL_MATCHING','NONE'].includes(v.mode))return false;
+  const schemas={candidates:{candidate_id:'uuid',selected:'boolean'},works:{candidate_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',selected:'boolean',mode:'mode'},components:{candidate_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',approved_line_id:'uuid',selected:'boolean'},cases:{candidate_id:'uuid',case_component_id:'uuid',selected:'boolean'}};
+  return Object.entries(schemas).every(([kind,schema])=>Array.isArray(v[kind])&&v[kind].length<=1000&&v[kind].every(row=>exact(row,Object.keys(schema))&&Object.entries(schema).every(([k,t])=>t==='mode'?['ALL','SUBSET'].includes(row[k]):field(row[k],t)))&&new Set(v[kind].map(row=>row.case_component_id??row.approved_line_id??row.work_id??row.candidate_id)).size===v[kind].length);
+ }
+ function valid(value){return exact(value,['version','namespace','intent','revision','dirty'])&&value.version===1&&JSON.stringify(value.namespace)===JSON.stringify(namespace)&&validIntent(value.intent)&&Number.isSafeInteger(value.revision)&&value.revision>=0&&typeof value.dirty==='boolean'&&ENCODER.encode(JSON.stringify(value)).byteLength<=32768;}
+ let state=choiceMemory.get(key),persistent=true,storage=null;
+ try{storage=options.storage??options.window?.localStorage??null;persistent=Boolean(storage);}catch{persistent=false;}
+ if(!state){if(choiceMemory.size>=256)throw new WorkbenchReadError('BPAY_NEXT_SELECTION_LOCAL_TOO_LARGE');let raw=null;try{raw=storage?.getItem(key)??null;}catch{persistent=false;}
+  if(raw!==null){try{if(ENCODER.encode(raw).byteLength>32768)throw Error();state=JSON.parse(raw);if(!valid(state))throw Error();}catch{throw new WorkbenchReadError('BPAY_NEXT_SELECTION_LOCAL_INVALID');}}
+  else state={version:1,namespace,intent:empty(),revision:0,dirty:false};
+  choiceMemory.set(key,state);
+ }
+ function save(value){if(!valid(value))throw new WorkbenchReadError('BPAY_NEXT_SELECTION_LOCAL_TOO_LARGE');Object.assign(state,clone(value));try{if(storage)storage.setItem(key,JSON.stringify(state));else persistent=false;}catch{persistent=false;}options.onChange?.();}
+ function change(intent){save({...state,intent,revision:state.revision+1,dirty:true});}
+ function put(kind,row){const intent=clone(state.intent),id=row.case_component_id??row.approved_line_id??row.work_id??row.candidate_id;intent[kind]=intent[kind].filter(x=>(x.case_component_id??x.approved_line_id??x.work_id??x.candidate_id)!==id);intent[kind].push(clone(row));change(intent);}
+ return Object.freeze({key,namespace:immutable(clone(namespace)),snapshot:()=>immutable(clone(state)),persistenceAvailable:()=>persistent,
+  countIntent(){return {mode:state.intent.mode==='ALL_MATCHING'?'ALL':'NONE',candidate_ids:state.intent.candidates.filter(row=>row.selected!==(state.intent.mode==='ALL_MATCHING')).map(row=>row.candidate_id)};},
+  candidateSelected(id){const row=state.intent.candidates.find(row=>row.candidate_id===id);return row?.selected??state.intent.mode==='ALL_MATCHING';},
+  chooseCandidate(id,selected){if(!field(id,'uuid')||typeof selected!=='boolean')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');const intent=clone(state.intent);intent.candidates=intent.candidates.filter(row=>row.candidate_id!==id);if(intent.mode==='NONE'||!selected)intent.candidates.push({candidate_id:id,selected});change(intent);},
+  chooseWork:row=>put('works',row),chooseComponent:row=>put('components',row),chooseCase:row=>put('cases',row),
+  setMode(mode){if(!['ALL_MATCHING','NONE'].includes(mode))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');change({...empty(),mode});},
+  freeze(context){if(!shape(context,CONTEXT)||JSON.stringify({agency_id:context.agency_id,owner_epoch:context.owner_epoch,actor_user_id:context.actor_user_id,official_pay_date:context.official_pay_date,scope:{candidate_id:context.scope.candidate_id,client_id:context.scope.client_id,channel:context.scope.channel}})!==JSON.stringify(namespace))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);const intent=clone(state.intent),excluded=new Set(intent.candidates.filter(row=>!row.selected).map(row=>row.candidate_id));for(const kind of ['works','components','cases'])intent[kind]=intent[kind].filter(row=>!excluded.has(row.candidate_id));return immutable(clone({namespace,intent,revision:state.revision,workbench_revision:context.workbench_revision,adoption_revision:context.adoption_revision}));},
+  acknowledge(revision){if(state.revision===revision)save({...state,dirty:false});},
+  discard(){save({...state,intent:empty(),revision:state.revision+1,dirty:false});}
+ });
+}
+
 function mountReadyCandidates(options){
  if(!record(options)||!options.host?.ownerDocument||!field(options.actorId?.toLowerCase(),'uuid')||typeof options.currentActorId!=='function'||typeof options.ownerReady!=='function'||typeof options.openCandidate!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
  const doc=options.host.ownerDocument,win=doc.defaultView,client=options.client??createWorkbenchClient(options),ui=win.CloudTMSBpayNextUi;
  const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  const button=(text,fn)=>{const b=el('button',text,'btn');b.type='button';b.addEventListener('click',fn);return b;};
- let scope={candidate_id:null,client_id:null,channel:'ALL',...(options.scope??{})},sort='NAME_ASC',pages=[],history=[],context=null,header=null,joined={available:false,context:null},busy=false,error='',selectionError='',closed=false,generation=0,highlight=null,baseline='ALL',exceptions=new Set(),intentRevision=0,reloadRequired=false,pending={direction:'reset',after:null};
+ let scope={candidate_id:null,client_id:null,channel:'ALL',...(options.scope??{})},sort='NAME_ASC',pages=[],history=[],context=null,header=null,joined={available:false,context:null},busy=false,error='',selectionError='',closed=false,generation=0,highlight=null,choiceStore=null,reloadRequired=false,pending={direction:'reset',after:null};
  const root=el('section',undefined,'bpay-next-ready-list'),mobileSort=el('label','Sort by','bpay-next-ready-mobile-sort'),select=el('select'),scroller=el('div',undefined,'ctms-universal-table-host bpay-next-ready-scroll'),status=el('p',''),foot=el('p','', 'bpay-next-ready-foot'),retry=button('Try again',()=>{if(reloadRequired){context=null;pages=[];history=[];void read('reset',null);}else void read(pending.direction,pending.after);});
  select.setAttribute('data-next-focus-key','ready-sort');for(const [key,label] of [['NAME','Candidate'],['DEDUCTIONS','Deductions'],['AMOUNT','Amount ex VAT'],['STATUS','Status']])for(const dir of ['ASC','DESC']){const o=el('option',label+(dir==='ASC'?' ▲':' ▼'));o.value=key+'_'+dir;select.append(o);}mobileSort.append(select);
  scroller.setAttribute('role','region');scroller.setAttribute('aria-label','Ready payments');scroller.tabIndex=0;status.setAttribute('data-next-live-copy','');status.setAttribute('role','status');foot.setAttribute('data-next-live-copy','');root.append(mobileSort,scroller,status,retry,foot);options.host.append(root);
  function actorCurrent(){try{return options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}}
  function current(){return !closed&&(root.isConnected||options.windowAlive?.()===true)&&actorCurrent();}
- function coherent(){return current()&&!busy&&!error&&context&&header&&joined.available&&sameWorkbenchRevision(context,joined.context);}
- function selected(id){return (baseline==='ALL')!==exceptions.has(id);}
- function intent(){return {mode:baseline,candidate_ids:[...exceptions]};}
- function selectionLabel(){return baseline==='ALL'?'All except '+exceptions.size:exceptions.size===0?'None':exceptions.size+' chosen';}
+ function coherent(){return current()&&!busy&&!error&&choiceStore&&context&&header&&joined.available&&sameWorkbenchRevision(context,joined.context);}
+ function selected(id){return choiceStore?.candidateSelected(id)===true;}
+ function intent(){return choiceStore?.countIntent()??{mode:'ALL',candidate_ids:[]};}
+ function selectionLabel(){const v=intent();return v.mode==='ALL'?'All except '+v.candidate_ids.length:v.candidate_ids.length===0?'None':v.candidate_ids.length+' chosen';}
  function notify(){try{options.onAvailability?.({available:Boolean(coherent()),context});}catch{}}
- function choose(row,value){if(!coherent()||row.payable_count==='0')return;const next=new Set(exceptions);if(value===(baseline==='ALL'))next.delete(row.candidate_id);else next.add(row.candidate_id);const proposed={mode:baseline,candidate_ids:[...next]};const args=normalizeWorkbenchInput('HEADER',{...scope,section:'READY',count_selection:proposed}),query=new URLSearchParams({kind:'HEADER'});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection'].includes(key)?JSON.stringify(value):String(value));if(!field(proposed,'countSelection')||ENCODER.encode(query.toString()).byteLength>32768){selectionError='Too many choices to count; clear some choices and try again.';render();return;}selectionError='';exceptions=next;intentRevision++;options.onSelection?.(Object.freeze(intent()));render();}
+ function choose(row,value){if(!coherent()||row.payable_count==='0')return;const v=intent(),next=new Set(v.candidate_ids);if(value===(v.mode==='ALL'))next.delete(row.candidate_id);else next.add(row.candidate_id);const proposed={mode:v.mode,candidate_ids:[...next]},args=normalizeWorkbenchInput('HEADER',{...scope,section:'READY',count_selection:proposed}),query=new URLSearchParams({kind:'HEADER'});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection'].includes(key)?JSON.stringify(value):String(value));if(!field(proposed,'countSelection')||ENCODER.encode(query.toString()).byteLength>32768){selectionError='Too many choices to count; clear some choices and try again.';render();return;}try{choiceStore.chooseCandidate(row.candidate_id,value);selectionError='';options.onSelection?.(Object.freeze(intent()));}catch{selectionError='Too many choices; clear some choices and try again.';}render();}
  function open(row){if(!coherent())return;Promise.resolve(options.openCandidate(Object.freeze({candidate_id:row.candidate_id,context,scope:{...scope}}))).catch(()=>{if(current()){error='Could not open this Candidate; try again.';render();}});}
  function pageHeight(page){const ids=new Set(page.rows.map(row=>row.candidate_id));return Array.from(scroller.querySelectorAll('tr[data-candidate-id]')).filter(n=>ids.has(n.dataset.candidateId)).reduce((sum,n)=>sum+n.getBoundingClientRect().height,0);}
  function render(){
@@ -720,18 +758,18 @@ function mountReadyCandidates(options){
   try{const page=await client.loadWorkbenchPage('CANDIDATES',{...readScope,sort:readSort,after,limit:100});if(ticket!==generation||!current())return;validateWorkbenchResponse(page,'CANDIDATES',normalizeWorkbenchInput('CANDIDATES',{...readScope,sort:readSort,after,limit:100}),options.actorId.toLowerCase());
    const summary=await client.loadWorkbenchPage('HEADER',{...readScope,section:'READY'});if(ticket!==generation||!current())return;validateWorkbenchResponse(summary,'HEADER',normalizeWorkbenchInput('HEADER',{...readScope,section:'READY'}),options.actorId.toLowerCase());
    if(!sameWorkbenchRevision(page.context,summary.context)||context&&!sameWorkbenchRevision(context,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
-   context=page.context;header=summary.rows[0];const block={after,next:page.next_cursor,rows:page.rows};if(direction==='reset'){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();adjustment=page.rows.length;}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
+   context=page.context;header=summary.rows[0];const restored=createChoiceStore({context,window:win,storage:options.choiceStorage});if(choiceStore?.key!==restored.key){choiceStore=restored;options.onChoiceStore?.(choiceStore);options.onSelection?.(Object.freeze(intent()));}const block={after,next:page.next_cursor,rows:page.rows};if(direction==='reset'){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();adjustment=page.rows.length;}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
   }catch(e){if(ticket===generation&&current()){reloadRequired=e?.reloadRequired===true||e?.reload===true;error=reloadRequired?'Payments changed; refresh to continue.':'Could not load payments; try again.';}}
   finally{if(ticket===generation&&current()){busy=false;render();if(!error){if(direction==='back')adjustment=pageHeight(pages[0]);scroller.scrollTop=direction==='reset'?0:Math.max(0,scroll+adjustment);}}}
  }
  function reset(){generation++;busy=false;context=null;header=null;pages=[];history=[];highlight=null;void read('reset',null);}
  function setSort(value){if(!current()||busy||!['NAME_ASC','NAME_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','AMOUNT_ASC','AMOUNT_DESC','STATUS_ASC','STATUS_DESC'].includes(value))return;sort=value;reset(true);}
  select.addEventListener('change',()=>setSort(select.value));scroller.addEventListener('scroll',()=>{if(busy||error||!coherent())return;if(scroller.scrollTop<40&&history.length){const key=history.at(-1);void read('back',key===null?null:{context,key});}else if(pages.at(-1)?.next&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<120)void read('forward',pages.at(-1).next);});
- const ownerChanged=()=>{if(!actorCurrent()){closed=true;generation++;pages=[];exceptions.clear();root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
+ const ownerChanged=()=>{if(!actorCurrent()){closed=true;generation++;pages=[];root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
  render();void read('reset',null);
- return Object.freeze({selectionLabel,snapshot:()=>Object.freeze({scope:{...scope},sort,context,available:Boolean(coherent()),intent:Object.freeze(intent())}),joinHeader(value){if(!current())return;joined=value;render();},reload(){if(current())reset();},setScope(value){if(!current()||!exact(value,['candidate_id','client_id','channel'])||!field(value.candidate_id,'uuid?')||!field(value.client_id,'uuid?')||!field(value.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');scope={...value};baseline='ALL';exceptions.clear();intentRevision++;options.onSelection?.(Object.freeze(intent()));reset();},
-  async countSelection(){if(!coherent())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);const revision=intentRevision,captured=context,args={...scope,section:'READY',count_selection:intent()};const page=await client.loadWorkbenchPage('HEADER',args);if(!current()||revision!==intentRevision||!sameWorkbenchRevision(captured,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);validateWorkbenchResponse(page,'HEADER',normalizeWorkbenchInput('HEADER',args),options.actorId.toLowerCase());return Object.freeze({context:page.context,candidate_count:page.rows[0].selected_candidate_count,member_count:page.rows[0].selected_member_count});},
-  close(){closed=true;generation++;pages=[];exceptions.clear();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}
+ return Object.freeze({selectionLabel,snapshot:()=>Object.freeze({scope:{...scope},sort,context,available:Boolean(coherent()),intent:Object.freeze(intent())}),joinHeader(value){if(!current())return;joined=value;render();},reload(){if(current())reset();},setScope(value){if(!current()||!exact(value,['candidate_id','client_id','channel'])||!field(value.candidate_id,'uuid?')||!field(value.client_id,'uuid?')||!field(value.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');scope={...value};choiceStore=null;reset();},
+  async countSelection(){if(!coherent())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);const store=choiceStore,revision=store.snapshot().revision,captured=context,args={...scope,section:'READY',count_selection:intent()};const page=await client.loadWorkbenchPage('HEADER',args);if(!current()||store!==choiceStore||revision!==store.snapshot().revision||!sameWorkbenchRevision(captured,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);validateWorkbenchResponse(page,'HEADER',normalizeWorkbenchInput('HEADER',args),options.actorId.toLowerCase());return Object.freeze({context:page.context,candidate_count:page.rows[0].selected_candidate_count,member_count:page.rows[0].selected_member_count});},
+  choiceStore:()=>choiceStore,close(){closed=true;generation++;pages=[];win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}
  });
 }
 
@@ -821,6 +859,6 @@ function openIssueWindow(options,issue){
 }
 
 
-return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,issueReason,issueAmounts});
+return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,issueReason,issueAmounts,createChoiceStore});
 
 });

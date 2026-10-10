@@ -327894,6 +327894,7 @@ const frame = {
 
   // NEW: optional dismiss hook (called when user closes the modal via Close/ESC)
     _onDismiss: (opts && typeof opts.onDismiss === 'function') ? opts.onDismiss : null,
+    _beforeClose: (opts?.kind === 'bpay-next-read' && typeof opts.beforeClose === 'function') ? opts.beforeClose : null,
 
   noParentGate: !!opts.noParentGate,
   forceEdit:    !!opts.forceEdit,
@@ -336531,6 +336532,16 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
   const handleSecondary = async (ev)=>{
     if (currentFrame && currentFrame() !== top) return;
     if (top._confirmingDiscard || top._closing) return;
+
+    if (top.kind === 'bpay-next-read' && typeof top._beforeClose === 'function') {
+      const prefix = stack().slice(), token = top._token;
+      top._confirmingDiscard = true;
+      let permitted = false;
+      try { permitted = (await top._beforeClose()) === true; } catch {}
+      finally { top._confirmingDiscard = false; }
+      if (!permitted || currentFrame() !== top || top._token !== token ||
+          stack().length !== prefix.length || prefix.some((frame, index) => stack()[index] !== frame)) return;
+    }
 
      if (top.kind==='advanced-search') {
       top._closing = true;

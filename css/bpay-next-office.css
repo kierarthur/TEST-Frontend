@@ -70,6 +70,9 @@
 /* WB11 components inside the existing Office modal and its shared tokens. */
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window {width:min(1320px,calc(100vw - 48px));}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-small-window {width:min(600px,calc(100vw - 48px));}
+#modal.ctms-kind-bpay-next-read.bpay-next-confirmation #modalDrag {display:none;}
+#modal.ctms-kind-bpay-next-read.bpay-next-confirmation .bpay-next-window-actions {gap:8px;}
+#modal.ctms-kind-bpay-next-read.bpay-next-confirmation .bpay-next-window-actions button {min-height:44px;}
 #modal.ctms-modern-modal .bpay-next-office-content {--next-line:var(--ctms-modal-line);--next-focus:var(--ctms-modal-accent-bright);color:var(--ctms-modal-text);}
 #modal.ctms-modern-modal .bpay-next-workbench-shell>.ws-notice[hidden] {display:none;}
 #modal.ctms-modern-modal .bpay-next-main-tabs {display:flex;gap:6px;padding:8px 0;border-bottom:1px solid var(--ctms-modal-line);}

@@ -2,6 +2,7 @@
 (function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.CloudTMSBpayNextUi=api;})(typeof globalThis==='object'?globalThis:this,function(){
   'use strict';
   const selector='button,input,select,textarea,a[href],summary,[tabindex]';
+  let questionSequence=0;
   function available(node){return Boolean(node && node.isConnected && !node.disabled && !node.matches?.(':disabled') && node.tabIndex>=0 && node.getAttribute('aria-disabled')!=='true' && !node.closest('[hidden],[inert],[aria-hidden="true"]') && !['hidden','collapse'].includes(node.ownerDocument?.defaultView?.getComputedStyle(node).visibility) && node.getClientRects().length);}
   function controls(host){return Array.from(host.querySelectorAll(selector)).filter(available);}
   function trap(event,host,document){
@@ -30,8 +31,9 @@
   // Retain the existing Office stack, geometry, Close and Escape lifecycle.
   function createStandardWindowAdapter({document,window,showModal,closeModal}){
     if(typeof showModal!=='function'||typeof closeModal!=='function')throw new Error('Modal unavailable');
-    return function({title,content,footer,small=false,onDismiss,onMount,canFocus=()=>true}){
-      let frame=null,closed=false,initialFocus=false;
+    return function({title,content,footer,small=false,confirmation=false,onDismiss,onMount,beforeClose,canFocus=()=>true}){
+      let frame=null,closed=false,initialFocus=false,closeWait=null,settleClose=null;
+      const settled=value=>{settleClose?.(value);settleClose=null;closeWait=null;};
       const active=()=>!closed&&frame!==null&&window.__modalStack?.at(-1)===frame;
       const mount=()=>{
         if(closed)return;
@@ -42,22 +44,28 @@
         panel.classList.add('ctms-modern-modal','ctms-kind-bpay-next-read');
         panel.classList.toggle('bpay-next-small-window',small);
         panel.classList.toggle('bpay-next-wide-window',!small);
+        panel.classList.toggle('bpay-next-confirmation',confirmation);
+        const question=confirmation?content.querySelector('h2'):null;
+        if(question&&!question.id)question.id='bpay-next-question-'+(++questionSequence);
+        panel.setAttribute('role',confirmation?'alertdialog':'dialog');
+        panel.setAttribute('aria-labelledby',question?.id??'modalTitle');
         document.getElementById('modalTabs').hidden=true;
         document.getElementById('modalTabs').style.display='none';
         document.getElementById('modalBody').replaceChildren(content);
         const actions=document.getElementById('modalActions');
         actions.querySelectorAll('[data-next-window-footer]').forEach(node=>node.remove());
         if(footer){footer.setAttribute('data-next-window-footer','');actions.append(footer);}
-        window.queueMicrotask(()=>{if(!active())return;onMount?.();if(!initialFocus&&active()&&canFocus()){initialFocus=true;(controls(content)[0]??document.getElementById('btnCloseModal')).focus();}});
+        window.queueMicrotask(()=>{if(!active())return;onMount?.();if(!initialFocus&&active()&&canFocus()){initialFocus=true;((confirmation&&footer?controls(footer)[0]:controls(content)[0])??document.getElementById('btnCloseModal')).focus();}});
       };
-      const dismissed=()=>{if(closed)return;closed=true;footer?.remove();const tabs=document.getElementById('modalTabs');tabs.hidden=false;tabs.style.display='';document.getElementById('modal').classList.remove('bpay-next-small-window','bpay-next-wide-window');onDismiss?.();};
+      const dismissed=()=>{if(closed)return;closed=true;footer?.remove();const tabs=document.getElementById('modalTabs');tabs.hidden=false;tabs.style.display='';const panel=document.getElementById('modal');panel.classList.remove('bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');panel.setAttribute('role','dialog');panel.setAttribute('aria-labelledby','modalTitle');onDismiss?.();settled(true);};
       showModal(title,[{key:'form',label:''}],()=>'',null,true,mount,{
         kind:'bpay-next-read',frameEntity:'banking',showSave:false,showApply:false,
-        noParentGate:true,dirtyClosePolicy:'close',runOnRender:true,runAfterMount:true,onDismiss:dismissed
+        noParentGate:true,dirtyClosePolicy:'close',runOnRender:true,runAfterMount:true,onDismiss:dismissed,
+        beforeClose:typeof beforeClose==='function'?async()=>{let permitted=false;const prefix=window.__modalStack?.slice()??[];try{if(active())permitted=(await beforeClose())===true&&active()&&prefix.length===window.__modalStack?.length&&prefix.every((value,index)=>window.__modalStack[index]===value);}finally{if(!permitted)settled(false);}return permitted;}:null
       });
       frame=window.__modalStack?.at(-1)??frame;
       return Object.freeze({active,alive:()=>!closed&&window.__modalStack?.includes(frame),
-        close(){if(active())document.getElementById('btnCloseModal')?.click();},focus(){if(active())document.getElementById('modal').focus();}});
+        close(){if(!active())return Promise.resolve(false);if(closeWait)return closeWait;const button=document.getElementById('btnCloseModal');if(!button)return Promise.resolve(false);const pending=new Promise(resolve=>{settleClose=resolve;});closeWait=pending;button.click();return pending;},focus(){if(active())document.getElementById('modal').focus();}});
     };
   }
   return Object.freeze({available,controls,trap,capture,restore,continuity,createStandardWindowAdapter});
