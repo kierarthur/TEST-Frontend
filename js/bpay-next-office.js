@@ -453,7 +453,7 @@
       setCaseCursor(cursor) { if(busy||state.pending!==null||!(cursor===null||shape(cursor,{after_case_id:'uuid'})))fail('REQUEST_INVALID');if(JSON.stringify(cursor)!==JSON.stringify(state.case_cursor))save({...state,case_cursor:cursor}); },
       setComponentScope(case_id,cursor) { if(busy||state.pending!==null||!field(case_id,'uuid')||!(cursor===null||shape(cursor,{after_component_ordinal:'positive'})))fail('REQUEST_INVALID');if(!same(case_id,state.case_id)||JSON.stringify(cursor)!==JSON.stringify(state.component_cursor))save({...state,case_id,component_cursor:cursor,accepted_page_component_ids:[],accepted_page_component_selected:[]}); },
       newId() { const id = options.uuid(); if (!field(id, 'uuid')) fail('DEPENDENCY_UNAVAILABLE'); return id.toLowerCase(); },
-      async page(kind,args){const page=await options.transport.page(kind,args);if(['ACCEPTED_CANDIDATES','ACCEPTED_WORK'].includes(kind)){
+      async page(kind,args){if(['ACCEPTED_CANDIDATES','ACCEPTED_WORK'].includes(kind))fail('REQUEST_INVALID');const page=await options.transport.page(kind,args);if(['ACCEPTED_CANDIDATES','ACCEPTED_WORK'].includes(kind)){
         const h=page.header;if(!shape(h,ACCEPTED_HEADER)||!same(h.run_id,state.run_id))fail();
         if(state.accepted_prepare&&(!same(state.accepted_prepare.command_id,h.prepare_command_id)||state.accepted_prepare.agency_sequence!==h.accepted_sequence))fail('ACCEPTED_IDENTITY_CONFLICT');
         if(state.pending?.action==='SEAL_ENQUEUE'&&!same(JSON.parse(state.pending.bytes).command_id,h.prepare_command_id))fail('ACCEPTED_IDENTITY_CONFLICT');
@@ -482,7 +482,7 @@
     requireActor(options);
     if (sheet) { sheet.focus(); return sheet; }
     const doc = options.document || document; const win = options.window || window;
-    const transport = createTransport(options); let controller, acceptedCandidates=null, acceptedWork=null, acceptedCandidate=null, acceptedCursor=null, acceptedWorkCursor=null, drafts = null, current = null, cases = null, components = null, workers = null, status = null, returnedCash = null, lines = null, comparisons = null, frozenLine = null, shifts = null, breaks = null, usedRates = null, frozenWork = null, rateSchedule = null;
+    const transport = createTransport(options); let controller, drafts = null, current = null, cases = null, components = null, workers = null, status = null, returnedCash = null, lines = null, comparisons = null, frozenLine = null, shifts = null, breaks = null, usedRates = null, frozenWork = null, rateSchedule = null;
     let selection = new Map(), caseSelection = new Map(), renderEpoch = 0, readBusy = false, error = '', progressTimer, workersCursor=null, statusCursor=null, statusScope=null, reviewObserved=false, preparationPending=false;
     const host = doc.createElement('section'); host.className = 'bpay-next-office'; host.setAttribute('role','dialog'); host.setAttribute('aria-modal','true'); host.setAttribute('aria-label','Banking Pay NEXT'); host.tabIndex = -1;
     const previousFocus = doc.activeElement;
@@ -501,14 +501,6 @@
       if(e?.serverCode==='BPAY_NEXT_PREPARATION_SCHEMA_UNAVAILABLE')return 'Preparation progress is unavailable until the database and Worker versions are aligned.';
       return null;
     }
-    async function loadAccepted(cursor){const snap=controller.snapshot(),epoch=renderEpoch;
-      const page=await controller.page('ACCEPTED_CANDIDATES',{run_id:snap.run_id,after_candidate_id:cursor?.after_candidate_id??null,limit:100});
-      if(epoch!==renderEpoch||!host.isConnected)return;acceptedCandidates=page;acceptedCursor=cursor??null;
-    }
-    async function loadAcceptedWork(candidate,cursor){const snap=controller.snapshot(),epoch=renderEpoch;
-      const page=await controller.page('ACCEPTED_WORK',{run_id:snap.run_id,candidate_id:candidate,after_work_id:cursor?.after_work_id??null,limit:100});
-      if(epoch!==renderEpoch||!host.isConnected)return;acceptedCandidate=candidate;acceptedWork=page;acceptedWorkCursor=cursor??null;
-    }
     function table(headers, rows) { const t=el('table'), h=el('thead'), hr=el('tr'), b=el('tbody'); for(const label of headers) hr.append(el('th',label)); h.append(hr); for(const values of rows){const r=el('tr');for(const value of values){const c=el('td');if(value?.nodeType)c.append(value);else c.textContent=value===null?'Not recorded':String(value);r.append(c);}b.append(r);}t.append(h,b);return t; }
     async function loadCurrent(cursor) { const s=controller.snapshot(), epoch=renderEpoch; const page=await controller.page('CURRENT_WORK',{candidate_id:s.candidate_id,after_week:cursor?.after_week??null,after_work_id:cursor?.after_work_id??null,limit:100}); if(epoch!==renderEpoch)return;current=page;selection=new Map();controller.setCurrentCursor(cursor??null); }
     async function loadCases(cursor) { const s=controller.snapshot(),epoch=renderEpoch;const page=await controller.page('CURRENT_CASES',{candidate_id:s.candidate_id,after_case_id:cursor?.after_case_id??null,limit:100});if(epoch!==renderEpoch)return;cases=page;controller.setCaseCursor(cursor??null); }
@@ -525,7 +517,7 @@
     async function applyReview(result) { if(result.phase==='REVIEW'){reviewObserved=true;preparationPending=false;await loadWorkers();}else{reviewObserved=false;preparationPending=true;workers=null;} }
     async function loadDrafts() { const s=controller.snapshot(),epoch=renderEpoch;const page=await controller.page('CHANNEL_DRAFTS',{run_id:s.run_id});if(epoch!==renderEpoch)return;drafts=page;if(s.pending===null)controller.setDrafts(page.rows); }
     async function openDraft(address) { controller.bindDraft(address);workers=null;status=null;returnedCash=null;lines=null;comparisons=null;frozenLine=null;shifts=null;breaks=null;usedRates=null;frozenWork=null;rateSchedule=null;netInput=null;statusScope=null;await loadWorkers(); }
-    async function refresh() { let s=controller.snapshot();if(s.confirmed){await loadDrafts();s=controller.snapshot();}if(s.worker_id)await loadStatus();else if(s.run_id){if(!s.confirmed&&(s.selection_sealed||s.accepted_prepare!==null||s.pending?.action==='SEAL_ENQUEUE'))await loadAccepted(acceptedCursor);if(s.confirmed){if(s.pay_channel!==null)await loadWorkers();}else if(s.review_revision!==null||reviewObserved)await loadWorkers();if(!s.selection_sealed&&s.candidate_id&&!s.pending){await loadCurrent(s.current_cursor);if(s.case_id){await loadCases(s.case_cursor);await loadCaseComponents(s.case_id,s.component_cursor);}}} }
+    async function refresh() { let s=controller.snapshot();if(s.confirmed){await loadDrafts();s=controller.snapshot();}if(s.worker_id)await loadStatus();else if(s.run_id){if(s.confirmed){if(s.pay_channel!==null)await loadWorkers();}else if(s.selection_sealed||s.review_revision!==null||reviewObserved)await loadWorkers();if(!s.selection_sealed&&s.candidate_id&&!s.pending){await loadCurrent(s.current_cursor);if(s.case_id){await loadCases(s.case_cursor);await loadCaseComponents(s.case_id,s.component_cursor);}}} }
     function render() {
       if (!controller || !host.isConnected) return;
       win.clearTimeout(progressTimer);
@@ -543,13 +535,13 @@
         body.append(button('Start selection',async()=>{const run=controller.newId();await controller.mutate('CREATE',{run_id:run,pay_date:dateInput.value});},locked||!s.candidate_id));
         // Resume explicitly reviews the existing run; no new preparation identity.
         const [r,ri]=input('Resume run ID','text',resumeInput?.value||'');resumeInput=ri;body.append(r,el('p','Resume asks the server to Review this same sealed preparation; it does not create or prepare a replacement.'),button('Resume',async()=>{await applyReview(await controller.mutate('REVIEW',{run_id:resumeInput.value}));},locked),button('Open confirmed channel Drafts',async()=>{controller.bind({run_id:resumeInput.value});await loadDrafts();workers=null;},locked));
-      }else{body.append(el('p','Run '+s.run_id),button('Refresh progress',refresh,locked),button('Read original accepted progress',()=>loadAccepted(),locked));}
+      }else{body.append(el('p','Run '+s.run_id),button('Refresh progress',refresh,locked));}
       if(current&&!s.selection_sealed&&(!status||status.header.run_status==='PREPARING')){
         const rows=current.rows.map(r=>{const accepted=s.accepted_page_work_ids.includes(r.work_id.toLowerCase());const check=el('input');check.type='checkbox';check.checked=accepted||selection.has(r.work_id);check.disabled=locked||accepted||r.current_revision_id===null;check.setAttribute('aria-label','Include '+(r.timesheet_reference||r.work_id));check.addEventListener('change',()=>{if(check.checked)selection.set(r.work_id,{work_id:r.work_id,expected_revision_id:r.current_revision_id,mode:'ALL'});else selection.delete(r.work_id);});return[check,r.timesheet_reference,r.client_display_name,humanDate(r.week_ending_date),r.approval_state,r.approved_source_ex_vat===null?null:'£'+r.approved_source_ex_vat,r.position_ready?'Current approval applied':'Position pending / not approved'];});
         body.append(el('h3','Current approval facts — explicit Work selection'),table(['Include','Timesheet','Client','Week ending','Approval','Full approval ex VAT','Position fact'],rows));
         body.append(button('Add selected Work page',async()=>{await controller.mutate('WORK_PAGE',{run_id:s.run_id,page_no:String(BigInt(s.selection_pages)+1n),choices:Array.from(selection.values())});selection.clear();},locked||!s.run_id));
         if(!current.complete)body.append(button('Next Work page',()=>loadCurrent(current.next_cursor),locked));
-        if(s.run_id)body.append(el('p','Accepted selected Work: '+s.selection_count),el('p','Accepted sealed Case choices from prior Candidates: '+s.prior_case_selected_count),button('Prepare selected Work',async()=>{await controller.mutate('SEAL_ENQUEUE',{run_id:s.run_id,command_id:controller.newId(),expected_pages:s.selection_pages,expected_count:s.selection_count});current=null;cases=null;components=null;workers=null;reviewObserved=false;preparationPending=false;await loadAccepted();},locked||(s.selection_count==='0'&&s.case_selected_count==='0'&&s.prior_case_selected_count==='0')||(s.case_pages!=='0'&&!s.case_sealed)));
+        if(s.run_id)body.append(el('p','Accepted selected Work: '+s.selection_count),el('p','Accepted sealed Case choices from prior Candidates: '+s.prior_case_selected_count),button('Prepare selected Work',async()=>{await controller.mutate('SEAL_ENQUEUE',{run_id:s.run_id,command_id:controller.newId(),expected_pages:s.selection_pages,expected_count:s.selection_count});current=null;cases=null;components=null;workers=null;reviewObserved=false;preparationPending=true;await loadWorkers();},locked||(s.selection_count==='0'&&s.case_selected_count==='0'&&s.prior_case_selected_count==='0')||(s.case_pages!=='0'&&!s.case_sealed)));
       }
       if(s.run_id&&s.candidate_id&&!s.selection_sealed){
         body.append(button('Current Case facts',()=>loadCases(s.case_cursor),locked),el('p','Case facts are not an allocation or collection approval. Only explicitly submitted selected / excluded components enter this manifest.'));
@@ -561,15 +553,6 @@
         if(s.case_pages!=='0')body.append(el('p','Accepted Case components: '+s.case_items+' / selected '+s.case_selected_count+' / excluded '+s.case_excluded_count),s.case_sealed?el('p','Case manifest sealed.'):button('Seal Case selection',()=>controller.mutate('CASE_SEAL',{run_id:s.run_id,candidate_id:s.candidate_id,selection_revision:'1',expected_pages:s.case_pages,expected_items:s.case_items}),locked));
       }
       if(s.run_id&&s.selection_sealed&&!s.confirmed){if(!reviewObserved&&s.review_revision===null)body.append(el('p',preparationPending?'Preparation is still pending. Choose Review preparation again after background processing has progressed.':'Preparation accepted. Choose Review preparation to ask the server whether it is complete.'));body.append(button('Review preparation',async()=>{await applyReview(await controller.mutate('REVIEW',{run_id:s.run_id}));},locked));}
-      if(acceptedCandidates){const h=acceptedCandidates.header;
-        body.append(el('h3','Accepted preparation'),el('p','Original command '+h.prepare_command_id+' / sequence '+h.accepted_sequence),el('p','Enrolled Candidates: '+h.enrolled_candidate_count+' / '+h.expected_candidate_count),
-          table(['Candidate','Accepted channel','Pay week','Progress','Issue','Accepted Work'],acceptedCandidates.rows.map(r=>[r.candidate_id,r.target_pay_channel,humanDate(r.pay_week_start),r.progress_state.replaceAll('_',' ').toLowerCase(),r.review_issue_code,button('Open accepted Work',()=>loadAcceptedWork(r.candidate_id),locked)])));
-        if(!acceptedCandidates.complete)body.append(button('Next accepted Candidate page',()=>loadAccepted(acceptedCandidates.next_cursor),locked));
-        body.append(button('First accepted Candidate page',()=>loadAccepted(),locked));
-      }
-      if(acceptedWork){body.append(el('h3','Accepted Work for Candidate '+acceptedCandidate),table(['Work','Original selected revision','Effective revision','Selection','Source Query','Capture'],acceptedWork.rows.map(r=>[r.work_id,r.original_revision_id,r.effective_revision_id,r.selection_mode+' / '+r.selected_line_count+' lines',r.query_disposition,r.cut_state.replaceAll('_',' ').toLowerCase()])));
-        if(!acceptedWork.complete)body.append(button('Next accepted Work page',()=>loadAcceptedWork(acceptedCandidate,acceptedWork.next_cursor),locked));
-      }
       const addresses=drafts?.rows??s.drafts;
       if(s.confirmed&&addresses.length){body.append(el('h3','Frozen channel Drafts'),el('p','Each address opens this same preparation for one frozen pay channel; Source and ordinary Work are not separate Drafts.'));
         for(const address of addresses)body.append(button('Open '+(address.pay_channel==='PAYE'?'PAYE':'Umbrella')+' Draft',()=>openDraft(address),locked));
@@ -612,9 +595,8 @@
       host.replaceChildren(header,body);
       // Only one bounded factual progress read. No enqueue/claim/step/REVIEW
       // mutation, current Work census or financial rebuild in this timer.
-      const acceptedProgressing=acceptedCandidates?.rows.some(r=>['WAITING_ENROLLMENT','WAITING_EARLIER_COMMAND','PREPARING','CANCELLING'].includes(r.progress_state));
-      const progressing=s.selection_sealed&&(acceptedProgressing||((!s.worker_id&&workers?.rows.some(r=>r.worker_status==='PREPARING'))||(s.worker_id&&status&&(status.header.net_pending||['PREPARING','CANCELLING'].includes(status.header.worker_status)||status.rows.some(r=>['BUILDING','INTERNAL_PROCESSING'].includes(r.status))))));
-      if(!locked&&progressing&&doc.visibilityState!=='hidden')progressTimer=win.setTimeout(()=>{if(!host.isConnected||doc.visibilityState==='hidden')return;void act(()=>s.worker_id?loadStatus(statusCursor):acceptedCandidates?loadAccepted(acceptedCursor):loadWorkers(workersCursor));},2000);
+      const progressing=s.selection_sealed&&((!s.worker_id&&workers?.rows.some(r=>r.worker_status==='PREPARING'))||(s.worker_id&&status&&(status.header.net_pending||['PREPARING','CANCELLING'].includes(status.header.worker_status)||status.rows.some(r=>['BUILDING','INTERNAL_PROCESSING'].includes(r.status)))));
+      if(!locked&&progressing&&doc.visibilityState!=='hidden')progressTimer=win.setTimeout(()=>{if(!host.isConnected||doc.visibilityState==='hidden')return;void act(()=>s.worker_id?loadStatus(statusCursor):loadWorkers(workersCursor));},2000);
     }
     function download(result){const blob=new Blob([result.csv_text],{type:'text/csv;charset=utf-8'});const url=win.URL.createObjectURL(blob);const a=el('a');a.href=url;a.download=result.file_name;a.click();win.setTimeout(()=>win.URL.revokeObjectURL(url),0);}
     controller=createController({actorId:options.actorId,storage:options.storage||win.sessionStorage,uuid:options.uuid||(()=>win.crypto.randomUUID()),transport,onChange:render});
