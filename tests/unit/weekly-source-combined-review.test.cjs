@@ -30,6 +30,16 @@ test('contact UI explains audience eligibility and limits select-all to shown re
   assert.match(html,/Candidate timesheet required/);
   assert.doesNotMatch(html,/data-wsr-outreach/);
 });
+test('selection uses a compact eligibility label while keeping the full reason visible and accessible',()=>{
+  const html=view.render(contactFixture(),{selected:new Set()});
+  const selection=html.match(/<td data-label="Select"><input[^>]*data-wsr-select="row3"[^]*?<\/td>/)?.[0];
+  assert.ok(selection);
+  assert.match(selection,/aria-description="No active MyTMS access\."/);
+  assert.match(selection,/title="No active MyTMS access\."/);
+  assert.match(selection,/>Not eligible<\/span>/);
+  assert.doesNotMatch(selection,/>No active MyTMS access\.<\/span>/);
+  assert.match(html,/<td data-label="Candidate"[^]*?>No active MyTMS access\.<\/span>/);
+});
 test('contact planning separates candidate request kinds and preserves manager owner boundaries',()=>{
   const m=contactFixture();m.rows=m.rows.slice(0,2);
   m.rows[1].contact_policy.candidate.recipient_key=m.rows[0].contact_policy.candidate.recipient_key;
