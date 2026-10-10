@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const api=require('../../js/bpay-next-payment-history.js');
+const dates=require('../../js/bpay-next-dates.js');
 const actor='b8100000-0000-4000-8000-000000000001',candidate='b8100000-0000-4000-8000-000000000002',
   timesheet='b8100000-0000-4000-8000-000000000003',work='b8100000-0000-4000-8000-000000000004';
 const scope={candidate_id:candidate,timesheet_id:null};
@@ -29,6 +30,87 @@ const page=(request,rows,terminal=true,upper=rows.at(-1)?.key??null)=>({
     context_id:request.context_id,component_key:request.component_key,upper,key:rows.at(-1).key}
 });
 const response=value=>Response.json({ok:true,page:value});
+
+test('PF11 shared London clock covers BST, winter, DST boundaries and unchanged date buckets',()=>{
+  for(const [wire,shown] of [
+    ['2026-06-30T23:30:00Z','01/07/2026 00:30:00'],
+    ['2026-12-30T23:30:00Z','30/12/2026 23:30:00'],
+    ['2026-03-29T00:59:59Z','29/03/2026 00:59:59'],
+    ['2026-03-29T01:00:00Z','29/03/2026 02:00:00'],
+    ['2026-10-25T00:59:59Z','25/10/2026 01:59:59'],
+    ['2026-10-25T01:00:00Z','25/10/2026 01:00:00'],
+    ['2026-06-30 23:30:00.123456+00','01/07/2026 00:30:00'],
+    ['2026-07-01T00:30:00+01:00','01/07/2026 00:30:00']]){
+    assert.equal(dates.formatTimestamp(wire),shown);
+    assert.equal(api.displayScalar(wire,'occurred_at_utc'),shown);
+  }
+  assert.equal(dates.formatTimestamp('2026-02-30T00:00:00Z'),'Not recorded');
+  assert.equal(dates.formatTimestamp('2026-06-30 23:30:00'),'Not recorded');
+  assert.equal(dates.formatTimestamp(null),'Not recorded');
+  assert.equal(dates.formatDate('2026-06-30'),'30/06/2026');
+  assert.equal(api.displayScalar('2026-06-30','work_date'),'30/06/2026');
+  assert.equal(api.displayScalar('2026-06-30','date_from'),'30/06/2026');
+  assert.equal(api.displayScalar('2026-06-30','date_to'),'30/06/2026');
+  assert.equal(api.displayScalar('2026-06-30T23:30:00Z','captured_deadline'),'01/07/2026 00:30:00');
+  assert.equal(api.displayScalar('2026-06-30 23:30:00.123456+00','queue_wake_after_utc'),'01/07/2026 00:30:00');
+  const request=call({section:'WORKS'}),validate=api.validateRequest(request);
+  assert.equal(validate,request);
+});
+
+test('PF11 printable frozen facts use the same formatter without changing local clocks, money or free text',()=>{
+  const pair=(label,value)=>({textContent:label,nextElementSibling:{tagName:'DD',textContent:value}});
+  const terms=[pair('Pay date','2026-06-30'),pair('Week ending','2026-06-30'),pair('Work date','2026-06-30'),
+    pair('Issued at (recorded timezone)','2026-06-30T23:30:00Z'),pair('Recorded start (timezone retained)','2026-06-30T23:30:00Z'),
+    pair('Recorded end (timezone retained)',null),pair('Local start (no timezone inferred)','23:30'),
+    pair('Selected source difference','9007199254740993.01'),pair('Explanation','2026-06-30T23:30:00Z')];
+  const headings=['Break start (recorded)','Break end (recorded)','Local start','Local end','Duration minutes'].map(textContent=>({textContent}));
+  const row={children:['2026-06-30T23:30:00Z','2026-07-01T00:00:00Z','00:30','01:00','30'].map(textContent=>({textContent}))};
+  const duration={children:[{textContent:'Duration-only break; no clock endpoints invented.'}]};
+  const table={querySelectorAll:selector=>selector==='thead th'?headings:[row,duration]};
+  dates.formatAdvice({querySelectorAll:selector=>selector==='dl > dt'?terms:[table]});
+  for(const term of terms.slice(0,3))assert.equal(term.nextElementSibling.textContent,'30/06/2026');
+  assert.equal(terms[3].nextElementSibling.textContent,'01/07/2026 00:30:00');
+  assert.equal(terms[3].textContent,'Issued at (London time)');
+  assert.equal(terms[5].nextElementSibling.textContent,'Not recorded');
+  assert.equal(terms[6].nextElementSibling.textContent,'23:30');
+  assert.equal(terms[7].nextElementSibling.textContent,'9007199254740993.01');
+  assert.equal(terms[8].nextElementSibling.textContent,'2026-06-30T23:30:00Z');
+  assert.deepEqual(row.children.map(cell=>cell.textContent),['01/07/2026 00:30:00','01/07/2026 01:00:00','00:30','01:00','30']);
+  assert.equal(duration.children[0].textContent,'Duration-only break; no clock endpoints invented.');
+});
+
+test('PF11 source routing rejects raw ISO display and retains wire TS_DAY and exact CSV',()=>{
+  const root=path.resolve(__dirname,'../..'),office=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8'),history=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8'),shared=fs.readFileSync(path.join(root,'js/bpay-next-dates.js'),'utf8'),html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+  const check=({office,history,shared,html})=>{
+  assert.match(office,/const humanDate = dates\.formatDate;/);
+  assert.match(office,/const humanTimestamp = dates\.formatTimestamp;/);
+  for(const name of ['shift_start_at','shift_end_at','break_start_at','break_end_at'])assert.match(office,new RegExp('humanTimestamp\\(r\\.'+name+'\\)'));
+  assert.match(history,/return dates\.formatTimestamp\(value\)/);
+  assert.match(history,/return dates\.formatDate\(value\)/);
+  assert.match(shared,/root\.formatUkDate\(value\)/);
+  assert.match(shared,/timeZone:'Europe\/London'/);assert.match(shared,/hourCycle:'h23'/);
+  assert.equal((shared.match(/new Intl\.DateTimeFormat/g)||[]).length,1);
+  assert.doesNotMatch(office.slice(office.indexOf('const humanDate'),office.indexOf('const clockPair')),/slice\(|UTC|toISOString/);
+  assert.doesNotMatch(history.slice(history.indexOf('function displayScalar'),history.indexOf('const copy=')),/UTC|toISOString|slice\(/);
+  assert.match(office,/child\.document\.close\(\);dates\.formatAdvice\(child\.document\);completed=true/);
+  assert.match(office,/new Blob\(\[result\.csv_text\]/);
+  assert.match(office,/JSON\.stringify\(\{kind,\.\.\.args\}\)/);
+  assert.ok(html.indexOf('js/bpay-next-dates.js?')>=0&&html.indexOf('js/bpay-next-dates.js?')<html.indexOf('js/bpay-next-office.js?'));
+  assert.doesNotMatch(office.slice(office.indexOf('function requestBody'),office.indexOf('function receipt')),/formatDate|formatTimestamp/);
+  assert.doesNotMatch(history.slice(history.indexOf('function validateBpayNextHistoryRequest'),history.indexOf('function displayScalar')),/formatDate|formatTimestamp/);
+  assert.ok(html.indexOf('js/bpay-next-dates.js?')<html.indexOf('js/bpay-next-payment-history.js?'));
+  };
+  const current={office,history,shared,html};check(current);
+  for(const changed of [
+    {...current,office:office.replace("const humanTimestamp = dates.formatTimestamp;","const humanTimestamp = value => value;")},
+    {...current,office:office.replace("humanTimestamp(r.break_start_at)","r.break_start_at")},
+    {...current,history:history.replace("return dates.formatTimestamp(value)","return value")},
+    {...current,shared:shared.replace("Europe/London","UTC")},
+    {...current,office:office.replace("dates.formatAdvice(child.document);","")},
+    {...current,office:office.replace("new Blob([result.csv_text]","new Blob([dates.formatDate(result.csv_text)]")},
+    {...current,html:html.replace("js/bpay-next-dates.js?","js/missing-dates.js?")}
+  ])assert.throws(()=>check(changed));
+});
 test('frontend and backend closed field contracts stay byte-equivalent as data',async()=>{
   const backend=await import('../../../bpay-next-build-backend-20261009/broker/src/bpay-next-history.js');
   assert.deepEqual(api.sections,backend.BPAY_NEXT_HISTORY_SECTIONS);assert.equal(Object.keys(api.sections).length,52);
@@ -93,7 +175,7 @@ test('malformed/foreign scalar response refuses atomically and malicious labels 
   await assert.rejects(client.manifest(),/RESPONSE_INVALID/);assert.equal(client.snapshot().manifest,accepted);
   assert.equal(api.escape('<img src=x onerror=alert(1)>'), '&lt;img src=x onerror=alert(1)&gt;');
   assert.match(api.amountNotice('WHOLE_TRANSFER_CASH_CURRENT_STATUS'),/no Timesheet cash allocation/);
-  assert.equal(api.displayScalar('2026-10-06 13:04:05.123456+00','occurred_at_utc'),'06/10/2026 13:04:05.123456 UTC');
+  assert.equal(api.displayScalar('2026-10-06 13:04:05.123456+00','occurred_at_utc'),'06/10/2026 14:04:05');
   assert.equal(api.displayScalar('2026-10-04','week_ending_date'),'04/10/2026');
   assert.equal(api.displayScalar('1234567890.123456','frozen_ex_vat'),'1234567890.123456');
 });
@@ -104,7 +186,7 @@ test('real modal entry, framework cleanup and versioned asset are connected with
   assert.match(main,/scope: \{candidate_id: top\.entity === 'candidates' \? scopeId : null/);
   assert.match(main,/timesheet_id: top\.entity === 'timesheets' \? scopeId : null/);
   assert.match(main,/currentFrame\(\) !== top \|\| paymentHistoryButton\.disabled/);
-  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261009-next-foundation-r1/);
+  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261010-next-dates-r1/);
   const module=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8');
   assert.match(module,/frameEntity:'payment-history'/);assert.match(module,/onDismiss/);
   assert.doesNotMatch(module,/console\.|localStorage|sessionStorage|WORK_PAGE|PAYE_NET|CSV_ISSUE|\.reduce\(/);

@@ -283,7 +283,7 @@ test('deadline cannot trigger automatic retry and late response body is closed',
   const p=rpc.mutation('CREATE',request());await assert.rejects(p,e=>e.code==='TIMEOUT');
   release(new Response(new ReadableStream({cancel(){cancelled=true;}})));await new Promise(r=>setTimeout(r,0));assert.equal(calls,1);assert.equal(cancelled,true);
 });
-function printWindow(){const chunks=[];return{child:{closed:false,opener:{},document:{open(){chunks.length=0;},write:t=>chunks.push(t),close(){}}},chunks,open(){return this.child;},setTimeout,clearTimeout};}
+function printWindow(){const chunks=[];return{child:{closed:false,opener:{},document:{open(){chunks.length=0;},write:t=>chunks.push(t),close(){},querySelectorAll(){return [];}}},chunks,open(){return this.child;},setTimeout,clearTimeout};}
 test('advice uses authFetch-return and split streamed UTF8 writes, never whole-body/Blob',async()=>{
   const win=printWindow();let fetched=0;const text='<html><body>'+('£'.repeat(20000))+'<p data-advice-state="complete">COMPLETE</p></body></html>';
   await printAdvice({api:p=>p,authFetch:async(url,init)=>{fetched++;assert.equal(url,'/api/banking/pay/next/advice/'+id(7));assert.equal(init.auth401Mode,'return');return new Response(text,{headers:{'content-type':'text/html','x-bpay-next-advice-template':'original-csv-html-v1'}});}},id(7),win);
@@ -296,7 +296,7 @@ test('missing or failed advice stream leaves visible INCOMPLETE warning',async()
 test('actual menu enters NEXT before legacy boot and all new directly loaded assets align',()=>{
   const root=path.resolve(__dirname,'../..'),main=fs.readFileSync(path.join(root,'js/main.js'),'utf8'),index=fs.readFileSync(path.join(root,'index.html'),'utf8'),source=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8');
   const start=main.indexOf("if (destination === 'pay_next')"),end=main.indexOf("if (typeof openBanking !== 'function')",start);assert.ok(start>0&&end>start);assert.match(main.slice(start,end),/ignoreMembership: true/);assert.match(main.slice(start,end),/currentActorId: \(\) => SESSION\?\.user\?\.id \|\| null/);assert.match(main.slice(start,end),/return;/);
-  assert.match(index,/bpay-next-office\.js\?v=20261009-next-foundation-r1/);assert.match(index,/bpay-next-office\.css\?v=20261009-next-foundation-r1/);
+  assert.match(index,/bpay-next-office\.js\?v=20261010-next-dates-r1/);assert.match(index,/bpay-next-office\.css\?v=20261010-next-dates-r1/);
   assert.doesNotMatch(source,/parseFloat|\.toFixed\(|response\.text\(|response\.json\(|sbRpc|WORKBENCH_|drain_v1/);
 });
 test('actual authFetch with debug enabled never clones/buffers/logs NEXT, preserves unrelated logging',async()=>{

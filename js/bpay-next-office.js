@@ -4,10 +4,10 @@
  * only an explicit SAME-byte retry. Closing the sheet never clears it.
  */
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.CloudTMSBpayNextOffice = api;
-})(typeof globalThis === 'object' ? globalThis : this, function () {
+})(typeof globalThis === 'object' ? globalThis : this, function (dates) {
   'use strict';
   const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
   const INT = /^(?:0|[1-9]\d{0,18})$/;
@@ -462,8 +462,8 @@
       async frozenPage(kind,args) { return options.transport.frozenPage(kind,args); }
     });
   }
-  const humanDate = value => value === null ? 'Not recorded' : value.slice(8,10) + '/' + value.slice(5,7) + '/' + value.slice(0,4);
-  const humanTimestamp = value => value === null ? 'Not recorded' : humanDate(value.slice(0,10))+' '+value.slice(11,19)+' '+(value.endsWith('Z')?'UTC':value.slice(19));
+  const humanDate = dates.formatDate;
+  const humanTimestamp = dates.formatTimestamp;
   const clockPair = (a,b) => a === null ? 'Not recorded' : a+'–'+b;
   function openCandidateRecord(options, candidateId, closeSheet) {
     requireActor(options);
@@ -623,7 +623,7 @@
       // Browser/network framing may coalesce several 16KiB server writes.
       // Bound each read and split writes, rather than require frame equality.
       while(true){requireActor(options);if(child.closed||controller.signal.aborted)fail();const item=await reader.read();requireActor(options);if(controller.signal.aborted)fail();if(item.done)break;if(item.value.byteLength>LIMITS.bytes)fail('RESPONSE_TOO_LARGE');for(let offset=0;offset<item.value.byteLength;offset+=16384){const text=decoder.decode(item.value.subarray(offset,offset+16384),{stream:true});child.document.write(text);tail=(tail+text).slice(-512);}}
-      const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();completed=true;child.document.close();
+      const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();child.document.close();dates.formatAdvice(child.document);completed=true;
     }finally{win.clearTimeout(timer);controller.abort();controller.signal.removeEventListener('abort',abort);await reader?.cancel().catch(()=>{});reader?.releaseLock();if(!reader)await response?.body?.cancel().catch(()=>{});if(!completed&&!child.closed){child.document.write('<p style="color:#900">INCOMPLETE: advice could not be loaded. Do not use this as complete payment advice.</p>');child.document.close();}}
   }
   return Object.freeze({ open, close, createTransport, createController, printAdvice, openCandidateRecord, requestBody, Failure, LIMITS });

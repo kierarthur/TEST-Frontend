@@ -4,10 +4,10 @@
  * LIVE keyset refresh catches late commits; current caches are labelled.
  */
 (function(root,factory) {
-  const api=factory();
+  const api=factory(typeof module==='object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates);
   if(typeof module==='object' && module.exports) module.exports=api;
   else root.CloudTMSBpayNextHistory=api;
-})(typeof globalThis==='object' ? globalThis : this,function() {
+})(typeof globalThis==='object' ? globalThis : this,function(dates) {
   'use strict';
   const RAW_SECTIONS={"WORKS":{"parent":"SCOPE","keys":[["week_ending_date","date"],["id","uuid"]],"fields":["id","candidate_id","contract_id","original_timesheet_id","booking_id","work_kind","week_ending_date","approval_state","current_revision_id","applied_revision_id","current_revision_no","created_at_utc","updated_at_utc"],"amount_scope":"CURRENT"},
 "REVISIONS":{"parent":"WORK","keys":[["revision_no","bigint"]],"fields":["id","work_id","revision_no","source_kind","source_head_id","source_event_id","physical_timesheet_id","physical_timesheet_version","financial_snapshot_id","source_pay_channel","valuation_policy_id","currency","week_ending_date","detail_kind","expected_line_count","expected_rate_schedule_count","certified_zero","approved_source_ex_vat","source_inventory_digest","approved_at_utc","sealed_at_utc","created_at_utc"],"amount_scope":"IMMUTABLE_SOURCE"},
@@ -277,11 +277,9 @@ function validateBpayNextHistoryResponse(value, request) {
   function displayScalar(value,field) {
     if(value===null)return 'Not recorded';
     if(['case_kind','case_subtype','advance_kind'].includes(field)&&value==='LOAN')return 'Payment Advance';
-    const dateField=/(?:_at|_at_utc|_date|_monday|_week_start)$/.test(field) || field==='work_date';
-    const match=dateField && /^([0-9]{4})-([0-9]{2})-([0-9]{2})(?: (.*))?$/.exec(value);
-    if(!match)return value;
-    const day=match[3]+'/'+match[2]+'/'+match[1];
-    return match[4] ? day+' '+match[4].replace(/\+00(?::00)?$/,' UTC') : day;
+    if(/(?:_at|_at_utc)$/.test(field)||['captured_deadline','queue_wake_after_utc'].includes(field))return dates.formatTimestamp(value);
+    if(/(?:_date|_monday|_week_start)$/.test(field)||['date_from','date_to'].includes(field))return dates.formatDate(value);
+    return value;
   }
   const copy={
     BPAY_NEXT_HISTORY_FORBIDDEN:'Payment history is available only to an authorised Office administrator.',
