@@ -1,10 +1,65 @@
-.bpay-next-office{position:fixed;inset:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));z-index:100100;background:#18202f;color:#f4f6fb;border:1px solid #64748b;border-radius:10px;display:flex;flex-direction:column;max-width:1250px;margin:auto;max-height:calc(100dvh - 24px);box-shadow:0 12px 70px #0009;font:14px system-ui,sans-serif}
-.bpay-next-office header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-bottom:1px solid #64748b;flex:none}
-.bpay-next-office h2{margin:0;font-size:20px}.bpay-next-office h3{margin:20px 0 10px}
-.bpay-next-body{overflow:auto;overscroll-behavior:contain;min-height:0;padding:16px 18px;flex:1}
-.bpay-next-office button{background:#654fc0;color:white;border:1px solid #ad9bff;border-radius:5px;padding:8px 12px;margin:3px;cursor:pointer;font:inherit}
-.bpay-next-office button:disabled{opacity:.5;cursor:not-allowed}.bpay-next-office button:focus-visible,.bpay-next-office input:focus-visible{outline:3px solid #f7cf53;outline-offset:2px}
-.bpay-next-office label{display:inline-flex;flex-direction:column;gap:6px;margin:10px}.bpay-next-office input{background:#101625;color:#fff;border:1px solid #a5b4cc;border-radius:4px;padding:8px;font:inherit}
-.bpay-next-office table{border-collapse:collapse;min-width:850px;width:100%;margin:12px 0}.bpay-next-office th,.bpay-next-office td{border:1px solid #526176;padding:8px;text-align:left;vertical-align:top;overflow-wrap:anywhere;max-width:260px}.bpay-next-office th{background:#263247}.bpay-next-office input[type=checkbox]{width:20px;height:20px;accent-color:#ad9bff}
-.bpay-next-alert{border:1px solid #efb44e;border-radius:5px;background:#382c17;padding:12px;color:#ffecbe}
-@media(max-width:600px){.bpay-next-office{inset:6px;max-height:calc(100dvh - 12px)}.bpay-next-office header{padding:9px}.bpay-next-body{padding:9px}.bpay-next-office header button{min-height:42px}}
+/* NEXT presentation only: full tables scroll inside a fixed reachable header. */
+.bpay-next-office,#modal.ctms-kind-banking-pay-history {
+  --next-bg:#18202f;--next-text:#f4f6fb;--next-line:#64748b;--next-raised:#263247;
+  --next-input:#101625;--next-button:#654fc0;--next-button-text:#fff;--next-button-line:#ad9bff;
+  --next-focus:#f7cf53;--next-alert:#382c17;--next-alert-text:#ffecbe;--next-alert-line:#efb44e;
+  --next-scheme:dark;color-scheme:var(--next-scheme);
+}
+@media (prefers-color-scheme:light) {
+  .bpay-next-office,#modal.ctms-kind-banking-pay-history {
+    --next-bg:#fff;--next-text:#172033;--next-line:#64748b;--next-raised:#eef1f8;
+    --next-input:#fff;--next-button:#5137a1;--next-button-text:#fff;--next-button-line:#5137a1;
+    --next-focus:#8a4300;--next-alert:#fff3d3;--next-alert-text:#513400;--next-alert-line:#956200;
+    --next-scheme:light;color-scheme:var(--next-scheme);
+  }
+}
+.bpay-next-office {
+  --next-gap:12px;position:fixed;inset:max(var(--next-gap),env(safe-area-inset-top)) max(var(--next-gap),env(safe-area-inset-right)) max(var(--next-gap),env(safe-area-inset-bottom)) max(var(--next-gap),env(safe-area-inset-left));
+  z-index:100100;color:var(--next-text);background:var(--next-bg);border:1px solid var(--next-line);border-radius:10px;display:flex;flex-direction:column;max-width:1250px;margin:auto;
+  max-height:calc(100dvh - max(var(--next-gap),env(safe-area-inset-top)) - max(var(--next-gap),env(safe-area-inset-bottom)));box-sizing:border-box;
+}
+.bpay-next-office header {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-bottom:1px solid var(--next-line);flex:none;min-width:0;}
+.bpay-next-office h2 {font-size:20px;margin:0;min-width:0;overflow-wrap:anywhere;}
+.bpay-next-office header button {flex-shrink:0;min-height:44px;}
+.bpay-next-office .bpay-next-body {overflow:auto;overscroll-behavior:contain;min-height:0;min-width:0;padding:16px 18px;flex:1;}
+.bpay-next-office button {background:var(--next-button);color:var(--next-button-text);border:1px solid var(--next-button-line);border-radius:5px;padding:8px 12px;margin:3px;cursor:pointer;font:inherit;}
+.bpay-next-office :disabled,#modal.ctms-kind-banking-pay-history :disabled {opacity:.5;cursor:default;}
+.bpay-next-office :is(button,input,select,textarea,a,summary,[tabindex]):focus-visible,
+#modal.ctms-kind-banking-pay-history :is(button,input,select,textarea,a,summary,[tabindex]):focus-visible {outline:3px solid var(--next-focus)!important;outline-offset:2px;}
+.bpay-next-office label {display:inline-flex;gap:8px;align-items:center;margin:6px;flex-wrap:wrap;max-width:100%;}
+.bpay-next-office :is(input,select,textarea) {background:var(--next-input);color:var(--next-text);border:1px solid var(--next-line);padding:7px;font:inherit;max-width:100%;box-sizing:border-box;}
+.bpay-next-office table {border-collapse:collapse;min-width:850px;width:100%;}
+.bpay-next-office th,.bpay-next-office td {border:1px solid var(--next-line);padding:8px;vertical-align:top;text-align:left;overflow-wrap:anywhere;max-width:260px;}
+.bpay-next-office th {background:var(--next-raised);}
+.bpay-next-office input[type=checkbox] {width:20px;height:20px;accent-color:var(--next-button);}
+.bpay-next-office .bpay-next-alert,#modal.ctms-kind-banking-pay-history [role=alert] {background:var(--next-alert);color:var(--next-alert-text);padding:10px;border:1px solid var(--next-alert-line);}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history {
+  --ctms-modal-canvas:var(--next-bg);--ctms-modal-panel:var(--next-bg);--ctms-modal-panel-raised:var(--next-raised);--ctms-modal-panel-soft:var(--next-raised);--ctms-modal-input:var(--next-input);
+  --ctms-modal-line:var(--next-line);--ctms-modal-line-soft:var(--next-line);--ctms-modal-text:var(--next-text);--ctms-modal-sub:var(--next-text);
+  display:flex;flex-direction:column;border-color:var(--next-line);color:var(--next-text);background:var(--next-bg);color-scheme:var(--next-scheme);
+}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history :is(.modal-h,#modalTabs,.actions,.card) {background:var(--next-raised);color:var(--next-text);border-color:var(--next-line);}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history .modal-h {flex:none;min-width:0;cursor:default;}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history .modal-h .ttl {overflow-wrap:anywhere;}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history #btnCloseModal {flex-shrink:0;min-height:44px;}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history #modalBody {min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history :is(button,.btn) {background:var(--next-button);color:var(--next-button-text);border-color:var(--next-button-line);}
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history :is(button,.btn):hover:not(:disabled) {filter:brightness(1.12);}
+#modal.ctms-kind-banking-pay-history :is(summary,a) {color:var(--next-text);cursor:pointer;}
+#modal.ctms-kind-banking-pay-history #bpayNextPaymentHistory {color:var(--next-text);overflow-wrap:anywhere;}
+#modal.ctms-kind-banking-pay-history #bpayNextPaymentHistory dd {margin-inline-start:12px;}
+@media(max-width:600px) {
+  .bpay-next-office {--next-gap:6px;}
+  .bpay-next-office header {padding:9px;gap:6px;}
+  .bpay-next-office .bpay-next-body {padding:9px;}
+  #modal.ctms-modern-modal.ctms-kind-banking-pay-history[role=dialog] {
+    width:calc(100vw - max(6px,env(safe-area-inset-left)) - max(6px,env(safe-area-inset-right)));max-width:calc(100vw - max(6px,env(safe-area-inset-left)) - max(6px,env(safe-area-inset-right)));
+    max-height:calc(100dvh - max(6px,env(safe-area-inset-top)) - max(6px,env(safe-area-inset-bottom)));min-width:0;
+  }
+  #modal.ctms-modern-modal.ctms-kind-banking-pay-history .modal-h {padding:9px;min-height:0;gap:6px;}
+  #modal.ctms-modern-modal.ctms-kind-banking-pay-history .modal-h .ttl {font-size:18px;}
+}
+
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history #modalTabs button,
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history #modalTabs button.active,
+#modal.ctms-modern-modal.ctms-kind-banking-pay-history #modalTabs button:hover:not(.disabled) {color:var(--next-button-text);background:var(--next-button);border-color:var(--next-button-line);}

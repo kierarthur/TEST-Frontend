@@ -4,10 +4,10 @@
  * LIVE keyset refresh catches late commits; current caches are labelled.
  */
 (function(root,factory) {
-  const api=factory(typeof module==='object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates);
+  const api=factory(typeof module==='object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates,typeof module==='object' && module.exports ? require('./bpay-next-ui.js') : root.CloudTMSBpayNextUi);
   if(typeof module==='object' && module.exports) module.exports=api;
   else root.CloudTMSBpayNextHistory=api;
-})(typeof globalThis==='object' ? globalThis : this,function(dates) {
+})(typeof globalThis==='object' ? globalThis : this,function(dates,ui) {
   'use strict';
   const RAW_SECTIONS={"WORKS":{"parent":"SCOPE","keys":[["week_ending_date","date"],["id","uuid"]],"fields":["id","candidate_id","contract_id","original_timesheet_id","booking_id","work_kind","week_ending_date","approval_state","current_revision_id","applied_revision_id","current_revision_no","created_at_utc","updated_at_utc"],"amount_scope":"CURRENT"},
 "REVISIONS":{"parent":"WORK","keys":[["revision_no","bigint"]],"fields":["id","work_id","revision_no","source_kind","source_head_id","source_event_id","physical_timesheet_id","physical_timesheet_version","financial_snapshot_id","source_pay_channel","valuation_policy_id","currency","week_ending_date","detail_kind","expected_line_count","expected_rate_schedule_count","certified_zero","approved_source_ex_vat","source_inventory_digest","approved_at_utc","sealed_at_utc","created_at_utc"],"amount_scope":"IMMUTABLE_SOURCE"},
@@ -312,25 +312,44 @@ function validateBpayNextHistoryResponse(value, request) {
     const client=createClient(options);const navigation=[];let error='',loading=true,links=[],disposed=false;
     const document=options.document||globalThis.document;const window=options.window||globalThis;
     const rootId='bpayNextPaymentHistory';let frame=null;
-    const onDismiss=()=>{if(disposed)return;disposed=true;client.close();document.getElementById('modalBody')?.removeEventListener('click',onClick);if(active?.client===client)active=null;};
+    const previousFocus=document.activeElement,parentFrame=window.__getModalFrame?.(),shell=document.getElementById('modal');
+    const focus=ui.continuity(shell,document,()=>document.getElementById('btnCloseModal'));
+    const isCurrent=()=>!disposed && window.__getModalFrame?.()===frame && frame?.kind==='banking-pay-history';
+    const onKey=event=>{if(isCurrent())ui.trap(event,shell,document);};
+    const onDismiss=()=>{if(disposed)return;disposed=true;client.close();document.getElementById('modalBody')?.removeEventListener('click',onClick);shell?.removeEventListener('keydown',onKey);if(active?.client===client)active=null;
+      // Observe the actual parent chrome after async mounting; stop at return
+      // or user navigation. Do not wrap/replace the shared frame's methods.
+      if(parentFrame && shell && typeof window.MutationObserver==='function'){
+        const stop=()=>{observer.disconnect();shell.removeEventListener('pointerdown',onReturnIntent,true);shell.removeEventListener('keydown',onReturnIntent,true);};
+        const onReturnIntent=()=>{if(window.__getModalFrame?.()!==frame)stop();};
+        const observer=new window.MutationObserver(()=>{
+          const current=window.__getModalFrame?.();if(current===frame)return;
+          if(active || current!==parentFrame){stop();return;}
+          const opener=previousFocus?.id?document.getElementById(previousFocus.id):previousFocus;
+          if(ui.available(opener)){stop();opener.focus();}
+        });
+        observer.observe(shell,{attributes:true,childList:true,subtree:true});
+        shell.addEventListener('pointerdown',onReturnIntent,true);shell.addEventListener('keydown',onReturnIntent,true);
+      }
+    };
     const render=()=>{
       const state=client.snapshot();links=[];
-      const button=(text,action,index)=>'<button type="button" class="btn mini" data-payment-history-action="'+action+'"'+(index==null?'':' data-history-index="'+index+'"')+' data-history-busy="'+(loading?'1':'0')+'"'+(loading?' disabled':'')+'>'+escape(text)+'</button>';
+      const button=(text,action,index)=>'<button type="button" class="btn mini" data-payment-history-action="'+action+'"'+(index==null?'':' data-history-index="'+index+'"')+' data-next-focus-key="'+escape(action+(index==null?'':':'+JSON.stringify(links[index])))+'" data-history-busy="'+(loading?'1':'0')+'"'+(loading?' disabled':'')+'>'+escape(text)+'</button>';
       const linkButton=link=>{const index=links.push(link)-1;return button(label(link.section),'child',index);};
       let html='<div class="tabc" id="'+rootId+'"><div class="card"><h3>Payment history · '+(options.scope.timesheet_id?'Timesheet':'Candidate')+'</h3><p>Recorded payment history. Earlier Draft and payment figures stay unchanged. Not recorded is different from zero.</p><p>Refresh to see newly recorded events; current statuses may change.</p>'+button('Refresh this section','refresh')+' '+button('All sections','home')+(navigation.length?' '+button('Back','back'):'')+'<div role="status" aria-live="polite">'+(loading?'Loading payment history…':'')+'</div>'+(error?'<p role="alert">'+escape(error)+'</p>':'');
       if(state.manifest) {
-        html+='<details><summary>Scope and unavailable evidence</summary><p>Candidate '+escape(state.manifest.candidate_id)+(state.manifest.work_id?' · WORK '+escape(state.manifest.work_id):'')+'</p><ul>'+state.manifest.unavailable.map(code=>'<li>'+escape(unavailableCopy[code])+'</li>').join('')+'</ul></details>';
+        html+='<details><summary data-next-focus-key="summary:scope">Scope and unavailable evidence</summary><p>Candidate '+escape(state.manifest.candidate_id)+(state.manifest.work_id?' · WORK '+escape(state.manifest.work_id):'')+'</p><ul>'+state.manifest.unavailable.map(code=>'<li>'+escape(unavailableCopy[code])+'</li>').join('')+'</ul></details>';
         if(!state.page) {
           html+='<p>Open a group, then use the linked records below each entry. Continue with Next page until End to see every entry. Other groups load only when you open them.</p>';
           for(const section of state.manifest.sections.filter(item=>item.parent==='SCOPE')) {
             html+=section.applicability==='SCOPE_QUALIFIED'?linkButton({section:section.section,parent_id:null,context_id:null,component_key:null}):'<p>'+escape(label(section.section))+' is Candidate-only; use actual referenced parents for this Timesheet.</p>';
           }
-          html+='<details><summary>All history groups and linked records</summary><ul>'+state.manifest.sections.map(item=>'<li>'+escape(label(item.section))+' — '+escape(label(item.parent))+' · '+escape(label(item.amount_scope))+(item.applicability!=='SCOPE_QUALIFIED'?' · Candidate-only':'')+'</li>').join('')+'</ul></details>';
+          html+='<details><summary data-next-focus-key="summary:groups">All history groups and linked records</summary><ul>'+state.manifest.sections.map(item=>'<li>'+escape(label(item.section))+' — '+escape(label(item.parent))+' · '+escape(label(item.amount_scope))+(item.applicability!=='SCOPE_QUALIFIED'?' · Candidate-only':'')+'</li>').join('')+'</ul></details>';
         } else {
           html+='<h4>'+escape(label(state.page.section))+'</h4><p>'+escape(amountNotice(state.page.amount_scope))+'</p><p>'+escape(label(state.page.amount_scope))+'</p>';
           if(state.page.rows.length===0)html+='<p>No records in this section.</p>';
           for(const row of state.page.rows) {
-            html+='<div class="card"><details><summary>'+escape(label(state.page.section))+' · '+escape(row.key.map((value,index)=>displayScalar(value,BPAY_NEXT_HISTORY_SECTIONS[state.page.section].keys[index][0])).join(' / '))+'</summary><dl>'+Object.entries(row.data).map(([key,value])=>'<dt>'+escape(label(key))+'</dt><dd style="overflow-wrap:anywhere">'+escape(displayScalar(value,key))+'</dd>').join('')+'</dl></details><div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">'+childLinks(state.page.section,row,state.request).map(linkButton).join('')+'</div></div>';
+            html+='<div class="card"><details><summary data-next-focus-key="'+escape('row:'+state.page.section+':'+JSON.stringify(row.key))+'">'+escape(label(state.page.section))+' · '+escape(row.key.map((value,index)=>displayScalar(value,BPAY_NEXT_HISTORY_SECTIONS[state.page.section].keys[index][0])).join(' / '))+'</summary><dl>'+Object.entries(row.data).map(([key,value])=>'<dt>'+escape(label(key))+'</dt><dd style="overflow-wrap:anywhere">'+escape(displayScalar(value,key))+'</dd>').join('')+'</dl></details><div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">'+childLinks(state.page.section,row,state.request).map(linkButton).join('')+'</div></div>';
           }
           html+=state.page.terminal?'<p data-history-terminal="true">End of this section.</p>':button('Next page','next');
         }
@@ -341,8 +360,9 @@ function validateBpayNextHistoryResponse(value, request) {
       if(disposed)return;
       if(!frame)frame=window.__getModalFrame?.();
       if(!frame || frame.kind!=='banking-pay-history')return;
+      const token=focus.before();
       if(document.getElementById(rootId))await frame.setTab(frame.currentTabKey||'history');
-      frame._updateButtons?.();
+      if(!isCurrent())return;frame._updateButtons?.();focus.after(token);
     }
     async function perform(action) {
       if(loading || disposed)return;
@@ -359,15 +379,16 @@ function validateBpayNextHistoryResponse(value, request) {
       if(action==='child') {
         const link=links[Number(button.dataset.historyIndex)];if(!link)return;
         const prior=client.snapshot().request;if(navigation.length===32)navigation.shift();
-        navigation.push(prior);await perform(()=>client.section(link));
+        navigation.push({request:prior,focus:ui.capture(shell,document)});await perform(()=>client.section(link));
       } else if(action==='next')await perform(()=>client.next());
       else if(action==='refresh')await perform(()=>client.refresh());
       else if(action==='home') {navigation.length=0;await perform(()=>client.manifest());}
-      else if(action==='back') {const previous=navigation.pop();await perform(()=>previous?client.section(previous):client.manifest());}
+      else if(action==='back') {const previous=navigation.pop();await perform(()=>previous?.request?client.section(previous.request):client.manifest());if(isCurrent()&&previous?.focus)ui.restore(shell,previous.focus,document.getElementById('btnCloseModal'));}
     }
     options.showModal('Payment history',[{key:'history',label:'History'}],render,null,false,null,{
       kind:'banking-pay-history',frameEntity:'payment-history',noParentGate:true,showSave:false,showApply:false,onDismiss
     });
+    frame=window.__getModalFrame?.();shell?.addEventListener('keydown',onKey);document.getElementById('btnCloseModal')?.focus();
     document.getElementById('modalBody')?.addEventListener('click',onClick);
     active={client,close:onDismiss};
     loading=false;void perform(()=>client.manifest());

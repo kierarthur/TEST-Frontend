@@ -296,7 +296,7 @@ test('missing or failed advice stream leaves visible INCOMPLETE warning',async()
 test('actual menu enters NEXT before legacy boot and all new directly loaded assets align',()=>{
   const root=path.resolve(__dirname,'../..'),main=fs.readFileSync(path.join(root,'js/main.js'),'utf8'),index=fs.readFileSync(path.join(root,'index.html'),'utf8'),source=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8');
   const start=main.indexOf("if (destination === 'pay_next')"),end=main.indexOf("if (typeof openBanking !== 'function')",start);assert.ok(start>0&&end>start);assert.match(main.slice(start,end),/ignoreMembership: true/);assert.match(main.slice(start,end),/currentActorId: \(\) => SESSION\?\.user\?\.id \|\| null/);assert.match(main.slice(start,end),/return;/);
-  assert.match(index,/bpay-next-office\.js\?v=20261010-next-dates-r1/);assert.match(index,/bpay-next-office\.css\?v=20261010-next-dates-r1/);
+  assert.match(index,/bpay-next-office\.js\?v=20261010-next-ui-r1/);assert.match(index,/bpay-next-office\.css\?v=20261010-next-ui-r1/);
   assert.doesNotMatch(source,/parseFloat|\.toFixed\(|response\.text\(|response\.json\(|sbRpc|WORKBENCH_|drain_v1/);
 });
 test('actual authFetch with debug enabled never clones/buffers/logs NEXT, preserves unrelated logging',async()=>{
@@ -313,4 +313,38 @@ test('actual clearSession closes NEXT without deleting its actor journal or chan
   const context={window:{CloudTMSBpayNextOffice:{close:()=>closes++},dispatchEvent:()=>events++},clearTimeout,localStorage:{removeItem:k=>removed.push(k)},sessionStorage:{removeItem:k=>{removed.push(k);store.rows.delete(k);}},CustomEvent:class{},renderUserChip(){}};
   vm.runInNewContext(`let SESSION={user:{id:'${id(1)}'}},refreshTimer=0,officeAuthRefreshRetryAttempt=4;${main.slice(start,end)};clearSession();globalThis.session=SESSION;globalThis.attempt=officeAuthRefreshRetryAttempt;`,context);
   assert.equal(closes,1);assert.equal(events,1);assert.equal(context.session,null);assert.equal(context.attempt,0);assert.equal(store.getItem(journal),'retained-uncertain-test');assert.deepEqual(removed,['cloudtms.tfa','cloudtms.session','cloudtms.session']);
+});
+
+
+test('PF12 NEXT focus support remains scoped and phone/theme controls retain full contents',()=>{
+  const root=path.resolve(__dirname,'../..');
+  const html=fs.readFileSync(path.join(root,'index.html'),'utf8'),css=fs.readFileSync(path.join(root,'css/bpay-next-office.css'),'utf8');
+  const office=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8'),history=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8');
+  assert.ok(html.indexOf('bpay-next-ui.js?v=20261010-next-ui-r1')<html.indexOf('bpay-next-office.js?v=20261010-next-ui-r1'));
+  assert.match(css,/prefers-color-scheme:light/);assert.match(css,/--next-scheme:dark/);assert.match(css,/--next-scheme:light/);
+  assert.match(css,/max-height:calc\(100dvh - max\(var\(--next-gap\),env\(safe-area-inset-top\)\)/);
+  assert.match(css,/header button \{flex-shrink:0;min-height:44px;/);assert.match(css,/table \{border-collapse:collapse;min-width:850px;width:100%;/);
+  assert.match(css,/#modal\.ctms-modern-modal\.ctms-kind-banking-pay-history #btnCloseModal \{flex-shrink:0;min-height:44px;/);
+  assert.match(office,/host.replaceChildren\(header,body\);focus.after\(focusToken\)/);
+  for(const key of ['work:','case-component:','case:','worker:','csv:','line:','shift:','work-rates:','draft:'])assert.ok(office.includes(key));
+  assert.match(history,/if\(isCurrent\(\)\)ui.trap\(event,shell,document\)/);
+  assert.match(history,/navigation.push\(\{request:prior,focus:ui.capture\(shell,document\)\}\)/);
+  assert.match(history,/if\(active \|\| current!==parentFrame\)\{stop\(\);return;\}/);
+  assert.match(history,/observer.observe\(shell,\{attributes:true,childList:true,subtree:true\}\)/);
+  assert.doesNotMatch(history,/window.setTimeout/);
+  assert.match(css,/#modal\.ctms-modern-modal\.ctms-kind-banking-pay-history #modalTabs button.active/);
+});
+
+test('PF12 native-control trap and focus continuity filter unavailable controls and preserve a busy action',()=>{
+  const ui=require('../../js/bpay-next-ui.js');let active=null,prevented=0,stopped=0;
+  const make=(key,available=true)=>({isConnected:true,disabled:!available,tabIndex:0,getAttribute:n=>n==='data-next-focus-key'?key:null,closest:()=>null,getClientRects:()=>[{}],focus(){active=this;}});
+  let first=make('first'),last=make('last'),hidden=make('hidden');hidden.closest=()=>({});let nodes=[first,hidden,last];
+  const document={get activeElement(){return active;}};const host={querySelectorAll:()=>nodes,contains:n=>nodes.includes(n),focus(){active=this;}};
+  const event=shiftKey=>({key:'Tab',shiftKey,preventDefault(){prevented++;},stopPropagation(){stopped++;}});
+  active=host;ui.trap(event(false),host,document);assert.equal(active,first);active=first;ui.trap(event(true),host,document);assert.equal(active,last);
+  ui.trap(event(false),host,document);assert.equal(active,first);assert.equal(prevented,3);assert.equal(stopped,3);
+  const continuity=ui.continuity(host,document,()=>nodes[0]);active=last;let token=continuity.before();nodes=[make('first'),make('last',false)];continuity.after(token);assert.equal(active,nodes[0]);
+  token=continuity.before();nodes=[make('first'),make('last')];continuity.after(token);assert.equal(active,nodes[1]);
+  active=nodes[0];token=continuity.before();nodes=[make('first'),make('last')];continuity.after(token);assert.equal(active,nodes[0]);
+  const inert=make('inert');inert.closest=()=>({});assert.equal(ui.available(inert),false);const negative=make('negative');negative.tabIndex=-1;assert.equal(ui.available(negative),false);
 });

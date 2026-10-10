@@ -186,7 +186,7 @@ test('real modal entry, framework cleanup and versioned asset are connected with
   assert.match(main,/scope: \{candidate_id: top\.entity === 'candidates' \? scopeId : null/);
   assert.match(main,/timesheet_id: top\.entity === 'timesheets' \? scopeId : null/);
   assert.match(main,/currentFrame\(\) !== top \|\| paymentHistoryButton\.disabled/);
-  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261010-next-dates-r1/);
+  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261010-next-ui-r1/);
   const module=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8');
   assert.match(module,/frameEntity:'payment-history'/);assert.match(module,/onDismiss/);
   assert.doesNotMatch(module,/console\.|localStorage|sessionStorage|WORK_PAGE|PAYE_NET|CSV_ISSUE|\.reduce\(/);
