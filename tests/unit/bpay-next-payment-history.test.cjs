@@ -186,7 +186,7 @@ test('real modal entry, framework cleanup and versioned asset are connected with
   assert.match(main,/scope: \{candidate_id: top\.entity === 'candidates' \? scopeId : null/);
   assert.match(main,/timesheet_id: top\.entity === 'timesheets' \? scopeId : null/);
   assert.match(main,/currentFrame\(\) !== top \|\| paymentHistoryButton\.disabled/);
-  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261010-next-member-origins-r1/);
+  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261010-next-recorded-net-r1/);
   const module=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8');
   assert.match(module,/frameEntity:'payment-history'/);assert.match(module,/onDismiss/);
   assert.doesNotMatch(module,/console\.|localStorage|sessionStorage|WORK_PAGE|PAYE_NET|CSV_ISSUE|\.reduce\(/);
@@ -208,4 +208,44 @@ test('PS03 typed origin labels use exact retained references and real original-r
   assert.match(api.memberDescription(zero),/zero allocation; no hold/);
   assert.throws(()=>api.projectMemberOrigin({...zero,signed_cash_contribution:'1.00'}));
   assert.equal(api.projectMemberOrigin(member).signed_cash_contribution,'-12.34');
+});
+
+
+test('PS11 labels retain actual zero, missing PAYE, not-applicable and unallocated line NET',()=>{
+  for(const value of ['65','65.0','0'])assert.equal(api.displayScalar(value,'entered_paye_net','NET_REQUEST',{input_kind:'PAYE_MANUAL',entered_paye_net:value}),value);
+  const current={target_pay_channel:'PAYE',entered_paye_net:null};
+  assert.equal(api.displayScalar(null,'entered_paye_net','WORKER',current),'NET not entered');
+  assert.equal(api.displayScalar(null,'entered_paye_net','PROJECTIONS',{input_kind:'UMBRELLA',entered_paye_net:null}),'PAYE NET not applicable');
+  assert.equal(api.displayScalar(null,'entered_paye_net','NET_REQUEST',{input_kind:'CASE_PAYOUT',entered_paye_net:null}),'PAYE NET not applicable');
+  assert.equal(api.displayScalar('0.00','entered_paye_net','PROJECTIONS',{input_kind:'PAYE_MANUAL',entered_paye_net:'0.00'}),'0.00');
+  for(const section of ['RUN_LINES','RUN_WORKS','LINES','SHIFTS']) {
+    assert.equal(api.classifyNet(section,{source_pay_ex_vat:'100.00',recovered_source_ex_vat:'30.00'}).state,'UNALLOCATED');
+    assert.match(api.amountNotice('IMMUTABLE_SOURCE',section),/NET unallocated per Timesheet\/Client/);
+    assert.throws(()=>api.classifyNet(section,{entered_paye_net:'65.00'}));
+  }
+  const transfer={id:work,run_worker_id:candidate,projection_id:actor,original_transfer_id:null};
+  const projection={id:actor,run_worker_id:candidate,input_kind:'PAYE_MANUAL',entered_paye_net:'65.00',retired_at_utc:'2026-10-09T00:00:00Z'};
+  const text=api.transferNetDescription(transfer,projection);assert.equal(text.match(/65\.00/g).length,1);
+  assert.match(api.transferNetDescription(transfer),/has not been loaded/);assert.doesNotMatch(api.transferNetDescription(transfer),/NET not entered/);
+  assert.throws(()=>api.transferNetDescription(transfer,{...projection,id:work}));
+  for(const owner of [api.classifyNet,api.transferNetDescription])assert.doesNotMatch(owner.toString(),/Number\(|parseFloat|parseInt|\.reduce\(|entered_paye_net\s*[*/]|cash_amount\s*[*/]/);
+});
+
+test('PS11 exact retained transfer projection wins over newer accepted NET and actor change clears access',async()=>{
+  let current=actor;
+  const transfer={...row('TRANSFERS',['1']).data,id:work,transfer_no:'1',run_worker_id:candidate,candidate_id:candidate,projection_id:actor,original_transfer_id:null};
+  const old={...row('PROJECTIONS',['1']).data,id:actor,projection_no:'1',run_worker_id:candidate,input_kind:'PAYE_MANUAL',entered_paye_net:'65.00',retired_at_utc:'2026-10-09T00:00:00Z'};
+  const newer={...old,id:timesheet,projection_no:'2',entered_paye_net:'77.00',retired_at_utc:null};
+  const client=api.createClient({scope,actorId:actor,currentActorId:()=>current,api:'https://controlled.invalid',authFetch:async(_,init)=>{
+    const req=JSON.parse(init.body);
+    if(req.section==='MANIFEST')return response(manifest(req));
+    const rows=req.section==='TRANSFERS'?[{key:['1'],data:transfer}]:[{key:['1'],data:old},{key:['2'],data:newer}];
+    return response(page(req,rows));
+  }});
+  await client.manifest();await client.section({section:'TRANSFERS',parent_id:candidate,context_id:null,component_key:null});
+  const retained=client.snapshot().page.rows[0].data;assert.equal(client.netContext(retained),null);
+  await client.section({section:'PROJECTIONS',parent_id:candidate,context_id:null,component_key:null});
+  assert.equal(client.netContext(retained).entered_paye_net,'65.00');
+  assert.throws(()=>client.netContext({...retained,projection_id:timesheet}));
+  current=work;assert.throws(()=>client.netContext(retained),/ACTOR_CHANGED/);assert.equal(client.snapshot().closed,true);
 });

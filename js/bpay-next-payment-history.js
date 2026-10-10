@@ -146,6 +146,31 @@ function validateBpayNextHistoryRequest(value) {
   }
   return value;
 }
+function classifyBpayNextNet(section,data) {
+  if(!record(data))invalidResponse();
+  if(['RUN_LINES','RUN_WORKS','LINES','SHIFTS'].includes(section)) {
+    if(['entered_paye_net','cash_amount','allocated_net','timesheet_net','client_net'].some(key=>Object.hasOwn(data,key)))invalidResponse();
+    return Object.freeze({state:'UNALLOCATED',value:null});
+  }
+  const current=['WORKER','COMMAND_WORKER'].includes(section);
+  if(!current && !['PROJECTIONS','NET_REQUEST'].includes(section))return null;
+  const kind=current?data.target_pay_channel:data.input_kind,value=data.entered_paye_net;
+  if(section==='NET_REQUEST'&&!['PAYE_MANUAL','CASE_PAYOUT'].includes(kind))invalidResponse();
+  const applicable=current?kind==='PAYE':['PAYE_MANUAL','PAYE_IMPORT'].includes(kind);
+  const notApplicable=current?kind==='UMBRELLA':['UMBRELLA','CASE_PAYOUT'].includes(kind);
+  if(!applicable&&!notApplicable)invalidResponse();
+  if(notApplicable) {
+    if(value!==null)invalidResponse();
+    return Object.freeze({state:'NOT_APPLICABLE',value:null});
+  }
+  if(value===null) {
+    if(!current)invalidResponse();
+    return Object.freeze({state:'NOT_ENTERED',value:null});
+  }
+  if(typeof value!=='string'||!/^(?:0|[1-9][0-9]{0,15})(?:\.[0-9]{1,2})?$/.test(value))invalidResponse();
+  return Object.freeze({state:current?'CURRENT_ENTERED':'RECORDED',value});
+}
+
 function validateBpayNextHistoryResponse(value, request) {
   if (!record(value) || value.version !== VERSION || value.consistency !== CONSISTENCY
     || !uuid(value.candidate_id) || (request.timesheet_id ? !uuid(value.work_id)
@@ -182,6 +207,7 @@ function validateBpayNextHistoryResponse(value, request) {
         || !definition.keys.every(([field], index) => row.data[field] === row.key[index])
         || seen.has(JSON.stringify(row.key)) || (request.after && same(row.key,request.after.key))) invalidResponse();
       if(request.section==='MEMBERS') {if(row.data.transfer_id!==request.parent_id)invalidResponse();projectBpayNextMemberOrigin(row.data);}
+      classifyBpayNextNet(request.section,row.data);
       seen.add(JSON.stringify(row.key));
     }
     if (value.terminal ? value.next_cursor !== null : value.rows.length === 0
@@ -232,6 +258,13 @@ function validateBpayNextHistoryResponse(value, request) {
       if(projection && (projection.id!==transfer.projection_id || projection.run_worker_id!==data.run_worker_id))invalidResponse();
       return {transfer,projection};
     }
+    function netContext(data) {
+      actor();
+      if(!uuid(data.id)||!uuid(data.run_worker_id)||data.candidate_id!==manifest?.candidate_id||transfers.get(data.id)!==data)invalidResponse();
+      const projection=data.projection_id?projections.get(data.projection_id)||null:null;
+      if(projection&&(projection.id!==data.projection_id||projection.run_worker_id!==data.run_worker_id))invalidResponse();
+      return projection;
+    }
     function actor() {if(closed || options.currentActorId()!==options.actorId) {close();fail('BPAY_NEXT_HISTORY_ACTOR_CHANGED',401);} }
     function close(){closed=true;epoch++;controller?.abort();page=null;manifest=null;request=null;transfers.clear();projections.clear();}
     async function read(call) {
@@ -271,7 +304,7 @@ function validateBpayNextHistoryResponse(value, request) {
       section:link=>read({...base,...link,after:null,upper:null}),
       next:()=>{if(!page || page.terminal)invalidRequest();return read({...request,after:page.next_cursor,upper:page.upper});},
       refresh:()=>read(request?{...request,after:null,upper:null}:base),
-      snapshot,originContext,close
+      snapshot,originContext,netContext,close
     };
   }
   // Only captured typed FK links, not arbitrary UUID entry or current-owner guesses.
@@ -323,7 +356,14 @@ function validateBpayNextHistoryResponse(value, request) {
   }
   const escape=value=>String(value==null?'':value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");
   const label=value=>String(value).replaceAll('_',' ').toLowerCase();
-  function displayScalar(value,field) {
+  function displayScalar(value,field,section=null,data=null) {
+    if(field==='entered_paye_net' && section && data) {
+      const net=classifyBpayNextNet(section,data);
+      if(!net)invalidResponse();
+      if(net.state==='NOT_ENTERED')return 'NET not entered';
+      if(net.state==='NOT_APPLICABLE')return 'PAYE NET not applicable';
+      return net.value;
+    }
     if(value===null)return 'Not recorded';
     if(['case_kind','case_subtype','advance_kind'].includes(field)&&value==='LOAN')return 'Payment Advance';
     if(/(?:_at|_at_utc)$/.test(field)||['captured_deadline','queue_wake_after_utc'].includes(field))return dates.formatTimestamp(value);
@@ -346,7 +386,8 @@ function validateBpayNextHistoryResponse(value, request) {
     GENERAL_APPROVAL_ACTOR_REASON_NOT_CAPTURED_IN_NEXT_ROWS:'General approval actor/reason is not captured in these NEXT rows.',
     TIMESHEET_COMMAND_WITHOUT_WORK_OR_CASE_ANCESTRY:'Unrelated or unbound Candidate commands are not Timesheet history.'
   };
-  function amountNotice(value) {
+  function amountNotice(value,section=null) {
+    if(['RUN_LINES','RUN_WORKS','LINES','SHIFTS'].includes(section))return 'NET unallocated per Timesheet/Client, even when Candidate NET is recorded. Frozen earnings and recoveries are workings before payroll deductions; they do not determine PAYE cash.';
     if(value.includes('TRANSFER'))return 'Whole-transfer cash and provenance; no Timesheet cash allocation.';
     if(value.includes('WORKER'))return 'Whole-worker NET/cash; not a Timesheet allocation.';
     if(value.startsWith('CURRENT') || value.includes('CURRENT_STATUS'))return 'Current cache/status is labelled separately from immutable payments; it is not a payable total.';
@@ -368,6 +409,18 @@ function validateBpayNextHistoryResponse(value, request) {
     if(!transfer)return 'Cash reissue · original transfer and return cash on transfer '+member.transfer_id+'. Open Transfers to read those exact references.';
     if(!uuid(transfer.original_transfer_id)||!uuid(transfer.return_cash_id)||transfer.projection_id!==null)invalidResponse();
     return 'Cash reissue · original transfer '+transfer.original_transfer_id+' · return cash '+transfer.return_cash_id+' · request '+transfer.build_command_id;
+  }
+  function transferNetDescription(transfer,projection=null) {
+    if(!record(transfer)||!uuid(transfer.id)||!uuid(transfer.run_worker_id))invalidResponse();
+    if(transfer.original_transfer_id!==null) {
+      if(!uuid(transfer.original_transfer_id)||transfer.projection_id!==null)invalidResponse();
+      return 'Cash reissue: no new payroll NET entry. Original transfer '+transfer.original_transfer_id+' retains its recorded NET and return-cash history.';
+    }
+    if(!uuid(transfer.projection_id))invalidResponse();
+    if(!projection)return 'Recorded NET reference: projection '+transfer.projection_id+'. Open Projections to read that exact accepted record; it has not been loaded here.';
+    if(projection.id!==transfer.projection_id||projection.run_worker_id!==transfer.run_worker_id)invalidResponse();
+    const net=classifyBpayNextNet('PROJECTIONS',projection);
+    return net.state==='NOT_APPLICABLE'?'PAYE NET not applicable to this recorded transfer.':'Recorded Candidate NET (GBP): '+net.value+'. Once for this transfer; NET unallocated per Timesheet/Client. Complete frozen workings are linked below.';
   }
   let active=null;
   function close(){active?.close();active=null;}
@@ -412,11 +465,12 @@ function validateBpayNextHistoryResponse(value, request) {
           }
           html+='<details><summary data-next-focus-key="summary:groups">All history groups and linked records</summary><ul>'+state.manifest.sections.map(item=>'<li>'+escape(label(item.section))+' — '+escape(label(item.parent))+' · '+escape(label(item.amount_scope))+(item.applicability!=='SCOPE_QUALIFIED'?' · Candidate-only':'')+'</li>').join('')+'</ul></details>';
         } else {
-          html+='<h4>'+escape(label(state.page.section))+'</h4><p>'+escape(amountNotice(state.page.amount_scope))+'</p><p>'+escape(label(state.page.amount_scope))+'</p>';
+          html+='<h4>'+escape(label(state.page.section))+'</h4><p>'+escape(amountNotice(state.page.amount_scope,state.page.section))+'</p><p>'+escape(label(state.page.amount_scope))+'</p>';
           if(state.page.rows.length===0)html+='<p>No records in this section.</p>';
           for(const row of state.page.rows) {
+            if(state.page.section==='TRANSFERS')html+='<p>'+escape(transferNetDescription(row.data,client.netContext(row.data)))+'</p>'; 
             if(state.page.section==='MEMBERS')html+='<p>'+escape(memberDescription(row.data,client.originContext(row.data)))+'</p><p>Signed member contribution (GBP): '+escape(row.data.signed_cash_contribution)+'. This is a recorded constituent of the transfer; no Timesheet or Client cash allocation is made.</p>';
-            html+='<div class="card"><details><summary data-next-focus-key="'+escape('row:'+state.page.section+':'+JSON.stringify(row.key))+'">'+escape(label(state.page.section))+' · '+escape(row.key.map((value,index)=>displayScalar(value,BPAY_NEXT_HISTORY_SECTIONS[state.page.section].keys[index][0])).join(' / '))+'</summary><dl>'+Object.entries(row.data).map(([key,value])=>'<dt>'+escape(label(key))+'</dt><dd style="overflow-wrap:anywhere">'+escape(displayScalar(value,key))+'</dd>').join('')+'</dl></details><div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">'+childLinks(state.page.section,row,state.request).map(linkButton).join('')+'</div></div>';
+            html+='<div class="card"><details><summary data-next-focus-key="'+escape('row:'+state.page.section+':'+JSON.stringify(row.key))+'">'+escape(label(state.page.section))+' · '+escape(row.key.map((value,index)=>displayScalar(value,BPAY_NEXT_HISTORY_SECTIONS[state.page.section].keys[index][0])).join(' / '))+'</summary><dl>'+Object.entries(row.data).map(([key,value])=>'<dt>'+escape(label(key))+'</dt><dd style="overflow-wrap:anywhere">'+escape(displayScalar(value,key,state.page.section,row.data))+'</dd>').join('')+'</dl></details><div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">'+childLinks(state.page.section,row,state.request).map(linkButton).join('')+'</div></div>';
           }
           html+=state.page.terminal?'<p data-history-terminal="true">End of this section.</p>':button('Next page','next');
         }
@@ -462,5 +516,5 @@ function validateBpayNextHistoryResponse(value, request) {
     return active;
   }
   return Object.freeze({createClient,childLinks,open,close,sections:BPAY_NEXT_HISTORY_SECTIONS,escape,amountNotice,displayScalar,
-    projectMemberOrigin:projectBpayNextMemberOrigin,memberDescription,validateRequest:validateBpayNextHistoryRequest,validateResponse:validateBpayNextHistoryResponse});
+    projectMemberOrigin:projectBpayNextMemberOrigin,memberDescription,classifyNet:classifyBpayNextNet,transferNetDescription,validateRequest:validateBpayNextHistoryRequest,validateResponse:validateBpayNextHistoryResponse});
 });
