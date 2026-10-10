@@ -258,6 +258,13 @@
 @media(max-width:720px){#modal.ctms-kind-bpay-next-read:has(.bpay-next-export) #btnCloseModal{min-height:44px;min-width:44px;}}
 
 /* WB19 uses the native dark modal and factual status rows. */
+/* WB23 local global controls; never a page-sized selection operation. */
+#modal.ctms-kind-bpay-next-read .bpay-next-ready-global {display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-ready-global label {display:none;align-items:center;gap:8px;}
+@media(max-width:720px){
+ #modal.ctms-kind-bpay-next-read .bpay-next-ready-global label {display:flex;min-height:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-ready-global .btn {min-height:44px;min-width:44px;}
+}
 #modal.ctms-kind-bpay-next-read .bpay-next-updated {color:var(--ctms-modal-sub);font-size:12px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-work-progress {max-height:40vh;overflow:auto;overscroll-behavior:contain;}
 #modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row {display:flex;align-items:center;gap:12px;padding:12px 8px;border-bottom:1px solid var(--ctms-modal-border);flex-wrap:wrap;}

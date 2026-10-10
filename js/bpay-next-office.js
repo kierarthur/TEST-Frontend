@@ -25,6 +25,9 @@
   // CONFIRM freezes the parent Draft; its prepared worker remains READY.
   function draftActionsAllowed(h) { return h.run_status === 'DRAFT' && ['READY', 'DRAFT'].includes(h.worker_status); }
   const INPUT = {
+  EXCLUSION_PAGE:{run_id:'uuid',page_no:'positive',excluded_work_ids:'emptyIds',excluded_candidate_ids:'emptyIds'},
+  MATCHING_PAGE:{run_id:'uuid',page_no:'positive',after_member_no:'positive?'},
+
     CREATE: { run_id: 'uuid', pay_date: 'date' },
     WORK_PAGE: { run_id: 'uuid', page_no: 'positive', choices: 'choices' },
     COMPONENT_PAGE: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',page_no:'positive',approved_line_ids:'ids'},
@@ -39,6 +42,9 @@
     CSV_ISSUE: { instruction_id: 'uuid', transfer_id: 'uuid' }
   };
   const RECEIPT = {
+  EXCLUSION_PAGE:{run_id:'uuid',page_no:'positive',item_count:'integer',complete:'boolean',replay:'boolean'},
+  MATCHING_PAGE:{run_id:'uuid',page_no:'positive',item_count:'integer',selection_count:'integer',selected_candidate_count:'integer',replay:'boolean',skipped:'skipped',complete:'boolean',next_after_member_no:'positive?'},
+
     CREATE: { run_id: 'uuid', status: 'run', selection_state: 'selection', selection_count: 'integer', selected_candidate_count: 'integer', official_pay_date: 'date' },
     WORK_PAGE: { run_id: 'uuid', page_no: 'positive', item_count: 'positive', selection_count: 'integer', selected_candidate_count: 'integer', replay: 'boolean', skipped: 'skipped' },
     COMPONENT_PAGE: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',page_no:'positive',item_count:'positive',component_count:'positive',replay:'boolean'},
@@ -164,6 +170,7 @@ function validReservation(h,row=null){
   return true;
 }
 function field(v,type){
+    if(type==='emptyIds')return Array.isArray(v)&&v.length<=100&&v.every(x=>field(x,'uuid'))&&new Set(v.map(x=>x.toLowerCase())).size===v.length;
   if(type==='null')return v===null;
   if(type==='unit')return typeof v==='string'&&!v.includes('\0')&&encoder.encode(v).byteLength<=512;
   if(type==='nativeRateCode')return typeof v==='string'&&!v.includes('\0')&&[...v].length>=1&&[...v].length<=245;
@@ -264,13 +271,18 @@ function field(v,type){
     else if (action === 'CREATE' && !Object.hasOwn(args || {}, 'pay_date')) schema = {run_id:'uuid'};
     if (action === 'PAYE_NET' && Object.hasOwn(args || {}, 'expected_projection_revision')) schema = { ...schema, expected_projection_revision: 'projectionRevision' };
     if (action === 'CANCEL_REQUEST' && (Object.hasOwn(args || {}, 'run_id') || Object.hasOwn(args || {}, 'pay_channel'))) schema = {...schema,run_id:'uuid',pay_channel:'channel'};
-    if (!schema || !shape(args, schema) || (action === 'CASE_PAGE' && args.component_ids.length !== args.selected.length)) fail('REQUEST_INVALID');
+    if (!schema || !shape(args, schema) || (action==='EXCLUSION_PAGE'&&args.excluded_work_ids.length+args.excluded_candidate_ids.length>100) || (action === 'CASE_PAGE' && args.component_ids.length !== args.selected.length)) fail('REQUEST_INVALID');
     return JSON.stringify({ action, ...args });
   }
   function receipt(payload, action, args) {
     const schema=action==='CREATE'&&Object.hasOwn(args,'descriptor')?{...RECEIPT.CREATE,command_id:'uuid',agency_sequence:'positive?',choice_work_count:'integer',choice_case_count:'integer',empty:'boolean',replay:'boolean'}:RECEIPT[action];
     if (!shape(payload, schema)) fail();
     for (const k of ['run_id', 'run_worker_id', 'candidate_id', 'work_id', 'expected_revision_id', 'command_id', 'transfer_id', 'instruction_id']) if (Object.hasOwn(args, k) && !(action==='CANCEL_REQUEST'&&k==='run_id') && !same(payload[k], args[k])) fail();
+    if(['EXCLUSION_PAGE','MATCHING_PAGE'].includes(action)&&payload.page_no!==args.page_no)fail();
+    if(action==='EXCLUSION_PAGE'&&payload.item_count!==String(args.excluded_work_ids.length+args.excluded_candidate_ids.length))fail();
+    if(action==='MATCHING_PAGE'&&(BigInt(payload.item_count)>100n||payload.skipped.length>Number(payload.item_count)
+      ||(payload.complete!==(payload.next_after_member_no===null))||(!payload.complete&&(payload.item_count==='0'
+      ||BigInt(payload.next_after_member_no)!==BigInt(args.after_member_no??'0')+BigInt(payload.item_count)))))fail();
     if(action==='CREATE'&&Object.hasOwn(args,'pay_date')&&payload.official_pay_date!==args.pay_date)fail();
     if(action==='CREATE'&&Object.hasOwn(args,'descriptor')&&(payload.empty!==(payload.selected_candidate_count==='0')||payload.empty!==(payload.agency_sequence===null)||BigInt(payload.selection_count)>BigInt(payload.choice_work_count)||payload.official_pay_date!==args.descriptor.namespace.official_pay_date))fail();
     if(action==='WORK_PAGE'){
@@ -371,7 +383,8 @@ function field(v,type){
         return body;
       },
       async page(kind, args) {
-        if (!Object.hasOwn(PAGES, kind) || !shape(args, PAGES[kind]) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
+        const pageSchema=kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit'}:PAGES[kind];
+        if (!Object.hasOwn(PAGES, kind) || !shape(args, pageSchema) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
         const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, String(v));
         let body = await call('/api/banking/pay/next/preparation-page?' + query.toString(), { method: 'GET' });
   if(['ACCEPTED_CANDIDATES','ACCEPTED_WORK'].includes(kind)){
@@ -412,6 +425,14 @@ function field(v,type){
     }
     const cursor=body.complete?null:{[inputKey]:previous};if(JSON.stringify(body.next_cursor)!==JSON.stringify(cursor))fail();return body;
   }
+        if(kind==='WORK_CHOICES'&&args.accepted_inputs===true){
+          if(!record(body)||Object.keys(body).sort().join()!=='complete,header,kind,next_cursor,ok,rows'||body.ok!==true||body.kind!==kind
+            ||!shape(body.header,{run_id:'uuid',uploaded_choice_work_count:'integer',selection_page_count:'integer',selection_count:'integer',exclusion_page_count:'integer'})||!same(body.header.run_id,args.run_id)||!Array.isArray(body.rows)||body.rows.length>args.limit
+            ||typeof body.complete!=='boolean'||(!body.complete&&!body.rows.length))fail();
+          let previous=BigInt(args.after_member_no??'0');const ids=new Set();
+          for(const row of body.rows){if(!shape(row,{member_no:'positive',candidate_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',selection_mode:'mode',skip_code:'skipCode?',choice_state:'selection?',component_page_count:'integer?',component_count:'integer?'})||BigInt(row.member_no)!==previous+1n||ids.has(row.work_id.toLowerCase()))fail();if((row.skip_code!==null)!==(row.choice_state===null)||(row.choice_state===null)!==(row.component_page_count===null)||(row.choice_state===null)!==(row.component_count===null)||row.choice_state!==null&&row.selection_mode==='ALL'&&(row.choice_state!=='SEALED'||row.component_page_count!=='0'||row.component_count!=='0'))fail();previous=BigInt(row.member_no);ids.add(row.work_id.toLowerCase());}
+          const cursor=body.complete?null:{after_member_no:String(previous)};if(JSON.stringify(body.next_cursor)!==JSON.stringify(cursor))fail();return body;
+        }
         if(kind==='CHANNEL_DRAFTS'){
           if(!record(body)||Object.keys(body).length!==5||!['ok','kind','rows','complete','next_cursor'].every(k=>Object.hasOwn(body,k))||body.ok!==true||body.kind!==kind||body.complete!==true||body.next_cursor!==null||!field(body.rows,'drafts')||body.rows.some(d=>!same(d.run_id,args.run_id)))fail();
           return body;
@@ -476,13 +497,15 @@ function field(v,type){
     const immutable=value=>{if(value&&typeof value==='object'){for(const child of Object.values(value))immutable(child);Object.freeze(value);}return value;};
     const hash=async bytes=>Array.from(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256',encoder.encode(bytes))),value=>value.toString(16).padStart(2,'0')).join('');
     const phases=['CREATE','SUBSETS','EXCLUSIONS','MATCHING','EXPLICIT','CASES','GUARD','SEAL','READBACK','COMPLETE','EMPTY'];
-    const allowed=new Set(['CREATE','WORK_PAGE','COMPONENT_PAGE','COMPONENT_SEAL','CASE_PAGE','CASE_SEAL','SEAL_ENQUEUE']);
+    const allowed=new Set(['CREATE','WORK_PAGE','EXCLUSION_PAGE','MATCHING_PAGE','COMPONENT_PAGE','COMPONENT_SEAL','CASE_PAGE','CASE_SEAL','SEAL_ENQUEUE']);
+    const upload=()=>({member_no:null,subset_cursor:'0',subset:null,component_page:'0',component_count:'0',component_scan_after:null,component_scan_count:'0',component_ready:false,remaining_ids:[],exclusion_page:'0'});
+    const inputRow={member_no:'positive',candidate_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',selection_mode:'mode',skip_code:'skipCode?',choice_state:'selection?',component_page_count:'integer?',component_count:'integer?'};
     const readback=()=>({work_cursor:null,work_page:[],work_complete:false,index:0,component_cursor:null,component_count:'0',seen_works:'0'});
     let storage=null,persistent=false;
 
     try{storage=options.storage??options.window?.localStorage??null;persistent=Boolean(storage);}catch{}
     function valid(value){
-      if(!record(value)||Object.keys(value).sort().join()!==['version','descriptor','run_id','command_id','create_receipt','last_receipt','pending','phase','selection_pages','selection_count','readback'].sort().join()
+      if(!record(value)||Object.keys(value).sort().join()!==['version','descriptor','run_id','command_id','create_receipt','last_receipt','pending','phase','selection_pages','selection_count','readback',...(Object.hasOwn(value,'upload')?['upload']:[])].sort().join()
         ||value.version!==1||!field(value.descriptor,'descriptor')||JSON.stringify(value.descriptor.namespace)!==JSON.stringify(descriptor.namespace)
         ||!field(value.run_id,'uuid')||!field(value.command_id,'uuid')||!phases.includes(value.phase)
         ||!integer(value.selection_pages)||!integer(value.selection_count)||encoder.encode(JSON.stringify(value)).byteLength>131072)return false;
@@ -500,11 +523,16 @@ function field(v,type){
             ||(saved===value.pending&&value.phase!=='CREATE')))return false;
           if(action!=='CREATE'&&(value.create_receipt===null||value.create_receipt.empty))return false;
           if(action==='SEAL_ENQUEUE'&&(!same(args.command_id,value.command_id)||args.expected_pages!==value.selection_pages||args.expected_count!==value.selection_count))return false;
-          if(action==='WORK_PAGE'&&saved===value.pending&&args.page_no!==String(BigInt(value.selection_pages)+1n))return false;
+          if(['WORK_PAGE','MATCHING_PAGE'].includes(action)&&saved===value.pending&&args.page_no!==String(BigInt(value.selection_pages)+1n))return false;
           if(saved===value.last_receipt)receipt(saved.result,action,args);
           if(saved===value.last_receipt&&action==='SEAL_ENQUEUE'&&saved.result.agency_sequence!==value.create_receipt.agency_sequence)return false;
         }
       }catch{return false;}
+      if(Object.hasOwn(value,'upload')){const u=value.upload;if(!record(u)||Object.keys(u).sort().join()!==Object.keys(upload()).sort().join()
+        ||!field(u.member_no,'positive?')||!integer(u.subset_cursor)||!integer(u.component_page)||!integer(u.exclusion_page)
+        ||!integer(u.component_count)||!integer(u.component_scan_count)||!field(u.component_scan_after,'positive?')||typeof u.component_ready!=='boolean'
+        ||!Array.isArray(u.remaining_ids)||u.remaining_ids.length>1000||!u.remaining_ids.every(id=>field(id,'uuid'))||new Set(u.remaining_ids.map(id=>id.toLowerCase())).size!==u.remaining_ids.length
+        ||(u.subset!==null&&(!shape(u.subset,inputRow)||u.subset.selection_mode!=='SUBSET'))||u.subset===null&&u.component_page!=='0')return false;}
       const r=value.readback;
       return record(r)&&Object.keys(r).sort().join()===Object.keys(readback()).sort().join()
         &&(r.work_cursor===null||field(r.work_cursor,'uuid'))&&Array.isArray(r.work_page)&&r.work_page.length<=100
@@ -515,13 +543,15 @@ function field(v,type){
     let state=choiceSubmissionMemory.get(key);
     if(!state){if(choiceSubmissionMemory.size>=256)fail('JOURNAL_TOO_LARGE');let raw=null;try{raw=storage?.getItem(key)??null;}catch{persistent=false;}
       if(raw!==null){try{state=JSON.parse(raw);}catch{fail('JOURNAL_INVALID');}if(!valid(state))fail('JOURNAL_INVALID');}
-      else{const run_id=options.uuid(),command_id=options.uuid();if(!field(run_id,'uuid')||!field(command_id,'uuid'))fail('DEPENDENCY_UNAVAILABLE');state={version:1,descriptor,run_id:run_id.toLowerCase(),command_id:command_id.toLowerCase(),create_receipt:null,last_receipt:null,pending:null,phase:'CREATE',selection_pages:'0',selection_count:'0',readback:readback()};}
+      else{const run_id=options.uuid(),command_id=options.uuid();if(!field(run_id,'uuid')||!field(command_id,'uuid'))fail('DEPENDENCY_UNAVAILABLE');state={version:1,descriptor,run_id:run_id.toLowerCase(),command_id:command_id.toLowerCase(),create_receipt:null,last_receipt:null,pending:null,phase:'CREATE',selection_pages:'0',selection_count:'0',readback:readback(),upload:upload()};}
       choiceSubmissionMemory.set(key,state);
     }
     if(!valid(state))fail('JOURNAL_INVALID');
-    const operation=choiceSubmissionOperations.get(key)??{busy:false,retired:false};
+    // Upgrade only the exact validated prior schema; retain original unknown bytes.
+    if(!Object.hasOwn(state,'upload'))state.upload=upload();
+    const operation=choiceSubmissionOperations.get(key)??{busy:false,retired:false,sequencing:false};
     choiceSubmissionOperations.set(key,operation);
-    const snapshot=()=>immutable(clone({...state,busy:operation.busy,persistent}));
+    const snapshot=()=>immutable(clone({...state,busy:operation.busy||operation.sequencing,persistent}));
     function save(next){if(!valid(next))fail('JOURNAL_TOO_LARGE');Object.assign(state,clone(next));try{if(storage){storage.setItem(key,JSON.stringify(state));persistent=true;}}catch{persistent=false;}options.onChange?.(snapshot());}
     function authority(){requireActor(options);if(operation.retired||choiceSubmissionMemory.get(key)!==state||choiceSubmissionOperations.get(key)!==operation)fail('ACCEPTED_IDENTITY_CONFLICT');if(options.ownerReady()!==true)fail('OWNER_UNAVAILABLE');}
     async function dispatch(unknown){
@@ -531,9 +561,28 @@ function field(v,type){
         if(await hash(pending.bytes)!==pending.body_sha256)fail('JOURNAL_INVALID');
         const {action,...args}=JSON.parse(pending.bytes),result=receipt(await options.transport.mutation(action,pending.bytes),action,args);
         authority();if(state.pending===null||state.pending.action!==pending.action||state.pending.bytes!==pending.bytes||state.pending.body_sha256!==pending.body_sha256)fail('ACCEPTED_IDENTITY_CONFLICT');
+        if(['WORK_PAGE','MATCHING_PAGE'].includes(action)&&(result.selection_count!==state.create_receipt.selection_count||result.selected_candidate_count!==state.create_receipt.selected_candidate_count))fail('RESPONSE_INVALID');
+        if(action==='EXCLUSION_PAGE'){
+          const exclusions=state.descriptor.intent.candidates.filter(row=>!row.selected).length+state.descriptor.intent.works.filter(row=>!row.selected).length;
+          if(result.complete!==(BigInt(args.page_no)===BigInt(Math.max(1,Math.ceil(exclusions/100)))))fail('RESPONSE_INVALID');
+        }
         const next={...state,pending:null,last_receipt:{...pending,result}};
         if(action==='CREATE'){next.create_receipt=result;next.selection_count=result.selection_count;next.phase=result.empty?'EMPTY':'SUBSETS';}
-        if(action==='WORK_PAGE'){next.selection_pages=result.page_no;next.selection_count=result.selection_count;}
+        if(action==='WORK_PAGE'){next.selection_pages=result.page_no;next.selection_count=result.selection_count;
+          if(state.upload.member_no!==null||state.selection_pages==='0')next.upload={...state.upload,member_no:String(BigInt(state.upload.member_no??'0')+BigInt(result.item_count))};
+          if(state.phase==='SUBSETS'&&state.upload.subset&&args.choices.length===1&&same(args.choices[0].work_id,state.upload.subset.work_id)&&result.skipped.length){
+            next.upload={...next.upload,subset_cursor:state.upload.subset.member_no,subset:null,component_page:'0',component_count:'0',component_scan_after:null,component_scan_count:'0',component_ready:false,remaining_ids:[]};
+          }
+        }
+        if(action==='COMPONENT_PAGE'&&state.phase==='SUBSETS'&&state.upload.subset&&same(args.work_id,state.upload.subset.work_id)){
+          if(!state.upload.component_ready||args.page_no!==String(BigInt(state.upload.component_page)+1n)||result.component_count!==String(BigInt(state.upload.component_count)+BigInt(args.approved_line_ids.length))
+            ||args.approved_line_ids.some(id=>!state.upload.remaining_ids.some(remaining=>same(remaining,id))))fail('RESPONSE_INVALID');
+          next.upload={...state.upload,component_page:result.page_no,component_count:result.component_count,remaining_ids:state.upload.remaining_ids.filter(id=>!args.approved_line_ids.some(sent=>same(sent,id)))};
+        }
+        if(action==='COMPONENT_SEAL'&&state.phase==='SUBSETS'&&state.upload.subset&&same(args.work_id,state.upload.subset.work_id))next.upload={...state.upload,subset_cursor:state.upload.subset.member_no,subset:null,component_page:'0',component_count:'0',component_scan_after:null,component_scan_count:'0',component_ready:false,remaining_ids:[]};
+        if(action==='EXCLUSION_PAGE'){next.upload={...state.upload,exclusion_page:result.page_no};if(result.complete)next.phase=state.descriptor.intent.mode==='ALL_MATCHING'?'MATCHING':'EXPLICIT';}
+        if(action==='MATCHING_PAGE'){next.selection_pages=result.page_no;next.selection_count=result.selection_count;const attempted=BigInt(args.after_member_no??'0')+BigInt(result.item_count);next.upload={...state.upload,member_no:attempted===0n?null:String(attempted)};if(result.complete)next.phase='CASES';}
+
         if(action==='SEAL_ENQUEUE'){
           if(!state.create_receipt||!same(result.command_id,state.command_id)||result.agency_sequence!==state.create_receipt.agency_sequence)fail('ACCEPTED_IDENTITY_CONFLICT');
           next.phase='READBACK';next.readback=readback();
@@ -542,19 +591,77 @@ function field(v,type){
       }catch(error){if(!unknown&&error instanceof Failure&&['SERVER_REFUSED','AUTH_REQUIRED'].includes(error.code)&&!error.unknown)save({...state,pending:null});throw error;}
       finally{operation.busy=false;options.onChange?.(snapshot());}
     }
-    return Object.freeze({key,snapshot,
-      async create(){return this.mutate('CREATE',{run_id:state.run_id,command_id:state.command_id,descriptor:state.descriptor});},
-      async mutate(action,args){
-        authority();if(operation.busy||state.pending!==null)fail('OUTCOME_UNKNOWN');
+    async function submit(action,args,internal=false){
+        authority();if(operation.busy||state.pending!==null||(operation.sequencing&&!internal))fail('OUTCOME_UNKNOWN');
         if(!allowed.has(action)||!same(args?.run_id,state.run_id))fail('REQUEST_INVALID');
         if(action==='CREATE'){if(state.phase!=='CREATE'||JSON.stringify(args.descriptor)!==JSON.stringify(state.descriptor)||!same(args.command_id,state.command_id))fail('REQUEST_INVALID');}
         else if(!state.create_receipt||state.create_receipt.empty||['READBACK','COMPLETE'].includes(state.phase))fail('REQUEST_INVALID');
-        if(action==='WORK_PAGE'&&args.page_no!==String(BigInt(state.selection_pages)+1n))fail('REQUEST_INVALID');
+        if(['WORK_PAGE','MATCHING_PAGE'].includes(action)&&args.page_no!==String(BigInt(state.selection_pages)+1n))fail('REQUEST_INVALID');
         if(action==='SEAL_ENQUEUE'&&(!same(args.command_id,state.command_id)||args.expected_pages!==state.selection_pages||args.expected_count!==state.selection_count))fail('REQUEST_INVALID');
         const bytes=requestBody(action,args),body_sha256=await hash(bytes);
-        authority();if(operation.busy||state.pending!==null)fail('OUTCOME_UNKNOWN');save({...state,pending:{action,bytes,body_sha256}});return dispatch(false);
+        authority();if(operation.busy||state.pending!==null||(operation.sequencing&&!internal))fail('OUTCOME_UNKNOWN');save({...state,pending:{action,bytes,body_sha256}});return dispatch(false);
+      }
+    return Object.freeze({key,snapshot,
+      async create(){return this.mutate('CREATE',{run_id:state.run_id,command_id:state.command_id,descriptor:state.descriptor});},
+      async mutate(action,args){return submit(action,args);},
+      async retry(){if(operation.busy||operation.sequencing||state.pending===null)fail('NO_PENDING_REQUEST');return dispatch(true);},
+      // WB23 owns selection upload only. CASES/GUARD remain their named later owners.
+      async advanceSelection(){
+        authority();if(operation.busy||operation.sequencing||state.pending!==null||!['SUBSETS','EXCLUSIONS','MATCHING','EXPLICIT'].includes(state.phase))fail('REQUEST_INVALID');
+        operation.sequencing=true;options.onChange?.(snapshot());
+        try{
+          while(['SUBSETS','EXCLUSIONS','MATCHING','EXPLICIT'].includes(state.phase)){
+            authority();
+            if(state.phase==='SUBSETS'){
+              let member=state.upload.subset;
+              if(member===null){
+                const before=state.upload.subset_cursor,page=await options.transport.page('WORK_CHOICES',{run_id:state.run_id,accepted_inputs:true,after_member_no:before==='0'?null:before,limit:1});authority();
+                if(state.phase!=='SUBSETS'||state.upload.subset_cursor!==before)fail('ACCEPTED_IDENTITY_CONFLICT');
+                if(page.header.selection_count!==state.selection_count||page.header.selection_page_count!==state.selection_pages)fail('ACCEPTED_IDENTITY_CONFLICT');
+                if(!page.rows.length||page.rows[0].selection_mode==='ALL'){
+                  save({...state,phase:'EXCLUSIONS',upload:{...state.upload,member_no:page.header.uploaded_choice_work_count==='0'?null:page.header.uploaded_choice_work_count}});continue;
+                }
+                member=page.rows[0];const remaining=state.descriptor.intent.components.filter(row=>same(row.work_id,member.work_id)&&same(row.expected_revision_id,member.expected_revision_id)&&row.selected).map(row=>row.approved_line_id).sort();
+                save({...state,upload:{...state.upload,member_no:page.header.uploaded_choice_work_count==='0'?null:page.header.uploaded_choice_work_count,subset:member,
+                  component_page:member.component_page_count??'0',component_count:member.component_count??'0',component_scan_after:null,component_scan_count:'0',component_ready:member.component_count==='0',remaining_ids:remaining}});
+              }
+                if(BigInt(member.member_no)>BigInt(state.upload.member_no??'0')){
+                  await submit('WORK_PAGE',{run_id:state.run_id,page_no:String(BigInt(state.selection_pages)+1n),choices:[{work_id:member.work_id,expected_revision_id:member.expected_revision_id,mode:'SUBSET'}]},true);
+                  if(state.upload.subset===null)continue;
+                }else if(member.skip_code!==null){save({...state,upload:{...state.upload,subset_cursor:member.member_no,subset:null,component_page:'0',component_count:'0',component_scan_after:null,component_scan_count:'0',component_ready:false,remaining_ids:[]}});continue;}
+              if(!state.upload.component_ready){
+                const before=state.upload.component_scan_after,page=await options.transport.page('SELECTED_COMPONENTS',{run_id:state.run_id,work_id:member.work_id,after_selection_no:before,limit:100});authority();
+                if(state.phase!=='SUBSETS'||!same(state.upload.subset?.work_id,member.work_id)||state.upload.component_scan_after!==before)fail('ACCEPTED_IDENTITY_CONFLICT');
+                let remaining=[...state.upload.remaining_ids];
+                for(const row of page.rows){const index=remaining.findIndex(id=>same(id,row.approved_line_id));if(!same(row.expected_revision_id,member.expected_revision_id)||index<0)fail('RESPONSE_INVALID');remaining.splice(index,1);}
+                const count=String(BigInt(state.upload.component_scan_count)+BigInt(page.rows.length));
+                if(BigInt(count)>BigInt(state.upload.component_count)||page.complete&&count!==state.upload.component_count)fail('RESPONSE_INVALID');
+                save({...state,upload:{...state.upload,remaining_ids:remaining,component_scan_count:count,component_scan_after:page.next_cursor?.after_selection_no??null,component_ready:page.complete}});continue;
+              }
+              if(state.upload.remaining_ids.length){
+                await submit('COMPONENT_PAGE',{run_id:state.run_id,work_id:member.work_id,expected_revision_id:member.expected_revision_id,page_no:String(BigInt(state.upload.component_page)+1n),approved_line_ids:state.upload.remaining_ids.slice(0,100)},true);continue;
+              }
+              if(state.upload.component_page==='0'||state.upload.component_count==='0')fail('REQUEST_INVALID');
+              await submit('COMPONENT_SEAL',{run_id:state.run_id,work_id:member.work_id,expected_revision_id:member.expected_revision_id,expected_pages:state.upload.component_page,expected_count:state.upload.component_count},true);continue;
+            }
+            if(state.phase==='EXCLUSIONS'){
+              const candidates=state.descriptor.intent.candidates.filter(row=>!row.selected).map(row=>row.candidate_id).sort(),works=state.descriptor.intent.works.filter(row=>!row.selected).map(row=>row.work_id).sort();
+              const pageNo=BigInt(state.upload.exclusion_page)+1n,start=Number((pageNo-1n)*100n),end=start+100;
+              await submit('EXCLUSION_PAGE',{run_id:state.run_id,page_no:String(pageNo),excluded_candidate_ids:candidates.slice(start,end),excluded_work_ids:works.slice(Math.max(0,start-candidates.length),Math.max(0,end-candidates.length))},true);continue;
+            }
+            if(state.phase==='MATCHING'){
+              await submit('MATCHING_PAGE',{run_id:state.run_id,page_no:String(BigInt(state.selection_pages)+1n),after_member_no:state.upload.member_no},true);continue;
+            }
+            const before=state.upload.member_no,page=await options.transport.page('WORK_CHOICES',{run_id:state.run_id,accepted_inputs:true,after_member_no:before,limit:100});authority();
+            if(state.phase!=='EXPLICIT'||state.upload.member_no!==before||page.header.selection_page_count!==state.selection_pages||page.header.selection_count!==state.selection_count||page.header.uploaded_choice_work_count!==(before??'0'))fail('ACCEPTED_IDENTITY_CONFLICT');
+            if(page.rows.some(row=>row.selection_mode!=='ALL'))fail('RESPONSE_INVALID');
+            if(!page.rows.length){if(!page.complete)fail('RESPONSE_INVALID');save({...state,phase:'CASES'});continue;}
+            await submit('WORK_PAGE',{run_id:state.run_id,page_no:String(BigInt(state.selection_pages)+1n),choices:page.rows.map(row=>({work_id:row.work_id,expected_revision_id:row.expected_revision_id,mode:'ALL'}))},true);
+            if(page.complete)save({...state,phase:'CASES'});
+          }
+          return snapshot();
+        }finally{operation.sequencing=false;options.onChange?.(snapshot());}
       },
-      async retry(){if(operation.busy||state.pending===null)fail('NO_PENDING_REQUEST');return dispatch(true);},
       acknowledgeComplete(store){
         authority();if(operation.busy||state.pending!==null||!['COMPLETE','EMPTY'].includes(state.phase)
           ||typeof store?.acknowledge!=='function'||JSON.stringify(store.namespace)!==JSON.stringify(state.descriptor.namespace))fail('REQUEST_INVALID');
@@ -756,7 +863,7 @@ function field(v,type){
           onExport:()=>{const state=readyLists?.snapshot(),header=workbenchShell.snapshot();if(!state?.available||!header.available||!win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(state.context,header.context))throw new Failure('SCHEMA_UNAVAILABLE');win.CloudTMSBpayNextWorkbench.openWorkbenchExport({...options,document:doc},{context:state.context,choiceStore:readyLists.choiceStore(),sort:'C_'+state.sort,parentCurrent:()=>readWindow?.alive()===true&&readyLists.snapshot().available&&workbenchShell.snapshot().available});},
           onScope:scope=>{issueLists?.setScope(scope);readyLists?.setScope(scope);},onTab:tab=>{if(tab!=='READY')issueLists?.setKind(tab==='ACTION'?'ACTION_REQUIRED':'BLOCKED');}});
         readyLists=win.CloudTMSBpayNextWorkbench.mountReadyCandidates({...options,host:workbenchShell.readyHost,client:workbenchShell.client,debug:controller.debug,windowAlive:()=>readWindow?.alive()===true,
-          onChoiceStore:store=>choiceStores.set(store.key,store),onSelection:()=>workbenchShell?.refreshSelectionLabel(),openBankRecord:id=>openCandidateRecord(options,id,close),
+          canInteract:()=>readWindow?.active()===true,onChoiceStore:store=>choiceStores.set(store.key,store),onSelection:()=>workbenchShell?.refreshSelectionLabel(),openBankRecord:id=>openCandidateRecord(options,id,close),
           openCandidate:address=>{if(candidateWindow?.alive())return;candidateWindow=win.CloudTMSBpayNextWorkbench.openCandidateWindow({...options,host:workbenchShell.readyHost,client:workbenchShell.client,preparationTransport:transport,choiceStore:readyLists.choiceStore(),onSelection:()=>workbenchShell?.refreshSelectionLabel(),onChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);}});
         readyLists.joinHeader(workbenchShell.snapshot());
         issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:workbenchShell.issueHost,windowAlive:()=>readWindow?.alive()===true,client:workbenchShell.client,externalTabs:true,debug:controller.debug,parentContext:()=>workbenchShell.snapshot().context,parentAvailable:()=>workbenchShell.snapshot().available,parentReadError:()=>workbenchShell.snapshot().readError,canInteract:()=>readWindow?.active()===true,
