@@ -59,12 +59,12 @@
     CHANNEL_WORKERS: { run_worker_id: 'uuid', candidate_id: 'uuid', pay_channel:'channel', worker_status:'worker', frozen_ex_vat:'money', frozen_vat:'money', frozen_inc_vat:'money', review_issue_code:'issue?' },
     LINES: { run_line_id: 'uuid', line_no: 'positive', original_timesheet_id: 'uuid', captured_revision_id: 'uuid', component_key: 'key', component_kind: 'component', work_date: 'date?', source_pay_channel: 'channel', target_pay_channel: 'channel', source_consumed_ex_vat: 'money', frozen_ex_vat: 'money', frozen_vat: 'money', frozen_inc_vat: 'money' },
     REVISION_COMPARISON: { run_work_id: 'uuid', work_id: 'uuid', original_timesheet_id: 'uuid', captured_revision_id: 'uuid', current_revision_id: 'uuid?', newer_approval_available: 'boolean' },
-    STATUS: { transfer_id: 'uuid', transfer_no: 'transferNo', projection_id: 'uuid?', execution_kind: 'execution', status: 'transfer', cash_amount: 'money', original_transfer_id: 'uuid?' },
+    STATUS: { transfer_id: 'uuid', transfer_no: 'transferNo', projection_id: 'uuid?', execution_kind: 'execution', status: 'transfer', cash_amount: 'money', original_transfer_id: 'uuid?', reservation_state:'reservationState',remaining_reservation_cash:'cashMoney?',reservation_holds_state:'reservationHolds' },
     RETURN_CASH: { original_transfer_id:'uuid',original_transfer_no:'transferNo',original_transfer_status:'returned',original_cash_amount:'cashMoney',beneficiary_kind:'beneficiary',beneficiary_id:'uuid',return_command_id:'uuid',return_posting_complete:'boolean',return_cash_id:'uuid?',amount_owed:'cashMoney?',amount_held:'cashMoney?',amount_reissued_paid:'cashMoney?',amount_available:'cashMoney?',pending_reissue_command_id:'uuid?',action_state:'returnState' }
   };
   const ACCEPTED_HEADER={run_id:'uuid',prepare_command_id:'uuid',accepted_sequence:'positive',accepted_module_epoch:'positive',run_status:'run',command_status:'prepareCommandStatus',expected_candidate_count:'positive',enrolled_candidate_count:'integer'};
   const STATUS_HEADER = {
-    run_id: 'uuid', run_status: 'run', selection_state: 'selection', review_revision: 'integer', run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', target_pay_channel: 'channel', umbrella_id: 'uuid?', preparation_revision: 'positive', case_selection_revision: 'integer', net_request_revision: 'integer', net_projection_revision: 'integer', net_pending: 'boolean', review_issue_code: 'issue?', review_issue_work_id: 'uuid?', frozen_gross_ex_vat: 'money', frozen_gross_vat: 'money', frozen_gross_inc_vat: 'money', projection_id: 'uuid?', projection_input_kind: 'projection?', entered_paye_net: 'money?', accepted_recoveries: 'money?', accepted_net_additions: 'money?', cash_amount: 'money?'
+    run_id: 'uuid', run_status: 'run', selection_state: 'selection', review_revision: 'integer', run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', target_pay_channel: 'channel', umbrella_id: 'uuid?', preparation_revision: 'positive', case_selection_revision: 'integer', net_request_revision: 'integer', net_projection_revision: 'integer', net_pending: 'boolean', review_issue_code: 'issue?', review_issue_work_id: 'uuid?', frozen_gross_ex_vat: 'money', frozen_gross_vat: 'money', frozen_gross_inc_vat: 'money', projection_id: 'uuid?', projection_input_kind: 'projection?', entered_paye_net: 'money?', accepted_recoveries: 'money?', accepted_net_additions: 'money?', cash_amount: 'money?', reservation_mode:'reservationMode',reservation_projection_id:'uuid?',remaining_reservation_cash:'cashMoney?',reservation_internal_zero:'boolean',reservation_holds_state:'reservationHolds'
   };
   const RETURN_HEADER = {run_id:'uuid',run_worker_id:'uuid',candidate_id:'uuid',financial_view_revision:'integer'};
   const PAGES = {
@@ -99,6 +99,14 @@
     constructor(code, unknown = false) { super(code); this.code = code; this.unknown = unknown; }
   }
   const fail = (code = 'RESPONSE_INVALID', unknown = false) => { throw new Failure(code, unknown); };
+
+  function reservationDescription(value){
+    const key=value.reservation_mode??value.reservation_state;
+    const labels={UNCONFIRMED:'Awaiting Draft confirmation',PENDING_PREPARATION:'Preparation pending',PENDING_NET:'NET acceptance pending',ORIGINAL_OBLIGATION:'Confirmed original obligation',ORIGINAL_LEGS:'Remaining reservations are shown per original transfer below',CANCELLING:'Cancellation in progress; reserved sources are being released',CANCELLED:'Cancelled original obligation',EVIDENCE_CONFLICT:'Reservation evidence needs review',SUPPRESSED_UNCONFIRMED:'Awaiting Draft confirmation',PENDING:'Acceptance pending',INCLUDED_IN_ORIGINAL_OBLIGATION:'Included in the original obligation above',REISSUE_EXCLUDED:'Returned-cash reissue; separate from original reservation',RESERVED:'Held original reservation',ISSUED_AWAITING_RECEIPT:'CSV issued; reservation awaits recorded settlement',EXECUTION_UNCERTAIN:'Execution outcome uncertain',EXECUTED_PENDING_POSTING:'Settlement recorded; posting pending',POSTED:'Settlement posted',RETURNED:'Original payment returned; returned cash is separate',INTERNAL_RESERVED:'Internal zero-cash obligation reserved',INTERNAL_PENDING_POSTING:'Internal execution recorded; posting pending',CLOSED_INTERNAL:'Internal execution posted'};
+    const amount=value.remaining_reservation_cash;
+    return (labels[key]??'Reservation evidence needs review')+(amount===null?'':': £'+amount)+(value.reservation_internal_zero?' (internal zero-cash obligation)':'');
+  }
+
   function requireActor(options) {
     if (typeof options.ownerReady === 'function' && options.ownerReady() !== true) fail('OWNER_UNAVAILABLE');
     if (options.currentActorId === undefined) return;
@@ -108,7 +116,37 @@
     // local refusal: it says nothing about the earlier request's outcome.
     if (!same(actor, options.actorId)) fail('ACTOR_CHANGED');
   }
-  function field(v, type) {
+
+function validReservation(h,row=null){
+  const amountModes=['ORIGINAL_OBLIGATION','CANCELLING','CANCELLED'];
+  if(amountModes.includes(h.reservation_mode)!==(h.remaining_reservation_cash!==null))return false;
+  if(h.reservation_mode==='ORIGINAL_LEGS'&&h.reservation_projection_id===null)return false;
+  if(['CANCELLING','CANCELLED'].includes(h.reservation_mode)&&h.remaining_reservation_cash!=='0.00')return false;
+  if(h.reservation_internal_zero&&(h.reservation_mode!=='ORIGINAL_OBLIGATION'||h.remaining_reservation_cash!=='0.00'))return false;
+  if(row===null)return true;
+  const s=row.reservation_state,c=row.remaining_reservation_cash;
+  const nativeStatuses={RESERVED:['MEMBERS_READY','DRAFT','SCHEDULED','REFUSED'],ISSUED_AWAITING_RECEIPT:['ISSUED_CSV'],EXECUTION_UNCERTAIN:['SUBMITTED','UNKNOWN'],EXECUTED_PENDING_POSTING:['SETTLED'],POSTED:['SETTLED'],RETURNED:['RETURNED'],INTERNAL_RESERVED:['MEMBERS_READY','DRAFT','SCHEDULED','REFUSED'],INTERNAL_PENDING_POSTING:['INTERNAL_PROCESSING','INTERNAL_SETTLED'],CLOSED_INTERNAL:['INTERNAL_SETTLED']};
+  if(Object.hasOwn(nativeStatuses,s)&&!nativeStatuses[s].includes(row.status))return false;
+  if(['RESERVED','ISSUED_AWAITING_RECEIPT'].includes(s)&&row.reservation_holds_state!=='ACTIVE')return false;
+  if(s==='EXECUTION_UNCERTAIN'&&h.reservation_mode!=='ORIGINAL_LEGS')return false;
+  if(['CANCELLING','CANCELLED'].includes(s)&&s!==h.reservation_mode)return false;
+  if((row.original_transfer_id!==null)!==(s==='REISSUE_EXCLUDED'))return false;
+  if(['EVIDENCE_CONFLICT','SUPPRESSED_UNCONFIRMED','PENDING','INCLUDED_IN_ORIGINAL_OBLIGATION','EXECUTION_UNCERTAIN'].includes(s)){
+    if(c!==null)return false;
+    if(s==='INCLUDED_IN_ORIGINAL_OBLIGATION'&&h.reservation_mode!=='ORIGINAL_OBLIGATION')return false;
+  }else if(['RESERVED','ISSUED_AWAITING_RECEIPT'].includes(s)){
+    if(c!==row.cash_amount||row.execution_kind!=='BANK'||h.reservation_mode!=='ORIGINAL_LEGS')return false;
+  }else if(['REISSUE_EXCLUDED','CANCELLING','CANCELLED','EXECUTED_PENDING_POSTING','POSTED','RETURNED','INTERNAL_RESERVED','INTERNAL_PENDING_POSTING','CLOSED_INTERNAL'].includes(s)){
+    if(c!=='0.00')return false;
+    if(s.startsWith('INTERNAL_')||s==='CLOSED_INTERNAL'){
+      if(row.execution_kind!=='INTERNAL_ZERO'||row.cash_amount!=='0.00')return false;
+    }
+  }else return false;
+  return true;
+}
+function field(v,type){
+    const reservationEnums={"reservationMode":["UNCONFIRMED","PENDING_PREPARATION","PENDING_NET","ORIGINAL_OBLIGATION","ORIGINAL_LEGS","CANCELLING","CANCELLED","EVIDENCE_CONFLICT"],"reservationState":["EVIDENCE_CONFLICT","SUPPRESSED_UNCONFIRMED","PENDING","INCLUDED_IN_ORIGINAL_OBLIGATION","PAGED_ORIGINAL_LEGS","REISSUE_EXCLUDED","CANCELLING","CANCELLED","RESERVED","ISSUED_AWAITING_RECEIPT","EXECUTION_UNCERTAIN","EXECUTED_PENDING_POSTING","POSTED","RETURNED","INTERNAL_RESERVED","INTERNAL_PENDING_POSTING","CLOSED_INTERNAL"],"reservationHolds":["ACTIVE","NONE","RELEASING","POSTING"]};
+    if(Object.hasOwn(reservationEnums,type))return reservationEnums[type].includes(v);
     const acceptedEnums={acceptedCaseScope:['NO_CASE','SEALED_SELECTION'],settingsWitness:['BASELINE_AT_ACCEPTANCE','ORDERED_VERSION'],
     prepareJobStatus:['READY','LEASED','BLOCKED','DONE','FAILED'],prepareJobPhase:['NEW','PINNING','RESERVE','ALLOCATE','FINANCE_ALLOCATE','READY','DONE','EXPIRED'],
     acceptedProgress:['WAITING_ENROLLMENT','WAITING_EARLIER_COMMAND','PREPARING','READY','REVIEW','CANCELLING','CANCELLED','FAILED','EPOCH_PAUSED'],
@@ -351,12 +389,13 @@
           else if(!shape(body.next_cursor,{after_transfer_no:'transferNo'})||(args.after_transfer_no!==null&&BigInt(body.next_cursor.after_transfer_no)<=BigInt(args.after_transfer_no))||(prior!==null&&BigInt(body.next_cursor.after_transfer_no)<BigInt(prior)))fail();
           return body;
         }
-        if (statusKind && (!shape(body.header, STATUS_HEADER) || !same(body.header.run_id, args.run_id) || !same(body.header.run_worker_id, args.run_worker_id) || (kind==='CHANNEL_STATUS'&&body.header.target_pay_channel!==args.pay_channel) || body.header.net_pending !== (body.header.net_request_revision !== body.header.net_projection_revision))) fail();
+        if (statusKind && (!shape(body.header, STATUS_HEADER) || !same(body.header.run_id, args.run_id) || !same(body.header.run_worker_id, args.run_worker_id) || (kind==='CHANNEL_STATUS'&&body.header.target_pay_channel!==args.pay_channel) || body.header.net_pending !== (body.header.net_request_revision !== body.header.net_projection_revision) || !validReservation(body.header))) fail();
         if(kind==='CHANNEL_WORKERS'&&(body.rows.some(r=>r.pay_channel!==args.pay_channel)||new Set(body.rows.map(r=>r.run_worker_id.toLowerCase())).size!==body.rows.length))fail();
         if (kind === 'CASE_COMPONENTS' && new Set(body.rows.map(r=>r.case_component_id.toLowerCase())).size !== body.rows.length) fail();
         if(statusKind){const h=body.header,facts=['projection_input_kind','entered_paye_net','accepted_recoveries','accepted_net_additions','cash_amount'];if(h.projection_id===null&&facts.some(k=>h[k]!==null))fail();if(h.projection_id!==null&&(h.projection_input_kind===null||['accepted_recoveries','accepted_net_additions','cash_amount'].some(k=>h[k]===null)||(['UMBRELLA','CASE_PAYOUT'].includes(h.projection_input_kind)!==(h.entered_paye_net===null))))fail();}
         let prior = kind === 'CURRENT_WORK' ? (args.after_week === null ? null : [args.after_week, args.after_work_id]) : (statusKind ? args.after_transfer_no : (args.after_case_id ?? args.after_component_ordinal ?? args.after_candidate_id ?? args.after_line_no ?? args.after_work_id ?? null));
         for (const r of body.rows) {
+          if(statusKind&&!validReservation(body.header,r))fail();
           const v = kind === 'CURRENT_WORK' ? [r.week_ending_date, r.work_id] : kind === 'CURRENT_CASES' ? r.case_id : kind === 'CASE_COMPONENTS' ? r.component_ordinal : statusKind ? r.transfer_no : workerKind ? r.candidate_id : kind === 'LINES' ? r.line_no : r.work_id;
           if (prior !== null) { const ordered = Array.isArray(v) ? v[0] > prior[0] || (v[0] === prior[0] && v[1] > prior[1]) : (statusKind||['LINES','CASE_COMPONENTS'].includes(kind)) ? BigInt(v) > BigInt(prior) : v > prior; if (!ordered) fail(); }
           if (['CURRENT_CASES','CASE_COMPONENTS'].includes(kind) && (!same(r.candidate_id,args.candidate_id) || (kind === 'CASE_COMPONENTS' && !same(r.case_id,args.case_id)))) fail();
@@ -581,6 +620,7 @@
       }
       if(workers){body.append(el('h3',s.confirmed?(s.pay_channel==='PAYE'?'PAYE Draft Candidates':'Umbrella Draft Candidates'):'Frozen preparation progress'),table(['Candidate','State','Frozen gross ex VAT','Review'],workers.rows.map(r=>[button('Open worker',async()=>{controller.bind({worker_id:r.run_worker_id,candidate_id:r.candidate_id});await loadStatus();},locked,false,'worker:'+r.run_worker_id),r.worker_status,r.frozen_ex_vat===null?null:'£'+r.frozen_ex_vat,r.review_issue_code===null?'No issue recorded':'Review required'])));if(!workers.complete)body.append(button('Next worker page',()=>loadWorkers(workers.next_cursor),locked));if(s.can_confirm&&s.review_revision)body.append(button('Confirm frozen Draft',async()=>{await controller.mutate('CONFIRM',{run_id:s.run_id,review_revision:s.review_revision});await refresh();},locked));}
       if(status){const h=status.header;body.append(el('h3','Accepted worker state'),el('p',h.worker_status+' / '+h.target_pay_channel),el('p','Frozen gross ex VAT: '+(h.frozen_gross_ex_vat===null?'Not available':'£'+h.frozen_gross_ex_vat)),el('p','Accepted payroll net: '+(h.entered_paye_net===null?'Not recorded':'£'+h.entered_paye_net)),el('p','Accepted recoveries: '+(h.accepted_recoveries===null?'Not recorded':'£'+h.accepted_recoveries)),el('p','Accepted bank cash: '+(h.cash_amount===null?'Not recorded':'£'+h.cash_amount)),el('p',h.net_pending?'NET request pending; old accepted projection remains shown.':'Accepted projection current for this worker.'));
+        body.append(el('p',reservationDescription(h)),el('p','Reservation facts are shown once: the confirmed obligation while building, then individual original transfers. Each page is a live read; amounts are not summed across pages.'));
         body.append(button('Frozen payment lines',()=>loadLines(),locked),button('Check later approval flag',async()=>{comparisons=await controller.page('REVISION_COMPARISON',{run_worker_id:s.worker_id,after_work_id:null,limit:100});},locked));
         if(draftActionsAllowed(h)&&h.target_pay_channel==='PAYE'){
           const [n,ni]=input('Enter PAYE payroll net (GBP, exact pence)','text',netInput?.value||'');netInput=ni;ni.inputMode='decimal';body.append(n,button('Accept PAYE net',async()=>{const args={command_id:controller.newId(),run_worker_id:s.worker_id,entered_paye_net:netInput.value};if(h.case_selection_revision!=='0')args.expected_projection_revision=h.net_projection_revision;await controller.mutate('PAYE_NET',args);await loadStatus();},locked));
@@ -594,7 +634,7 @@
         body.append(el('h3','Current payment status'),el('p','Bank details are changed in the Candidate record, not in this payment view. Reopening this run retains its accepted state.'));
         if(typeof options.openCandidateRecord==='function')body.append(button('Open Candidate record for bank details',()=>openCandidateRecord(options,h.candidate_id,close),locked));
         body.append(button('Returned money in this batch',()=>loadReturnedCash(),locked));
-        body.append(table(['Transfer','State','Execution','Frozen cash','Actions'],status.rows.map(t=>{const actions=el('span');if(h.target_pay_channel==='PAYE'&&t.execution_kind==='BANK'&&t.original_transfer_id===null&&['MEMBERS_READY','DRAFT','SCHEDULED','ISSUED_CSV'].includes(t.status))actions.append(button(t.status==='ISSUED_CSV'?'Retrieve exact CSV':'Issue original CSV',async()=>{const id=s.transfer_id===t.transfer_id&&s.instruction_id?s.instruction_id:controller.newId();const result=await controller.mutate('CSV_ISSUE',{instruction_id:id,transfer_id:t.transfer_id});download(result);await loadStatus();},locked,false,'csv:'+t.transfer_id));if(t.execution_kind==='INTERNAL_ZERO')actions.append(el('span','No external cash file'));return[t.transfer_id,t.status,t.execution_kind,'£'+t.cash_amount,actions];})));
+        body.append(table(['Transfer','State','Execution','Frozen cash','Remaining reservation','Actions'],status.rows.map(t=>{const actions=el('span');if(h.target_pay_channel==='PAYE'&&t.execution_kind==='BANK'&&t.original_transfer_id===null&&['MEMBERS_READY','DRAFT','SCHEDULED','ISSUED_CSV'].includes(t.status))actions.append(button(t.status==='ISSUED_CSV'?'Retrieve exact CSV':'Issue original CSV',async()=>{const id=s.transfer_id===t.transfer_id&&s.instruction_id?s.instruction_id:controller.newId();const result=await controller.mutate('CSV_ISSUE',{instruction_id:id,transfer_id:t.transfer_id});download(result);await loadStatus();},locked,false,'csv:'+t.transfer_id));if(t.execution_kind==='INTERNAL_ZERO')actions.append(el('span','No external cash file'));return[t.transfer_id,t.status,t.execution_kind,'£'+t.cash_amount,reservationDescription(t),actions];})));
         if(!status.complete)body.append(button('Next transfer page',()=>loadStatus(status.next_cursor),locked));
         if(returnedCash){
           body.append(el('h3','Returned money — this Candidate in this batch'),el('p','These are returned-cash records, not new earnings or a new payroll calculation. Available cash is not permission to send it: the destination still needs the existing bank safety approval.'));

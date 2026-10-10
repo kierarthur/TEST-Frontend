@@ -14,7 +14,7 @@ const transport=fetch=>createTransport({api:p=>'https://local.invalid'+p,authFet
 const makeController=(rpc,store=storage(),actor=id(1))=>createController({actorId:actor,storage:store,uuid:()=>id(100),transport:rpc});
 const row=n=>({work_id:id(n),candidate_id:id(3),original_timesheet_id:id(n+1000),work_kind:'ORDINARY',week_ending_date:'2026-10-04',approval_state:'APPROVED',current_revision_id:id(n+2000),applied_revision_id:id(n+2000),position_ready:true,source_pay_channel:'PAYE',timesheet_reference:`TS-${n}`,client_display_name:'<img src=x onerror=alert(1)>',approved_source_ex_vat:'100.40'});
 const pageArgs={candidate_id:id(3),after_week:null,after_work_id:null,limit:100};
-const header=()=>({run_id:id(2),run_status:'DRAFT',selection_state:'SEALED',review_revision:'1',run_worker_id:id(4),candidate_id:id(3),worker_status:'READY',target_pay_channel:'PAYE',umbrella_id:null,preparation_revision:'1',case_selection_revision:'0',net_request_revision:'1',net_projection_revision:'1',net_pending:false,review_issue_code:null,review_issue_work_id:null,frozen_gross_ex_vat:'100.00',frozen_gross_vat:'0.00',frozen_gross_inc_vat:'100.00',projection_id:id(5),projection_input_kind:'PAYE_MANUAL',entered_paye_net:'75.00',accepted_recoveries:'10.00',accepted_net_additions:'0.00',cash_amount:'65.00'});
+const header=()=>({run_id:id(2),run_status:'DRAFT',selection_state:'SEALED',review_revision:'1',run_worker_id:id(4),candidate_id:id(3),worker_status:'READY',target_pay_channel:'PAYE',umbrella_id:null,preparation_revision:'1',case_selection_revision:'0',net_request_revision:'1',net_projection_revision:'1',net_pending:false,review_issue_code:null,review_issue_work_id:null,frozen_gross_ex_vat:'100.00',frozen_gross_vat:'0.00',frozen_gross_inc_vat:'100.00',projection_id:id(5),projection_input_kind:'PAYE_MANUAL',entered_paye_net:'75.00',accepted_recoveries:'10.00',accepted_net_additions:'0.00',cash_amount:'65.00',reservation_mode:'ORIGINAL_LEGS',reservation_projection_id:id(5),remaining_reservation_cash:null,reservation_internal_zero:false,reservation_holds_state:'NONE'});
 
 test('bank-details navigation closes the sheet then delegates only the exact Candidate identity',()=>{
   const events=[],store=storage(),c=makeController({},store);c.bind({run_id:id(2),worker_id:id(4),candidate_id:id(3)});
@@ -235,8 +235,23 @@ test('STATUS P01 shows original accepted payroll75/recovery10/cash65 and rejects
   assert.deepEqual((await transport(async()=>json(raw)).page('STATUS',args)).header,h);
   await assert.rejects(transport(async()=>json({...raw,header:{...h,net_pending:true}})).page('STATUS',args));
 });
+test('PS14 server reservation mode owns cash once and refuses contradictory lifecycle',async()=>{
+ const args={run_id:id(2),run_worker_id:id(4),after_transfer_no:null,limit:100};
+ const h={...header(),reservation_mode:'ORIGINAL_OBLIGATION',remaining_reservation_cash:'65.00',reservation_holds_state:'ACTIVE'};
+ const t={transfer_id:id(6),transfer_no:'1',projection_id:id(5),execution_kind:'BANK',status:'BUILDING',cash_amount:'65.00',original_transfer_id:null,reservation_state:'INCLUDED_IN_ORIGINAL_OBLIGATION',remaining_reservation_cash:null,reservation_holds_state:'ACTIVE'};
+ const raw={ok:true,kind:'STATUS',header:h,rows:[t],complete:true,next_cursor:null};
+ assert.deepEqual(await transport(async()=>json(raw)).page('STATUS',args),raw);
+ for(const body of [{...raw,header:{...h,remaining_reservation_cash:null}},
+  {...raw,rows:[{...t,remaining_reservation_cash:'65.00'}]},
+  {...raw,header:header(),rows:[{...t,status:'SETTLED',reservation_state:'RESERVED',remaining_reservation_cash:'65.00'}]}])
+  await assert.rejects(transport(async()=>json(body)).page('STATUS',args));
+ const source=fs.readFileSync(path.resolve(__dirname,'../../js/bpay-next-office.js'),'utf8');
+ assert.match(source,/Remaining reservations are shown per original transfer below/);
+ assert.match(source,/amounts are not summed across pages/);
+ assert.doesNotMatch(source,/remaining_reservation_cash\s*[-+*/]/);
+});
 test('transfer ordinals are exact decimal text, ordered numerically, never JSON numbers',async()=>{
-  const t=n=>({transfer_id:id(Number(n)+100),transfer_no:n,projection_id:id(5),execution_kind:'BANK',status:'DRAFT',cash_amount:'65.00',original_transfer_id:null});
+  const t=n=>({transfer_id:id(Number(n)+100),transfer_no:n,projection_id:id(5),execution_kind:'BANK',status:'DRAFT',cash_amount:'65.00',original_transfer_id:null,reservation_state:'RESERVED',remaining_reservation_cash:'65.00',reservation_holds_state:'ACTIVE'});
   const args={run_id:id(2),run_worker_id:id(4),after_transfer_no:'2',limit:100};
   const raw={ok:true,kind:'STATUS',header:header(),rows:[t('10')],complete:false,next_cursor:{after_transfer_no:'10'}};
   assert.deepEqual((await transport(async()=>json(raw)).page('STATUS',args)).next_cursor,{after_transfer_no:'10'});
@@ -245,7 +260,7 @@ test('transfer ordinals are exact decimal text, ordered numerically, never JSON 
 test('actual STATUS internal-zero execution accepts exact INTERNAL_ZERO and refuses obsolete INTERNAL',async()=>{
   const args={run_id:id(2),run_worker_id:id(4),after_transfer_no:null,limit:100};
   const h={...header(),entered_paye_net:'0.00',accepted_recoveries:'0.00',accepted_net_additions:'0.00',cash_amount:'0.00'};
-  const t={transfer_id:id(6),transfer_no:'1',projection_id:id(5),execution_kind:'INTERNAL_ZERO',status:'INTERNAL_SETTLED',cash_amount:'0.00',original_transfer_id:null};
+  const t={transfer_id:id(6),transfer_no:'1',projection_id:id(5),execution_kind:'INTERNAL_ZERO',status:'INTERNAL_SETTLED',cash_amount:'0.00',original_transfer_id:null,reservation_state:'CLOSED_INTERNAL',remaining_reservation_cash:'0.00',reservation_holds_state:'NONE'};
   const raw={ok:true,kind:'STATUS',header:h,rows:[t],complete:true,next_cursor:null};
   assert.deepEqual(await transport(async()=>json(raw)).page('STATUS',args),raw);
   await assert.rejects(transport(async()=>json({...raw,rows:[{...t,execution_kind:'INTERNAL'}]})).page('STATUS',args));
@@ -296,7 +311,7 @@ test('missing or failed advice stream leaves visible INCOMPLETE warning',async()
 test('actual menu enters NEXT before legacy boot and all new directly loaded assets align',()=>{
   const root=path.resolve(__dirname,'../..'),main=fs.readFileSync(path.join(root,'js/main.js'),'utf8'),index=fs.readFileSync(path.join(root,'index.html'),'utf8'),source=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8');
   const start=main.indexOf("if (destination === 'pay_next')"),end=main.indexOf("if (typeof openBanking !== 'function')",start);assert.ok(start>0&&end>start);assert.match(main.slice(start,end),/ignoreMembership: true/);assert.match(main.slice(start,end),/currentActorId: \(\) => SESSION\?\.user\?\.id \|\| null/);assert.match(main.slice(start,end),/return;/);
-  assert.match(index,/bpay-next-office\.js\?v=20261010-next-environment-r1/);assert.match(index,/bpay-next-office\.css\?v=20261010-next-environment-r1/);
+  assert.match(index,/bpay-next-office\.js\?v=20261010-next-reservation-r1/);assert.match(index,/bpay-next-office\.css\?v=20261010-next-environment-r1/);
   assert.doesNotMatch(source,/parseFloat|\.toFixed\(|response\.text\(|response\.json\(|sbRpc|WORKBENCH_|drain_v1/);
 });
 test('actual authFetch with debug enabled never clones/buffers/logs NEXT, preserves unrelated logging',async()=>{
@@ -320,7 +335,7 @@ test('PF12 NEXT focus support remains scoped and phone/theme controls retain ful
   const root=path.resolve(__dirname,'../..');
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8'),css=fs.readFileSync(path.join(root,'css/bpay-next-office.css'),'utf8');
   const office=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8'),history=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8');
-  assert.ok(html.indexOf('bpay-next-ui.js?v=20261010-next-environment-r1')<html.indexOf('bpay-next-office.js?v=20261010-next-environment-r1'));
+  assert.ok(html.indexOf('bpay-next-ui.js?v=20261010-next-environment-r1')<html.indexOf('bpay-next-office.js?v=20261010-next-reservation-r1'));
   assert.match(css,/prefers-color-scheme:light/);assert.match(css,/--next-scheme:dark/);assert.match(css,/--next-scheme:light/);
   assert.match(css,/max-height:calc\(100dvh - max\(var\(--next-gap\),env\(safe-area-inset-top\)\)/);
   assert.match(css,/header button \{flex-shrink:0;min-height:44px;/);assert.match(css,/table \{border-collapse:collapse;min-width:850px;width:100%;/);
