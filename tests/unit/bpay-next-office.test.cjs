@@ -296,7 +296,7 @@ test('missing or failed advice stream leaves visible INCOMPLETE warning',async()
 test('actual menu enters NEXT before legacy boot and all new directly loaded assets align',()=>{
   const root=path.resolve(__dirname,'../..'),main=fs.readFileSync(path.join(root,'js/main.js'),'utf8'),index=fs.readFileSync(path.join(root,'index.html'),'utf8'),source=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8');
   const start=main.indexOf("if (destination === 'pay_next')"),end=main.indexOf("if (typeof openBanking !== 'function')",start);assert.ok(start>0&&end>start);assert.match(main.slice(start,end),/ignoreMembership: true/);assert.match(main.slice(start,end),/currentActorId: \(\) => SESSION\?\.user\?\.id \|\| null/);assert.match(main.slice(start,end),/return;/);
-  assert.match(index,/bpay-next-office\.js\?v=20261010-next-ui-r1/);assert.match(index,/bpay-next-office\.css\?v=20261010-next-ui-r1/);
+  assert.match(index,/bpay-next-office\.js\?v=20261010-next-environment-r1/);assert.match(index,/bpay-next-office\.css\?v=20261010-next-environment-r1/);
   assert.doesNotMatch(source,/parseFloat|\.toFixed\(|response\.text\(|response\.json\(|sbRpc|WORKBENCH_|drain_v1/);
 });
 test('actual authFetch with debug enabled never clones/buffers/logs NEXT, preserves unrelated logging',async()=>{
@@ -320,7 +320,7 @@ test('PF12 NEXT focus support remains scoped and phone/theme controls retain ful
   const root=path.resolve(__dirname,'../..');
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8'),css=fs.readFileSync(path.join(root,'css/bpay-next-office.css'),'utf8');
   const office=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8'),history=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8');
-  assert.ok(html.indexOf('bpay-next-ui.js?v=20261010-next-ui-r1')<html.indexOf('bpay-next-office.js?v=20261010-next-ui-r1'));
+  assert.ok(html.indexOf('bpay-next-ui.js?v=20261010-next-environment-r1')<html.indexOf('bpay-next-office.js?v=20261010-next-environment-r1'));
   assert.match(css,/prefers-color-scheme:light/);assert.match(css,/--next-scheme:dark/);assert.match(css,/--next-scheme:light/);
   assert.match(css,/max-height:calc\(100dvh - max\(var\(--next-gap\),env\(safe-area-inset-top\)\)/);
   assert.match(css,/header button \{flex-shrink:0;min-height:44px;/);assert.match(css,/table \{border-collapse:collapse;min-width:850px;width:100%;/);
@@ -347,4 +347,17 @@ test('PF12 native-control trap and focus continuity filter unavailable controls 
   token=continuity.before();nodes=[make('first'),make('last')];continuity.after(token);assert.equal(active,nodes[1]);
   active=nodes[0];token=continuity.before();nodes=[make('first'),make('last')];continuity.after(token);assert.equal(active,nodes[0]);
   const inert=make('inert');inert.closest=()=>({});assert.equal(ui.available(inert),false);const negative=make('negative');negative.tabIndex=-1;assert.equal(ui.available(negative),false);
+});
+
+
+test('PF13 Office capabilities are closed factual diagnostics and every business/advice caller carries its environment',async()=>{
+  const {capabilityReceipt}=require('../../js/bpay-next-office.js');const caps={ok:true,scope:'NEXT',worker_environment:'TEST',requested_environment:'TEST',environment_ready:true,test_mode:true,env_mismatch:false,cop_available:false,provider_status:'DISABLED',funding_status:'UNAVAILABLE',csv_available:true};
+  let seen;const result=await transport(async(url,init)=>{seen={url,init};return json(caps);}).capabilities();assert.deepEqual(result,caps);
+  assert.equal(seen.url,'https://local.invalid/api/banking/capabilities?scope=NEXT');assert.equal(seen.init.method,'GET');assert.equal(seen.init.headers['X-CloudTMS-Banking-Environment'],'TEST');assert.equal(seen.init.body,undefined);
+  for(const invalid of [{...caps,cop_available:true},{...caps,provider_status:'READY'},{...caps,requested_environment:'LIVE'},{...caps,worker_environment:'LIVE'},{...caps,test_mode:false},{...caps,extra:true},{...caps,env_mismatch:true},{...caps,csv_available:false}])assert.throws(()=>capabilityReceipt(invalid,'TEST'));
+  assert.equal(capabilityReceipt({...caps,environment_ready:false,env_mismatch:true,csv_available:false},'TEST').environment_ready,false);
+  const root=path.resolve(__dirname,'../..'),office=fs.readFileSync(path.join(root,'js/bpay-next-office.js'),'utf8'),history=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8'),main=fs.readFileSync(path.join(root,'js/main.js'),'utf8');
+  assert.match(office,/locked=!capabilities\?\.environment_ready\|\|readBusy/);assert.match(office,/TEST MODE — no bank, provider or email action/);assert.match(office,/Re-check Banking capabilities/);
+  assert.match(office,/headers:\{'X-CloudTMS-Banking-Environment':environment\(options\)\}/);assert.match(history,/'X-CloudTMS-Banking-Environment':options.environment\?\?'TEST'/);
+  assert.match(main,/const visibleBannersHtml = safeKey === 'pay' \? '' : bannersHtml/);assert.match(main,/const visibleHeaderChips = safeKey === 'pay'/);
 });

@@ -170,6 +170,16 @@
   }
   function normalizeAccepted(v){if(Array.isArray(v))return v.map(normalizeAccepted);if(record(v))return Object.fromEntries(Object.entries(v).map(([k,x])=>[k,normalizeAccepted(x)]));return typeof v==='string'&&UUID.test(v)?v.toLowerCase():v;}
   function shape(v, schema) { return record(v) && Object.keys(v).length === Object.keys(schema).length && Object.entries(schema).every(([k, t]) => Object.hasOwn(v, k) && field(v[k], t)); }
+  function environment(options){const value=options.environment??'TEST';if(!['TEST','LIVE'].includes(value))fail('DEPENDENCY_UNAVAILABLE');return value;}
+  function capabilityReceipt(value,expected){
+    if(!record(value)||Object.keys(value).length!==11||value.ok!==true||value.scope!=='NEXT'
+      ||![null,'TEST','LIVE'].includes(value.worker_environment)||value.requested_environment!==expected
+      ||typeof value.environment_ready!=='boolean'||typeof value.test_mode!=='boolean'||typeof value.env_mismatch!=='boolean'
+      ||value.test_mode!==(value.worker_environment==='TEST')||value.env_mismatch===value.environment_ready
+      ||(value.environment_ready&&value.worker_environment!==expected)||value.cop_available!==false
+      ||value.provider_status!=='DISABLED'||value.funding_status!=='UNAVAILABLE'||value.csv_available!==value.environment_ready)fail();
+    return Object.freeze({...value});
+  }
   const financial = action => ['PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
   function requestBody(action, args) {
     let schema = INPUT[action];
@@ -211,7 +221,7 @@
       requireActor(options);
       const controller = new AbortController(); let timer;
       const task = (async () => {
-        const raw = await options.authFetch(options.api(path), { ...init, signal: controller.signal, auth401Mode: 'return', redirect: 'error', headers: { 'content-type': 'application/json', accept: 'application/json' } });
+        const raw = await options.authFetch(options.api(path), { ...init, signal: controller.signal, auth401Mode: 'return', redirect: 'error', headers: { 'content-type': 'application/json', accept: 'application/json', 'X-CloudTMS-Banking-Environment':environment(options) } });
         if (controller.signal.aborted) { await raw?.body?.cancel().catch(() => {}); fail('TIMEOUT'); }
         try { requireActor(options); } catch (e) { await raw?.body?.cancel().catch(() => {}); throw e; }
         const body = await boundedJson(raw, controller.signal);
@@ -241,6 +251,7 @@
       finally { clearTimeout(timer); }
     }
     return Object.freeze({
+      async capabilities(){return capabilityReceipt(await call('/api/banking/capabilities?scope=NEXT',{method:'GET'},true),environment(options));},
       async mutation(action, bytes) {
         const body = JSON.parse(bytes), { action: saved, ...args } = body;
         if (saved !== action || requestBody(action, args) !== bytes) fail('REQUEST_INVALID');
@@ -483,7 +494,7 @@
     if (sheet) { sheet.focus(); return sheet; }
     const doc = options.document || document; const win = options.window || window;
     const transport = createTransport(options); let controller, drafts = null, current = null, cases = null, components = null, workers = null, status = null, returnedCash = null, lines = null, comparisons = null, frozenLine = null, shifts = null, breaks = null, usedRates = null, frozenWork = null, rateSchedule = null;
-    let selection = new Map(), caseSelection = new Map(), renderEpoch = 0, readBusy = false, error = '', progressTimer, workersCursor=null, statusCursor=null, statusScope=null, reviewObserved=false, preparationPending=false;
+    let selection = new Map(), caseSelection = new Map(), renderEpoch = 0, readBusy = false, capabilities = null, capabilityError = '', error = '', progressTimer, workersCursor=null, statusCursor=null, statusScope=null, reviewObserved=false, preparationPending=false;
     const host = doc.createElement('section'); host.className = 'bpay-next-office'; host.setAttribute('role','dialog'); host.setAttribute('aria-modal','true'); host.setAttribute('aria-label','Banking Pay NEXT'); host.tabIndex = -1;
     const previousFocus = doc.activeElement;
     const el = (tag, text, className) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; };
@@ -493,8 +504,10 @@
     const close = () => { if(!host.isConnected)return;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);host.remove();sheet=null;if(previousFocus?.isConnected)previousFocus.focus(); };
     const focus=ui.continuity(host,doc,()=>host.querySelector('header button'));
     host.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();}else ui.trap(event,host,doc);});
-    async function act(action) { if (readBusy) return; error=''; readBusy=true; render(); try { await action(); } catch(e) { error=controller?.snapshot().pending ? 'The result is not known. Payment controls are paused. Retry this exact request; do not start a replacement.' : refusalCopy(e) || 'This action could not be completed. Refresh or sign in again.'; } finally { readBusy=false; render(); } }
+    async function act(action) { if (readBusy) return; error=''; readBusy=true; render(); try { await action(); } catch(e) { if(e?.serverCode==='BPAY_NEXT_ENVIRONMENT_MISMATCH'){capabilities=null;capabilityError='Banking environment is unavailable or mismatched. Re-check before continuing.';} error=controller?.snapshot().pending ? 'The result is not known. Payment controls are paused. Retry this exact request; do not start a replacement.' : refusalCopy(e) || 'This action could not be completed. Refresh or sign in again.'; } finally { readBusy=false; render(); } }
+    async function loadCapabilities(){capabilities=null;capabilityError='';try{capabilities=await transport.capabilities();}catch{capabilityError='Banking capabilities are unavailable. Re-check before continuing.';}}
     function refusalCopy(e){
+      if(e?.serverCode==='BPAY_NEXT_ENVIRONMENT_MISMATCH')return 'Banking environment does not match this request. Nothing was accepted. Re-check before continuing.';
       if(e?.refusal?.phase==='BEFORE_ACCEPTANCE'){
         const copy={EARLIER_ECONOMIC_PENDING:'An earlier financial command must finish before preparation can be accepted.',QUERY_UNAVAILABLE:'The Source Query check is unavailable. Preparation was not accepted.',QUERY_BLOCKED:'A Source Query blocks this selection. Preparation was not accepted.',QUERY_BUSY:'The Source Query check is busy. Preparation was not accepted.',INPUT_UNAVAILABLE:'A selected preparation input is unavailable. Preparation was not accepted.',SELECTION_INCOMPLETE:'Complete the selection before preparing.',ORIGIN_UNAVAILABLE:'An original payment or source obligation cannot be proved. Preparation was not accepted.',TRANSACTION_NOT_FRESH:'The preparation transaction could not accept a new command.'};return copy[e.refusal.reason];
       }
@@ -523,12 +536,18 @@
       if (!controller || !host.isConnected) return;
       const focusToken=focus.before();
       win.clearTimeout(progressTimer);
-      const s=controller.snapshot(),locked=readBusy||s.busy||s.pending!==null||(typeof options.ownerReady==='function'&&options.ownerReady()!==true);
+      const s=controller.snapshot(),locked=!capabilities?.environment_ready||readBusy||s.busy||s.pending!==null||(typeof options.ownerReady==='function'&&options.ownerReady()!==true);
       const header=el('header');header.append(el('h2','Banking Pay NEXT'),button('Close',close,false,true));
-      const body=el('div',undefined,'bpay-next-body');body.append(el('p','One selection produces separately addressable PAYE / Umbrella frozen Drafts. PAYE CSV and original advice are supported; Umbrella execution is not implemented in this thin view.'),el('p','Unsubmitted checkbox choices are not saved on Close; accepted selection and uncertain requests are retained.'));
+      const body=el('div',undefined,'bpay-next-body');
+      if(capabilities?.test_mode)body.append(el('p','TEST MODE — no bank, provider or email action.','bpay-next-alert'));
+      if(capabilityError||!capabilities?.environment_ready){const banner=el('p',capabilityError||'Payments are blocked because the Banking environment is unavailable or does not match this screen.','bpay-next-alert');banner.setAttribute('role','alert');body.append(banner);}
+      else body.append(el('p','Banking environment: '+capabilities.worker_environment+'.'));
+      body.append(button('Re-check Banking capabilities',loadCapabilities,readBusy||s.busy));
+      body.append(el('p','Name check (Confirmation of Payee) is unavailable. Provider execution is disabled; funding availability is not verified.'));
+      body.append(el('p','One selection produces separately addressable PAYE / Umbrella frozen Drafts. PAYE CSV and original advice are supported; Umbrella execution is not implemented in this thin view.'),el('p','Unsubmitted checkbox choices are not saved on Close; accepted selection and uncertain requests are retained.'));
       if(typeof options.ownerReady==='function'&&options.ownerReady()!==true)body.append(el('p','Banking ownership is unavailable or paused. Money controls are disabled.','bpay-next-alert'));
       if(error) {const a=el('p',error,'bpay-next-alert');a.setAttribute('role','alert');body.append(a);}
-      if(s.pending){body.append(el('p','Uncertain request retained. Conflicting changes are disabled.'),button('Retry exact request',async()=>{const action=s.pending.action;const result=await controller.retry();if(action==='CSV_ISSUE')download(result);if(action==='REVIEW')await applyReview(result);else await refresh();},readBusy||s.busy||(typeof options.ownerReady==='function'&&options.ownerReady()!==true)));}
+      if(s.pending){body.append(el('p','Uncertain request retained. Conflicting changes are disabled.'),button('Retry exact request',async()=>{const action=s.pending.action;const result=await controller.retry();if(action==='CSV_ISSUE')download(result);if(action==='REVIEW')await applyReview(result);else await refresh();},!capabilities?.environment_ready||readBusy||s.busy||(typeof options.ownerReady==='function'&&options.ownerReady()!==true)));}
       body.append(el('p',readBusy||s.busy?'Waiting for server…':'Server-owned amounts; no payment totals calculated here.'));
       if(!s.selection_sealed&&!s.worker_id){body.append(button('Choose Candidate',chooseCandidate,locked||(s.case_pages!=='0'&&!s.case_sealed),true));if(s.case_pages!=='0'&&!s.case_sealed)body.append(el('p','Seal this Candidate’s Case selection before choosing another Candidate.'));}
       if(!s.run_id){
@@ -605,7 +624,7 @@
     win.addEventListener('cloudtms:bpay-next-owner-changed',render);
     doc.addEventListener('visibilitychange',render);
     doc.body.append(host);sheet=Object.freeze({focus:()=>host.focus(),close,controller});render();host.focus();
-    if(controller.snapshot().run_id)void act(refresh);
+    void act(async()=>{await loadCapabilities();if(capabilities?.environment_ready&&controller.snapshot().run_id)await refresh();});
     return sheet;
   }
   async function printAdvice(options,instructionId,win) {
@@ -617,7 +636,7 @@
     const abort=()=>{void reader?.cancel().catch(()=>{});};controller.signal.addEventListener('abort',abort,{once:true});
     try{
       timer=win.setTimeout(()=>controller.abort(),60000);
-      response=await options.authFetch(options.api('/api/banking/pay/next/advice/'+instructionId),{method:'GET',auth401Mode:'return',signal:controller.signal,redirect:'error'});
+      response=await options.authFetch(options.api('/api/banking/pay/next/advice/'+instructionId),{method:'GET',auth401Mode:'return',signal:controller.signal,redirect:'error',headers:{'X-CloudTMS-Banking-Environment':environment(options)}});
       requireActor(options);
       if(!response.ok||!response.body||!/^text\/html(?:;|$)/i.test(response.headers.get('content-type')||'')||response.headers.get('x-bpay-next-advice-template')!=='original-csv-html-v1')fail();
       child.document.open();child.document.write('<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">');
@@ -628,5 +647,5 @@
       const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();child.document.close();dates.formatAdvice(child.document);completed=true;
     }finally{win.clearTimeout(timer);controller.abort();controller.signal.removeEventListener('abort',abort);await reader?.cancel().catch(()=>{});reader?.releaseLock();if(!reader)await response?.body?.cancel().catch(()=>{});if(!completed&&!child.closed){child.document.write('<p style="color:#900">INCOMPLETE: advice could not be loaded. Do not use this as complete payment advice.</p>');child.document.close();}}
   }
-  return Object.freeze({ open, close, createTransport, createController, printAdvice, openCandidateRecord, requestBody, Failure, LIMITS });
+  return Object.freeze({ open, close, createTransport, createController, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, Failure, LIMITS });
 });

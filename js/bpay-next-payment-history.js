@@ -198,7 +198,7 @@ function validateBpayNextHistoryResponse(value, request) {
   function createClient(options) {
     const base=scopeRequest(options.scope);
     validateBpayNextHistoryRequest(base);
-    if(!uuid(options.actorId) || typeof options.currentActorId!=='function' || typeof options.authFetch!=='function') invalidRequest();
+    if(!uuid(options.actorId) || typeof options.currentActorId!=='function' || typeof options.authFetch!=='function' || !['TEST','LIVE'].includes(options.environment??'TEST')) invalidRequest();
     let manifest=null,page=null,request=null,closed=false,busy=false,epoch=0,controller=null;
     function actor() {if(closed || options.currentActorId()!==options.actorId) {close();fail('BPAY_NEXT_HISTORY_ACTOR_CHANGED',401);} }
     function close(){closed=true;epoch++;controller?.abort();page=null;manifest=null;request=null;}
@@ -210,7 +210,7 @@ function validateBpayNextHistoryResponse(value, request) {
         const timed=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new HistoryError('BPAY_NEXT_HISTORY_DEPENDENCY_TIMEOUT',503));},12000);});
         const invoke=async()=>{
           const response=await options.authFetch(String(options.api).replace(/\/+$/,'')+'/api/banking/pay/next/history-page',{
-            method:'POST',headers:{'content-type':'application/json','accept':'application/json'},body:JSON.stringify(call),signal:controller.signal,auth401Mode:'return'
+            method:'POST',headers:{'content-type':'application/json','accept':'application/json','X-CloudTMS-Banking-Environment':options.environment??'TEST'},body:JSON.stringify(call),signal:controller.signal,auth401Mode:'return'
           });
           const result=await boundedReply(response,controller.signal);
           if(!response.ok || !exact(result,['ok','page']) || result.ok!==true) {
