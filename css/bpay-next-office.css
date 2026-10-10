@@ -63,3 +63,14 @@
 #modal.ctms-modern-modal.ctms-kind-banking-pay-history #modalTabs button,
 #modal.ctms-modern-modal.ctms-kind-banking-pay-history #modalTabs button.active,
 #modal.ctms-modern-modal.ctms-kind-banking-pay-history #modalTabs button:hover:not(.disabled) {color:var(--next-button-text);background:var(--next-button);border-color:var(--next-button-line);}
+
+/* WB13 bounded issue-list view, within the existing Office sheet. */
+.bpay-next-issue-lists {margin-bottom:20px;border-bottom:1px solid var(--next-line);padding-bottom:12px;}
+.bpay-next-issue-lists [role=tablist] {display:flex;gap:4px;flex-wrap:wrap;}
+.bpay-next-issue-lists [aria-selected=true] {outline:2px solid var(--next-focus);outline-offset:-2px;}
+.bpay-next-issue-table {overflow:auto;max-height:45vh;min-height:120px;overscroll-behavior:contain;}
+.bpay-next-issue-table table {min-width:750px;}
+.bpay-next-issue-table small {display:block;}
+.bpay-next-issue-table tr:focus-visible {outline:3px solid var(--next-focus);outline-offset:-3px;}
+.bpay-next-issue-lists form {display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.bpay-next-issue-lists [hidden] {display:none!important;}

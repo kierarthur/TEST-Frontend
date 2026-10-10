@@ -539,12 +539,19 @@ function field(v,type){
     const el = (tag, text, className) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; };
     const button = (text, action, disabled = false, direct = false, focusKey = text) => { const b = el('button',text); b.setAttribute('data-next-focus-key','action:'+focusKey); b.type='button'; b.disabled=disabled; b.addEventListener('click', () => { if(direct)action();else void act(action); }); return b; };
     const input = (label, type, value) => { const wrap = el('label', label); const n = el('input'); n.type=type; n.setAttribute('data-next-focus-key','input:'+label); n.value=value || ''; wrap.append(n); return [wrap,n]; };
-    let dateInput, netInput, resumeInput;
-    const close = () => { if(!host.isConnected)return;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);host.remove();sheet=null;if(previousFocus?.isConnected)previousFocus.focus(); };
+    let dateInput, netInput, resumeInput,issueLists=null,issueReadAvailable=false;
+    const issueHost=el('div');
+    const close = () => { if(!host.isConnected)return;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);issueLists?.close();host.remove();sheet=null;if(previousFocus?.isConnected)previousFocus.focus(); };
     const focus=ui.continuity(host,doc,()=>host.querySelector('header button'));
     host.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();}else ui.trap(event,host,doc);});
     async function act(action) { if (readBusy) return; error=''; readBusy=true; render(); try { await action(); } catch(e) { if(e?.serverCode==='BPAY_NEXT_ENVIRONMENT_MISMATCH'){capabilities=null;capabilityError='Banking environment is unavailable or mismatched. Re-check before continuing.';} error=controller?.snapshot().pending ? 'The result is not known. Payment controls are paused. Retry this exact request; do not start a replacement.' : refusalCopy(e) || 'This action could not be completed. Refresh or sign in again.'; } finally { readBusy=false; render(); } }
-    async function loadCapabilities(){capabilities=null;capabilityError='';try{capabilities=await transport.capabilities();}catch{capabilityError='Banking capabilities are unavailable. Re-check before continuing.';}}
+    async function loadCapabilities(){capabilities=null;capabilityError='';try{capabilities=await transport.capabilities();
+      if(capabilities.environment_ready&&!issueLists){
+        if(!win.CloudTMSBpayNextWorkbench||typeof options.openWorkbenchIssue!=='function')throw new Failure('SCHEMA_UNAVAILABLE');
+        issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:issueHost,
+          openIssue:options.openWorkbenchIssue,onAvailability:value=>{issueReadAvailable=value.available;if(host.isConnected)render();}});
+      }
+    }catch{capabilityError='Banking capabilities are unavailable. Re-check before continuing.';issueReadAvailable=false;}}
     function refusalCopy(e){
       if(e?.serverCode==='BPAY_NEXT_ENVIRONMENT_MISMATCH')return 'Banking environment does not match this request. Nothing was accepted. Re-check before continuing.';
       if(e?.refusal?.phase==='BEFORE_ACCEPTANCE'){
@@ -575,9 +582,10 @@ function field(v,type){
       if (!controller || !host.isConnected) return;
       const focusToken=focus.before();
       win.clearTimeout(progressTimer);
-      const s=controller.snapshot(),locked=!capabilities?.environment_ready||readBusy||s.busy||s.pending!==null||(typeof options.ownerReady==='function'&&options.ownerReady()!==true);
+      const s=controller.snapshot(),locked=!capabilities?.environment_ready||readBusy||s.busy||s.pending!==null||(!s.selection_sealed&&!issueReadAvailable)||(typeof options.ownerReady==='function'&&options.ownerReady()!==true);
       const header=el('header');header.append(el('h2','Banking Pay NEXT'),button('Close',close,false,true));
       const body=el('div',undefined,'bpay-next-body');
+      if(!s.selection_sealed)body.append(issueHost);
       if(capabilities?.test_mode)body.append(el('p','TEST MODE — no bank, provider or email action.','bpay-next-alert'));
       if(capabilityError||!capabilities?.environment_ready){const banner=el('p',capabilityError||'Payments are blocked because the Banking environment is unavailable or does not match this screen.','bpay-next-alert');banner.setAttribute('role','alert');body.append(banner);}
       else body.append(el('p','Banking environment: '+capabilities.worker_environment+'.'));

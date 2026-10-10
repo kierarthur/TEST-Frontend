@@ -7161,6 +7161,15 @@ function renderTopNav(){
                 currentActorId: () => SESSION?.user?.id || null,
                 pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
                 openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
+                openWorkbenchIssue: async (issue) => {
+                  // Current issue evidence before Draft; WB14 supplies its separate decision window.
+                  if (typeof window.CloudTMSBpayNextWorkbench?.openIssueWindow === 'function') {
+                    return window.CloudTMSBpayNextWorkbench.openIssueWindow(issue);
+                  }
+                  window.CloudTMSBpayNextOffice.close();
+                  if (issue.physical_timesheet_id) return openTimesheet({ id: issue.physical_timesheet_id });
+                  return openCandidate({ id: issue.candidate_id });
+                },
                 ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT',
                 onOwnerStale: (code) => ownerClient.invalidate(code)
               });
