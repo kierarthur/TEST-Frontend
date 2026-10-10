@@ -378,7 +378,21 @@ const ROWS=Object.freeze({
     "group_amount": "decimal?",
     "ready_net_add_amount": "decimal?",
     "gross_deduction_balance": "decimal?",
-    "net_deduction_balance": "decimal?"
+    "net_deduction_balance": "decimal?",
+    "presentation_id": "uuid",
+    "parent_group_key": "groupKey",
+    "case_component_id": "uuid?",
+    "payment_label": "text",
+    "timesheet_reference": "text?",
+    "waiting_amount": "decimal?",
+    "waiting_net_add_amount": "decimal?",
+    "accepted_run_id": "uuid?",
+    "accepted_command_id": "uuid?",
+    "accepted_module_epoch": "positive?",
+    "snooze_until_date": "date?",
+    "eligible_from_date": "date?",
+    "pay_hold_reason": "text?",
+    "reason_priority": "small"
   }
 });
 const SCOPE=Object.freeze(Object.fromEntries(Object.entries(COMMON).filter(([k])=>!['after','limit'].includes(k))));
@@ -388,7 +402,7 @@ const FAILURE_CODES=['BPAY_NEXT_MODULE_NOT_ACTIVE','BPAY_NEXT_WORKBENCH_FORBIDDE
 const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&[Object.prototype,null].includes(Object.getPrototypeOf(v));
 function exact(v,keys){return record(v)&&Reflect.ownKeys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k)&&Object.getOwnPropertyDescriptor(v,k)?.enumerable===true&&Object.hasOwn(Object.getOwnPropertyDescriptor(v,k),'value'));}
 const same=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,n)=>same(v,b[n])))||(record(a)&&record(b)&&exact(a,Object.keys(b))&&Object.keys(a).every(k=>same(a[k],b[k])));
-const enums={kind:KINDS,scopeChannel:['ALL','PAYE','UMBRELLA'],channel:['PAYE','UMBRELLA'],scopeSection:['ALL','READY','ACTION','BLOCKED','WAITING'],section:['READY','ACTION','BLOCKED','WAITING'],sort:['NAME_ASC','NAME_DESC','AMOUNT_ASC','AMOUNT_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','PAYMENT_ASC','PAYMENT_DESC','STATUS_ASC','STATUS_DESC','REASON_ASC','REASON_DESC'],bank:['BANK_DETAILS_MISSING','BANK_DETAILS_CHANGED'],group:['WORK','CASE'],member:['WORK_COMPONENT','WORK_SEGMENT','CASE_COMPONENT','GROUP_EVIDENCE'],portion:['AVAILABLE','RESERVED','RECOVERY','ZERO','EVIDENCE','WITHDRAWN'],direction:['PAYMENT','DEDUCTION','INFORMATIONAL'],stage:['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'],query:['NOT_APPLICABLE','UNAVAILABLE','CLEAR','OPEN'],progress:['CURRENT','PROCESSING','UNAVAILABLE'],adoption:['UNSEEDED','SEEDING','CURRENT','ERROR']};
+const enums={kind:KINDS,scopeChannel:['ALL','PAYE','UMBRELLA'],channel:['PAYE','UMBRELLA'],scopeSection:['ALL','READY','ACTION','BLOCKED','WAITING'],section:['READY','ACTION','BLOCKED','WAITING'],sort:['NAME_ASC','NAME_DESC','AMOUNT_ASC','AMOUNT_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','PAYMENT_ASC','PAYMENT_DESC','STATUS_ASC','STATUS_DESC','REASON_ASC','REASON_DESC','CLIENT_ASC','CLIENT_DESC','CHANNEL_ASC','CHANNEL_DESC'],bank:['BANK_DETAILS_MISSING','BANK_DETAILS_CHANGED'],group:['WORK','CASE','ROW'],member:['WORK_COMPONENT','WORK_SEGMENT','CASE_COMPONENT','GROUP_EVIDENCE'],portion:['AVAILABLE','RESERVED','RECOVERY','ZERO','EVIDENCE','WITHDRAWN'],direction:['PAYMENT','DEDUCTION','INFORMATIONAL'],stage:['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'],query:['NOT_APPLICABLE','UNAVAILABLE','CLEAR','OPEN'],progress:['CURRENT','PROCESSING','UNAVAILABLE'],adoption:['UNSEEDED','SEEDING','CURRENT','ERROR']};
 function field(v,type){
   if(type.endsWith('?'))return v===null||field(v,type.slice(0,-1));
   if(Object.hasOwn(enums,type))return enums[type].includes(v);
@@ -400,7 +414,7 @@ function field(v,type){
   if(type==='decimal')return typeof v==='string'&&ENCODER.encode(v).byteLength<=BPAY_NEXT_WORKBENCH_LIMITS.responseBytes&&/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(v);
   if(type==='text'||type==='search')return typeof v==='string'&&!v.includes('\0')&&ENCODER.encode(v).byteLength<=(type==='search'?800:8192)&&(type!=='search'||([...v].length<=200&&v.trim()===v));
   if(type==='code')return typeof v==='string'&&/^[A-Z][A-Z0-9_]{0,255}$/.test(v);
-  if(type==='groupKey')return typeof v==='string'&&/^(?:WORK|CASE):[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v);
+  if(type==='groupKey')return typeof v==='string'&&/^(?:WORK|CASE|ROW):[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v);
   if(type==='date'){if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v)||v.startsWith('0000'))return false;const d=new Date(`${v}T00:00:00Z`);return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===v;}
   if(type==='countSelection')return exact(v,['mode','candidate_ids'])&&['ALL','NONE'].includes(v.mode)&&Array.isArray(v.candidate_ids)&&v.candidate_ids.every(id=>field(id,'uuid'))&&new Set(v.candidate_ids).size===v.candidate_ids.length&&ENCODER.encode(JSON.stringify(v)).byteLength<=32768;
   if(type==='scope')return shape(v,SCOPE);
@@ -412,14 +426,31 @@ const shape=(v,schema)=>exact(v,Object.keys(schema))&&Object.entries(schema).eve
 function validKey(key,kind,sort){
   if(!Array.isArray(key))return false;
   if(['CANDIDATES','PICK_CANDIDATES'].includes(kind))return sort.startsWith('STATUS_')?key.length===5&&field(key[0],'boolean')&&field(key[1],'boolean')&&field(key[2],'text')&&field(key[3],'text')&&field(key[4],'uuid'):sort.startsWith('DEDUCTIONS_')?key.length===5&&field(key[0],'boolean')&&field(key[1],'text')&&field(key[2],'boolean')&&field(key[3],'text')&&field(key[4],'uuid'):sort.startsWith('AMOUNT_')?key.length===3&&field(key[0],'boolean')&&field(key[1],'decimal')&&field(key[2],'uuid'):key.length===4&&field(key[0],'text')&&field(key[1],'boolean')&&field(key[2],'text')&&field(key[3],'uuid');
-  if(kind==='CANDIDATE_GROUPS')return key.length===4&&field(key[0],'boolean')&&(key[0]?key[1]==='':field(key[1],'date'))&&field(key[2],'group')&&field(key[3],'uuid');
+  if(kind==='CANDIDATE_GROUPS'){
+    if(sort.startsWith('DEDUCTIONS_'))return key.length===3&&field(key[0],'boolean')&&field(key[1],'group')&&field(key[2],'uuid');
+    if(key.length!==4||!field(key[2],'group')||!field(key[3],'uuid'))return false;
+    if(sort.startsWith('REASON_'))return field(key[0],'small')&&field(key[1],'code');
+    if(!field(key[0],'boolean'))return false;
+    if(sort.startsWith('AMOUNT_'))return field(key[1],'decimal')&&(!key[0]||key[1]==='0');
+    if(sort.startsWith('CLIENT_'))return field(key[1],'text')&&(!key[0]||key[1]==='');
+    if(sort.startsWith('CHANNEL_'))return key[0]?key[1]==='':field(key[1],'channel');
+    return key[0]?key[1]==='':field(key[1],'date');
+  }
   if(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind))return sort.startsWith('REASON_')?key.length===3&&field(key[0],'small')&&field(key[1],'text')&&field(key[2],'uuid'):sort.startsWith('PAYMENT_')?key.length===2&&field(key[0],'text')&&field(key[1],'uuid'):sort.startsWith('AMOUNT_')?key.length===3&&field(key[0],'boolean')&&field(key[1],'decimal')&&field(key[2],'uuid'):key.length===3&&field(key[0],'text')&&field(key[1],'uuid')&&field(key[2],'uuid');
   return kind!=='HEADER'&&key.length===1&&field(key[0],kind==='CANDIDATE_GROUPS'?'groupKey':'uuid');
 }
 function rowKey(kind,scope,row){
   if(['CANDIDATES','PICK_CANDIDATES'].includes(kind)){if(scope.sort.startsWith('STATUS_'))return [row.payable_count==='0',row.bank_warning_code===null,row.bank_warning_code??'',row.candidate_sort_name,row.candidate_id];if(scope.sort.startsWith('DEDUCTIONS_'))return [row.has_deduction,row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];if(scope.sort.startsWith('AMOUNT_'))return [row.unknown_amount_count!=='0',row.amount??'0',row.candidate_id];return [row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];}
   if(kind==='HEADER')return null;
-  if(kind==='CANDIDATE_GROUPS')return [row.week_ending_date===null,row.week_ending_date??'',row.group_kind,row.work_id??row.case_id];
+  if(kind==='CANDIDATE_GROUPS'){
+    const suffix=[row.group_kind,row.presentation_id];
+    if(scope.sort.startsWith('CLIENT_'))return [row.client_display_name===null,row.client_display_name??'',...suffix];
+    if(scope.sort.startsWith('CHANNEL_'))return [row.target_pay_channel===null,row.target_pay_channel??'',...suffix];
+    if(scope.sort.startsWith('DEDUCTIONS_'))return [row.has_deduction,...suffix];
+    if(scope.sort.startsWith('AMOUNT_'))return [row.group_amount===null,row.group_amount??'0',...suffix];
+    if(scope.sort.startsWith('REASON_'))return [row.reason_priority,row.reason_code,...suffix];
+    return [row.week_ending_date===null,row.week_ending_date??'',...suffix];
+  }
   if(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)){if(scope.sort.startsWith('REASON_'))return [row.reason_priority,row.reason_code,row.item_id];if(scope.sort.startsWith('PAYMENT_'))return [row.timesheet_reference??'',row.item_id];if(scope.sort.startsWith('AMOUNT_'))return [row.nominal_source_ex_vat===null,row.nominal_source_ex_vat??'0',row.item_id];return [row.candidate_display_name??'',row.candidate_id,row.item_id];}
   return [kind==='PICK_CLIENTS'?row.client_id:row.item_id];
 }
@@ -433,10 +464,11 @@ function normalizeWorkbenchInput(kind,input={}){
   const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,count_selection:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
   for(const k of ['candidate_id','client_id','item_id'])if(typeof args[k]==='string')args[k]=args[k].toLowerCase();
   if(args.count_selection!==null&&(kind!=='HEADER'||args.section!=='READY')||kind!=='CANDIDATES'&&String(args.sort).startsWith('STATUS_'))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
-  if(!shape(args,COMMON)||(kind==='CANDIDATE_GROUPS'&&args.limit>10)||(!['CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort!=='NAME_ASC')||(!['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort.startsWith('REASON_'))||(kind==='CANDIDATES'&&args.sort.startsWith('PAYMENT_'))||(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort.startsWith('DEDUCTIONS_'))
+  if(!shape(args,COMMON)||(kind==='CANDIDATE_GROUPS'&&args.limit>10)||(!['CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort!=='NAME_ASC')||(!['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort.startsWith('REASON_'))||(kind==='CANDIDATES'&&args.sort.startsWith('PAYMENT_'))||(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort.startsWith('DEDUCTIONS_'))
     ||(['CANDIDATE_GROUPS','GROUP_LINES'].includes(kind)&&args.candidate_id===null)||(['GROUP_LINES','ISSUE_DETAIL'].includes(kind)&&args.group_key===null)||(kind==='ISSUE_DETAIL'&&args.reason_code===null)
-    ||(!['GROUP_LINES','ISSUE_DETAIL'].includes(kind)&&[args.group_key,args.item_id,args.reason_code].some(v=>v!==null))
+    ||(!['GROUP_LINES','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&[args.group_key,args.item_id,args.reason_code].some(v=>v!==null)||kind==='CANDIDATE_GROUPS'&&[args.item_id,args.reason_code].some(v=>v!==null))
     ||(!['CANDIDATES','PICK_CANDIDATES','PICK_CLIENTS','ACTION_REQUIRED','BLOCKED','EXPORT_ROWS'].includes(kind)&&args.search!=='')||(kind==='HEADER'&&args.after!==null))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
+  if((args.sort.startsWith('CLIENT_')||args.sort.startsWith('CHANNEL_'))&&kind!=='CANDIDATE_GROUPS'||kind==='CANDIDATE_GROUPS'&&args.sort==='NAME_DESC'||args.group_key?.startsWith('ROW:')&&!['GROUP_LINES','CANDIDATE_GROUPS'].includes(kind))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
   if(kind==='CANDIDATES')args.section='READY';else if(kind==='ACTION_REQUIRED')args.section='ACTION';else if(kind==='BLOCKED')args.section='BLOCKED';
   if(kind==='PICK_CANDIDATES'&&args.sort!=='NAME_ASC')throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
   const scope=Object.fromEntries(Object.keys(SCOPE).map(k=>[k,args[k]]));
@@ -459,11 +491,14 @@ function validateWorkbenchResponse(payload,kind,args,actorId=null){
   let prior=args.after?.key??null,last=null;const seen=new Set();
   for(const row of payload.rows){if(!shape(row,ROWS[kind]))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');const key=rowKey(kind,scope,row);
     if(key!==null){if(!validKey(key,kind,scope.sort)||(prior!==null&&keyCompare(prior,key,kind,scope.sort)>=0)||seen.has(JSON.stringify(key)))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');seen.add(JSON.stringify(key));prior=key;last=key;}
-    if(args.candidate_id!==null&&Object.hasOwn(row,'candidate_id')&&row.candidate_id!==args.candidate_id||args.client_id!==null&&Object.hasOwn(row,'client_id')&&row.client_id!==args.client_id||args.group_key!==null&&row.group_key!==args.group_key||args.item_id!==null&&row.item_id!==args.item_id||args.reason_code!==null&&row.reason_code!==args.reason_code)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+    if(args.candidate_id!==null&&Object.hasOwn(row,'candidate_id')&&row.candidate_id!==args.candidate_id||args.client_id!==null&&Object.hasOwn(row,'client_id')&&row.client_id!==args.client_id||kind!=='CANDIDATE_GROUPS'&&args.group_key!==null&&row.group_key!==args.group_key||args.item_id!==null&&row.item_id!==args.item_id||args.reason_code!==null&&row.reason_code!==args.reason_code)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(Object.hasOwn(row,'section')&&scope.section!=='ALL'&&row.section!==scope.section||Object.hasOwn(row,'target_pay_channel')&&scope.channel!=='ALL'&&row.target_pay_channel!==scope.channel)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(Object.hasOwn(row,'amount_known')&&row.amount_known===false&&row.nominal_source_ex_vat!==null)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(Object.hasOwn(row,'amount_known')&&row.selectable===true&&(row.section!=='READY'||row.amount_known!==true||!['AVAILABLE','ZERO'].includes(row.portion_kind)))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
-    if(Object.hasOwn(row,'group_key')){if(!field(row.group_key,'groupKey')||(row.work_id!==null)===(row.case_id!==null)||row.group_key!==(row.work_id!==null?'WORK:'+row.work_id:'CASE:'+row.case_id))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
+    if(Object.hasOwn(row,'group_key')){if(!field(row.group_key,'groupKey')||(row.work_id!==null)===(row.case_id!==null)||row.group_key!==(row.work_id!==null?'WORK:'+row.work_id:row.group_key.startsWith('ROW:')?'ROW:'+row.case_component_id:'CASE:'+row.case_id))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
+    if(kind==='CANDIDATE_GROUPS'){
+      if(row.group_key!==row.group_kind+':'+row.presentation_id||row.parent_group_key!==(row.work_id!==null?'WORK:'+row.work_id:'CASE:'+row.case_id)||(row.group_kind==='ROW')!==(row.case_component_id!==null)||row.group_kind==='ROW'&&row.presentation_id!==row.case_component_id||(row.accepted_run_id===null)!==(row.accepted_command_id===null)||(row.accepted_run_id===null)!==(row.accepted_module_epoch===null)||['ready_net_add_amount','gross_deduction_balance','net_deduction_balance','waiting_amount','waiting_net_add_amount'].some(k=>(row[k]===null)!==(row.group_amount===null)))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+    }
     if(kind==='CANDIDATE_GROUPS'&&row.selectable&&(!row.complete||row.dirty||row.progress_state!=='CURRENT'))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(kind==='HEADER'){
       const counted=args.count_selection!==null;
@@ -703,6 +738,7 @@ function createChoiceStore(options){
   countIntent(){return {mode:state.intent.mode==='ALL_MATCHING'?'ALL':'NONE',candidate_ids:state.intent.candidates.filter(row=>row.selected!==(state.intent.mode==='ALL_MATCHING')).map(row=>row.candidate_id)};},
   candidateSelected(id){const row=state.intent.candidates.find(row=>row.candidate_id===id);return row?.selected??state.intent.mode==='ALL_MATCHING';},
   chooseCandidate(id,selected){if(!field(id,'uuid')||typeof selected!=='boolean')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');const intent=clone(state.intent);intent.candidates=intent.candidates.filter(row=>row.candidate_id!==id);if(intent.mode==='NONE'||!selected)intent.candidates.push({candidate_id:id,selected});change(intent);},
+  includeCandidatePayments(id){if(!field(id,'uuid'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');const intent=clone(state.intent);for(const kind of ['works','components','cases'])intent[kind]=intent[kind].filter(row=>row.candidate_id!==id);intent.candidates=intent.candidates.filter(row=>row.candidate_id!==id);if(intent.mode==='NONE')intent.candidates.push({candidate_id:id,selected:true});change(intent);},
   chooseWork:row=>put('works',row),chooseComponent:row=>put('components',row),chooseCase:row=>put('cases',row),
   setMode(mode){if(!['ALL_MATCHING','NONE'].includes(mode))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');change({...empty(),mode});},
   freeze(context){if(!shape(context,CONTEXT)||JSON.stringify({agency_id:context.agency_id,owner_epoch:context.owner_epoch,actor_user_id:context.actor_user_id,official_pay_date:context.official_pay_date,scope:{candidate_id:context.scope.candidate_id,client_id:context.scope.client_id,channel:context.scope.channel}})!==JSON.stringify(namespace))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);const intent=clone(state.intent),excluded=new Set(intent.candidates.filter(row=>!row.selected).map(row=>row.candidate_id));for(const kind of ['works','components','cases'])intent[kind]=intent[kind].filter(row=>!excluded.has(row.candidate_id));return immutable(clone({namespace,intent,revision:state.revision,workbench_revision:context.workbench_revision,adoption_revision:context.adoption_revision}));},
@@ -728,7 +764,7 @@ function mountReadyCandidates(options){
  function selectionLabel(){const v=intent();return v.mode==='ALL'?'All except '+v.candidate_ids.length:v.candidate_ids.length===0?'None':v.candidate_ids.length+' chosen';}
  function notify(){try{options.onAvailability?.({available:Boolean(coherent()),context});}catch{}}
  function choose(row,value){if(!coherent()||row.payable_count==='0')return;const v=intent(),next=new Set(v.candidate_ids);if(value===(v.mode==='ALL'))next.delete(row.candidate_id);else next.add(row.candidate_id);const proposed={mode:v.mode,candidate_ids:[...next]},args=normalizeWorkbenchInput('HEADER',{...scope,section:'READY',count_selection:proposed}),query=new URLSearchParams({kind:'HEADER'});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection'].includes(key)?JSON.stringify(value):String(value));if(!field(proposed,'countSelection')||ENCODER.encode(query.toString()).byteLength>32768){selectionError='Too many choices to count; clear some choices and try again.';render();return;}try{choiceStore.chooseCandidate(row.candidate_id,value);selectionError='';options.onSelection?.(Object.freeze(intent()));}catch{selectionError='Too many choices; clear some choices and try again.';}render();}
- function open(row){if(!coherent())return;Promise.resolve(options.openCandidate(Object.freeze({candidate_id:row.candidate_id,context,scope:{...scope}}))).catch(()=>{if(current()){error='Could not open this Candidate; try again.';render();}});}
+ function open(row){if(!coherent())return;Promise.resolve(options.openCandidate(Object.freeze({candidate_id:row.candidate_id,candidate_name:row.candidate_sort_name,candidate_reference:row.tms_ref,context,scope:{...scope}}))).catch(()=>{if(current()){error='Could not open this Candidate; try again.';render();}});}
  function pageHeight(page){const ids=new Set(page.rows.map(row=>row.candidate_id));return Array.from(scroller.querySelectorAll('tr[data-candidate-id]')).filter(n=>ids.has(n.dataset.candidateId)).reduce((sum,n)=>sum+n.getBoundingClientRect().height,0);}
  function render(){
   const focus=ui.capture(root,doc),available=coherent(),table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),thead=el('thead'),trHead=el('tr'),tbody=el('tbody');
@@ -848,6 +884,74 @@ function issueActions(row,options){
  return actions;
 }
 function mountIssueLists(options){return mountIssueView(options);}
+function openCandidateWindow(options,address){
+ if(!record(options)||typeof options.showReadWindow!=='function'||!record(address)||!field(address.candidate_id,'uuid')||!shape(address.context,CONTEXT)||!field(address.candidate_name,'text?')||!field(address.candidate_reference,'text?')||!options.choiceStore||!exact(address.scope,['candidate_id','client_id','channel']))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
+ const doc=options.document??options.host.ownerDocument,win=doc.defaultView,client=options.client??createWorkbenchClient(options),ui=win.CloudTMSBpayNextUi,previous=doc.activeElement,store=options.choiceStore;
+ const namespace=store.namespace;
+ if(namespace.agency_id!==address.context.agency_id||namespace.owner_epoch!==address.context.owner_epoch||namespace.actor_user_id!==address.context.actor_user_id||namespace.official_pay_date!==address.context.official_pay_date||!same(namespace.scope,address.scope))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+ const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+ const button=(text,fn)=>{const b=el('button',text,'btn');b.type='button';b.addEventListener('click',fn);return b;};
+ const root=el('section',undefined,'bpay-next-candidate-window'),identity=el('p',address.candidate_name??'Candidate','bpay-next-candidate-identity'),strip=el('div',undefined,'bpay-next-candidate-strip'),facts=el('div'),tabs=el('div',undefined,'bpay-next-workbench-tabs'),mobile=el('label','Sort by','bpay-next-candidate-mobile-sort'),select=el('select'),scroller=el('div',undefined,'ctms-universal-table-host bpay-next-candidate-scroll'),status=el('p'),foot=el('p','', 'bpay-next-candidate-foot'),footer=el('div',undefined,'bpay-next-window-actions');
+ if(address.candidate_reference!==null)identity.append(el('span',' · TMS '+address.candidate_reference));
+ let frame,closed=false,generation=0,busy=false,error='',notice='',section='READY',sort='PAYMENT_DESC',pages=[],history=[],context=null,headers=null,anchorKey=null,highlight=null,opening=true,pending={direction:'reset',after:null,anchor:null};
+ const scope={candidate_id:address.candidate_id,client_id:address.scope.client_id,channel:address.scope.channel};
+ const current=()=>{try{return !closed&&frame?.alive()===true&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}};
+ const usable=()=>current()&&!busy&&!error&&context&&headers;
+ const interactive=()=>usable()&&frame.active();
+ const refresh=button('Refresh',()=>{if(current()&&frame.active()&&!busy)void read('refresh',null,captureAnchor());}),include=button('Include all eligible payments',()=>{if(!interactive()||headers.READY.payable_count==='0')return;try{store.includeCandidatePayments(address.candidate_id);options.onSelection?.();notice='All eligible payments are included.';render();}catch{error='Too many choices; clear some choices and try again.';render();}}),retry=button('Try again',()=>{if(current()&&frame.active()&&!busy)void read(pending.direction,pending.after,pending.anchor);});
+ refresh.setAttribute('data-next-focus-key','candidate-refresh');include.setAttribute('data-next-focus-key','candidate-include');include.classList.add('primary');strip.append(facts,refresh);footer.append(include);mobile.append(select);scroller.tabIndex=0;scroller.setAttribute('role','region');scroller.setAttribute('aria-label','Candidate payments');status.setAttribute('role','status');status.setAttribute('data-next-live-copy','');foot.setAttribute('data-next-live-copy','');root.append(strip,tabs,mobile,scroller,status,retry,foot);
+ const sectionLabels={READY:'Ready',WAITING:'Waiting',ACTION:'Action required',BLOCKED:'Blocked'},tabButtons=new Map();tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Candidate payments');
+ for(const [key,label] of Object.entries(sectionLabels)){const b=button(label,()=>{if(!current()||!frame.active()||busy||section===key)return;section=key;sort='PAYMENT_DESC';anchorKey=null;highlight=null;void read('reset',null,null);});b.setAttribute('role','tab');b.setAttribute('data-next-focus-key','candidate-tab:'+key);tabs.append(b);tabButtons.set(key,b);}
+ function columns(){return section==='READY'?[['PAYMENT','Payment'],['CLIENT','Client'],['CHANNEL','Pay channel'],['DEDUCTIONS','Deductions'],['AMOUNT','Amount ex VAT']]:[['PAYMENT','Payment'],['CLIENT','Client'],['REASON',section==='WAITING'?'Why it is waiting':section==='BLOCKED'?'Why it is blocked':'What needs attention'],['AMOUNT','Amount ex VAT']];}
+ function args(after=null,anchor=anchorKey){return {...scope,section,sort,group_key:anchor,after,limit:10};}
+ function captureAnchor(){const rows=Array.from(scroller.querySelectorAll('tr[data-presentation-key]')),top=scroller.getBoundingClientRect().top,row=rows.find(n=>n.getBoundingClientRect().bottom>top);return row?{key:row.dataset.presentationKey,offset:row.getBoundingClientRect().top-top}:null;}
+ function pageHeight(page){const ids=new Set(page.rows.map(row=>row.group_key));return Array.from(scroller.querySelectorAll('tr[data-presentation-key]')).filter(n=>ids.has(n.dataset.presentationKey)).reduce((sum,n)=>sum+n.getBoundingClientRect().height,0);}
+ function opener(row){if(row.accepted_run_id!==null&&section==='WAITING')return typeof options.openDraft==='function'?()=>options.openDraft({run_id:row.accepted_run_id,command_id:row.accepted_command_id,module_epoch:row.accepted_module_epoch,candidate_id:row.candidate_id,context}):null;if(typeof options.openGroup==='function')return ()=>options.openGroup({...row,context,scope:{...scope},choiceStore:store});if(row.physical_timesheet_id!==null&&typeof options.issueOwners?.timesheet==='function')return ()=>options.issueOwners.timesheet({...row,context});return null;}
+ async function open(row){if(!interactive())return;const fn=opener(row);if(!fn)return;try{await fn();}catch{if(current()){error='Could not open this payment; try again.';render();}}}
+ function render(){
+  const saved=ui.capture(root,doc),available=usable(),active=interactive();facts.replaceChildren(el('small','Ready to pay'));
+  if(headers){const n=el('strong',displayPounds(headers.READY.amount));n.setAttribute('data-next-formatted-money','');facts.append(n);if(headers.READY.ready_net_add_amount!==null&&decimalCompare(headers.READY.ready_net_add_amount,'0')!==0){const net=el('small','Payment addition '+displayPounds(headers.READY.ready_net_add_amount));net.setAttribute('data-next-formatted-money','');facts.append(net);}}
+  for(const [key,b] of tabButtons){b.disabled=busy||!current();b.setAttribute('aria-selected',String(key===section));b.classList.toggle('is-active',key===section);}
+  refresh.disabled=busy||!current();include.hidden=section!=='READY';include.disabled=!active||headers?.READY.payable_count==='0';
+  select.replaceChildren();for(const [key,label] of columns())for(const dir of ['ASC','DESC']){const o=el('option',label+(dir==='ASC'?' ▲':' ▼'));o.value=key+'_'+dir;select.append(o);}select.value=sort;select.disabled=busy||!current();
+  if(busy&&scroller.firstChild){for(const control of scroller.querySelectorAll('button,input,select'))control.disabled=true;scroller.classList.add('bpay-next-stale');status.setAttribute('role','status');status.textContent=pending.direction==='forward'||pending.direction==='back'?'Loading more…':'Loading…';retry.hidden=true;root.setAttribute('aria-busy','true');return;}
+  const table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),thead=el('thead'),heading=el('tr'),tbody=el('tbody');
+  for(const [key,label] of columns()){const th=el('th'),b=button(label+(sort.startsWith(key+'_')?(sort.endsWith('ASC')?' ▲':' ▼'):''),()=>setSort(key+'_'+(sort===key+'_ASC'?'DESC':'ASC')));th.scope='col';b.disabled=busy||!current();b.setAttribute('data-next-focus-key','candidate-heading:'+key);if(sort.startsWith(key+'_'))th.setAttribute('aria-sort',sort.endsWith('ASC')?'ascending':'descending');th.append(b);heading.append(th);}heading.append(el('th','Actions'));thead.append(heading);
+  for(const row of pages.flatMap(page=>page.rows)){
+   const tr=el('tr'),cells=columns().map(([,label])=>{const n=el('td');n.dataset.label=label;return n;}),actions=el('td');actions.dataset.label='Actions';tr.tabIndex=0;tr.dataset.presentationKey=row.group_key;tr.setAttribute('data-next-focus-key','candidate-row:'+row.group_key);tr.setAttribute('aria-selected',String(highlight===row.group_key));
+   cells[0].append(el('strong',row.payment_label+(row.week_ending_date?' · w/e '+row.week_ending_date.split('-').reverse().join('/'):'')));if(row.timesheet_reference)cells[0].append(el('small',row.timesheet_reference));cells[1].textContent=row.client_display_name??'—';
+   const amount=section==='READY'?cells[4]:cells[3];const money=el('strong',displayPounds(row.group_amount));money.setAttribute('data-next-formatted-money','');amount.append(money);amount.className='bpay-next-candidate-money';
+   if(section==='READY'){cells[2].textContent=row.target_pay_channel==='UMBRELLA'?'Umbrella':row.target_pay_channel??'—';cells[3].textContent=row.has_deduction?'Yes':'No';}
+   else{cells[2].textContent=row.accepted_run_id!==null?'In Draft':issueReason(row);if(row.snooze_until_date&&row.reason_code==='SNOOZED')cells[2].textContent='Snoozed until '+row.snooze_until_date.split('-').reverse().join('/');if(row.eligible_from_date&&row.reason_code==='FUTURE_WEEK')cells[2].textContent='Available from '+row.eligible_from_date.split('-').reverse().join('/');if(['RATE_RESOLUTION_REQUIRED','GROSS_RESOLUTION_REQUIRED'].includes(row.reason_code)&&row.source_pay_channel)amount.append(el('small',(row.source_pay_channel==='UMBRELLA'?'Umbrella':'PAYE')+', as authorised'));}
+   const fn=opener(row);if(fn){const label=row.accepted_run_id!==null&&section==='WAITING'?'Open Draft':row.physical_timesheet_id!==null?'Open Timesheet':'Open',b=button(label,event=>{event.stopPropagation();void open(row);});b.disabled=!active;b.setAttribute('data-next-focus-key','candidate-open:'+row.group_key);actions.append(b);if(label!=='Open'){const phone=button('Open',event=>{event.stopPropagation();void open(row);});phone.className='btn bpay-next-candidate-phone-open';phone.disabled=!active;actions.append(phone);b.classList.add('bpay-next-candidate-desktop-open');}}
+   const highlightRow=()=>{if(!interactive())return;highlight=row.group_key;for(const node of tbody.children)node.setAttribute('aria-selected',String(node===tr));tr.focus({preventScroll:true});};tr.addEventListener('click',event=>{if(!event.target.closest('button,input,a'))highlightRow();});tr.addEventListener('dblclick',event=>{if(!event.target.closest('button,input,a'))void open(row);});tr.addEventListener('keydown',event=>{if(event.target!==tr||!interactive())return;if(event.key==='Enter'){event.preventDefault();void open(row);}else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const nodes=Array.from(tbody.children),i=nodes.indexOf(tr),at=event.key==='Home'?0:event.key==='End'?nodes.length-1:Math.max(0,Math.min(nodes.length-1,i+(event.key==='ArrowDown'?1:-1)));nodes[at]?.focus();}});tr.append(...cells,actions);tbody.append(tr);
+  }
+  table.append(thead,tbody);scroller.replaceChildren(table);scroller.classList.toggle('bpay-next-stale',!available);if(available&&!pages.some(page=>page.rows.length))scroller.append(el('p',section==='READY'?'No payments are ready.':section==='WAITING'?'No payments are waiting.':section==='BLOCKED'?'No payments are blocked.':'No payments need a decision.'));
+  status.setAttribute('role',error?'alert':'status');status.textContent=error||(busy?(pending.direction==='forward'||pending.direction==='back'?'Loading more…':'Loading…'):notice);retry.hidden=!error;root.setAttribute('aria-busy',String(busy));foot.textContent=available?'Sorted by '+(columns().find(([key])=>sort.startsWith(key+'_'))?.[1]??'Payment')+(sort.endsWith('ASC')?', ascending':', descending'):'';if(saved&&current()&&root.isConnected)ui.restore(root,saved,scroller);
+ }
+ async function read(direction,after,anchor){
+  if(busy||!current())return;const ticket=++generation,readSection=section,readSort=sort,scroll=scroller.scrollTop;let adjustment=0,newAnchor=direction==='refresh'?anchor?.key??null:['reset','restart'].includes(direction)?null:anchorKey;const request={...scope,section:readSection,sort:readSort,group_key:newAnchor,after,limit:10};busy=true;error='';notice='';pending={direction,after,anchor};render();
+  try{
+   let page;try{page=await client.loadWorkbenchPage('CANDIDATE_GROUPS',request);}catch(e){if(direction!=='refresh'||!newAnchor||e?.code!=='BPAY_NEXT_WORKBENCH_CURSOR_STALE'||ticket!==generation||!current())throw e;newAnchor=null;request.group_key=null;page=await client.loadWorkbenchPage('CANDIDATE_GROUPS',request);notice='That payment moved; showing the first payments.';}
+   if(ticket!==generation||!current())return;validateWorkbenchResponse(page,'CANDIDATE_GROUPS',normalizeWorkbenchInput('CANDIDATE_GROUPS',request),options.actorId.toLowerCase());
+   let nextHeaders=headers;if(direction==='reset'||direction==='restart'||direction==='refresh'||!headers){const values=await Promise.all(Object.keys(sectionLabels).map(value=>client.loadWorkbenchPage('HEADER',{...scope,section:value})));if(ticket!==generation||!current())return;nextHeaders={};for(let i=0;i<values.length;i++){const key=Object.keys(sectionLabels)[i],value=values[i];validateWorkbenchResponse(value,'HEADER',normalizeWorkbenchInput('HEADER',{...scope,section:key}),options.actorId.toLowerCase());if(!sameWorkbenchRevision(page.context,value.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);nextHeaders[key]=value.rows[0];}}
+   if(direction!=='refresh'&&((context&&!sameWorkbenchRevision(context,page.context))||(opening&&!sameWorkbenchRevision(address.context,page.context))))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+   if(namespace.agency_id!==page.context.agency_id||namespace.owner_epoch!==page.context.owner_epoch||namespace.actor_user_id!==page.context.actor_user_id||namespace.official_pay_date!==page.context.official_pay_date)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+   if(!sameWorkbenchRevision(address.context,page.context))options.onChanged?.();opening=false;context=page.context;headers=nextHeaders;anchorKey=newAnchor;const block={after,next:page.next_cursor,rows:page.rows};
+   if(['reset','restart','refresh'].includes(direction)){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
+  }catch(e){if(ticket===generation&&current())error=e?.reloadRequired?'Payments changed; refresh to continue.':'Could not load payments; try again.';}
+  finally{if(ticket===generation&&current()){busy=false;render();if(!error){if(direction==='back')adjustment=pageHeight(pages[0]);if(direction==='refresh'){const node=Array.from(scroller.querySelectorAll('tr[data-presentation-key]')).find(n=>n.dataset.presentationKey===anchor?.key);scroller.scrollTop=node?Math.max(0,node.getBoundingClientRect().top-scroller.getBoundingClientRect().top+scroller.scrollTop-(anchor?.offset??0)):0;}else scroller.scrollTop=['reset','restart'].includes(direction)?0:Math.max(0,scroll+adjustment);}}}
+ }
+ function setSort(value){if(!current()||!frame.active()||busy||!columns().some(([key])=>value===key+'_ASC'||value===key+'_DESC'))return;sort=value;highlight=null;void read('reset',null,null);}
+ select.addEventListener('change',()=>setSort(select.value));let lastScroll=0,touchY=null;
+ const restartEarlier=()=>{if(interactive()&&!error&&anchorKey&&history.length===0&&scroller.scrollTop<40){void read('restart',null,null);return true;}return false;};
+ scroller.addEventListener('wheel',event=>{if(event.deltaY<0&&restartEarlier())event.preventDefault();},{passive:false});scroller.addEventListener('touchstart',event=>{touchY=event.touches[0]?.clientY??null;},{passive:true});scroller.addEventListener('touchmove',event=>{const y=event.touches[0]?.clientY??null;if(y!==null&&touchY!==null&&y>touchY&&restartEarlier())touchY=null;else touchY=y;},{passive:true});scroller.addEventListener('keydown',event=>{if(['Home','ArrowUp','PageUp'].includes(event.key)&&restartEarlier())event.preventDefault();});
+ scroller.addEventListener('scroll',()=>{const top=scroller.scrollTop,up=top<lastScroll;lastScroll=top;if(!interactive()||error)return;if(top<40&&history.length){const key=history.at(-1);void read('back',key===null?null:{context,key},null);}else if(up&&restartEarlier())return;else if(pages.at(-1)?.next&&scroller.scrollHeight-top-scroller.clientHeight<120)void read('forward',pages.at(-1).next,null);});
+ const ownerChanged=()=>{if(!current()){generation++;busy=false;error='Sign in again to continue.';render();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
+ frame=options.showReadWindow({title:'Candidate Banking',content:root,footer,canFocus:()=>current(),onMount:()=>{if(current())doc.getElementById('modalTitle')?.append(identity);},onDismiss:()=>{closed=true;generation++;pages=[];win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);win.setTimeout(()=>{if(options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase()&&previous?.isConnected)previous.focus({preventScroll:true});},0);}});render();void read('reset',null,null);
+ return Object.freeze({close:()=>frame.close(),alive:()=>frame.alive(),refresh:()=>current()&&!busy&&read('refresh',null,captureAnchor()),snapshot:()=>Object.freeze({context,section,sort,available:Boolean(usable()),choiceKey:store.key}),setOpenGroup:fn=>{if(typeof fn!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');options.openGroup=fn;if(current())render();}});
+}
+
 function openIssueWindow(options,issue){
  if(!record(options)||typeof options.showReadWindow!=='function'||!record(issue)||!field(issue.item_id,'uuid')||!field(issue.candidate_id,'uuid')||!field(issue.group_key,'groupKey')||!field(issue.reason_code,'code')||!shape(issue.context,CONTEXT)||!['ACTION','BLOCKED'].includes(issue.section))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
  const doc=options.document??options.host.ownerDocument,win=doc.defaultView,previous=doc.activeElement,body=doc.createElement('div'),footer=doc.createElement('div');let frame,view,closed=false,openingContext=issue.context,changed=false;
@@ -859,6 +963,6 @@ function openIssueWindow(options,issue){
 }
 
 
-return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,issueReason,issueAmounts,createChoiceStore});
+return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,openCandidateWindow,issueReason,issueAmounts,createChoiceStore});
 
 });
