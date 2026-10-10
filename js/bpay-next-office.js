@@ -37,8 +37,8 @@
     CSV_ISSUE: { instruction_id: 'uuid', transfer_id: 'uuid' }
   };
   const RECEIPT = {
-    CREATE: { run_id: 'uuid', status: 'run', selection_state: 'selection', selection_count: 'integer', selected_candidate_count: 'integer' },
-    WORK_PAGE: { run_id: 'uuid', page_no: 'positive', item_count: 'positive', selection_count: 'integer', selected_candidate_count: 'integer', replay: 'boolean' },
+    CREATE: { run_id: 'uuid', status: 'run', selection_state: 'selection', selection_count: 'integer', selected_candidate_count: 'integer', official_pay_date: 'date' },
+    WORK_PAGE: { run_id: 'uuid', page_no: 'positive', item_count: 'positive', selection_count: 'integer', selected_candidate_count: 'integer', replay: 'boolean', skipped: 'skipped' },
     CASE_PAGE: { run_id: 'uuid', candidate_id: 'uuid', selection_revision: 'positive', page_no: 'positive', item_count: 'positive', replay: 'boolean' },
     CASE_SEAL: { run_id: 'uuid', candidate_id: 'uuid', selection_revision: 'positive', sealed: 'true', selected_count: 'integer', excluded_count: 'integer', replay: 'boolean' },
     SEAL_ENQUEUE: { run_id: 'uuid', command_id: 'uuid', agency_sequence: 'positive', replay: 'boolean' },
@@ -145,6 +145,9 @@ function validReservation(h,row=null){
   return true;
 }
 function field(v,type){
+    if(type==='skipCode')return ['BPAY_NEXT_WORK_WEEK_NOT_YET_PAYABLE','BPAY_NEXT_SELECTION_ON_HOLD','BPAY_NEXT_SELECTION_SNOOZED'].includes(v);
+    if(type==='skipped')return Array.isArray(v)&&v.length<=LIMITS.page&&v.every(x=>shape(x,{work_id:'uuid',code:'skipCode'}))
+      &&new Set(v.map(x=>x.work_id.toLowerCase())).size===v.length;
     const reservationEnums={"reservationMode":["UNCONFIRMED","PENDING_PREPARATION","PENDING_NET","ORIGINAL_OBLIGATION","ORIGINAL_LEGS","CANCELLING","CANCELLED","EVIDENCE_CONFLICT"],"reservationState":["EVIDENCE_CONFLICT","SUPPRESSED_UNCONFIRMED","PENDING","INCLUDED_IN_ORIGINAL_OBLIGATION","PAGED_ORIGINAL_LEGS","REISSUE_EXCLUDED","CANCELLING","CANCELLED","RESERVED","ISSUED_AWAITING_RECEIPT","EXECUTION_UNCERTAIN","EXECUTED_PENDING_POSTING","POSTED","RETURNED","INTERNAL_RESERVED","INTERNAL_PENDING_POSTING","CLOSED_INTERNAL"],"reservationHolds":["ACTIVE","NONE","RELEASING","POSTING"]};
     if(Object.hasOwn(reservationEnums,type))return reservationEnums[type].includes(v);
     const acceptedEnums={acceptedCaseScope:['NO_CASE','SEALED_SELECTION'],settingsWitness:['BASELINE_AT_ACCEPTANCE','ORDERED_VERSION'],
@@ -221,6 +224,7 @@ function field(v,type){
   const financial = action => ['PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
   function requestBody(action, args) {
     let schema = INPUT[action];
+    if (action === 'CREATE' && !Object.hasOwn(args || {}, 'pay_date')) schema = {run_id:'uuid'};
     if (action === 'PAYE_NET' && Object.hasOwn(args || {}, 'expected_projection_revision')) schema = { ...schema, expected_projection_revision: 'projectionRevision' };
     if (action === 'CANCEL_REQUEST' && (Object.hasOwn(args || {}, 'run_id') || Object.hasOwn(args || {}, 'pay_channel'))) schema = {...schema,run_id:'uuid',pay_channel:'channel'};
     if (!schema || !shape(args, schema) || (action === 'CASE_PAGE' && args.component_ids.length !== args.selected.length)) fail('REQUEST_INVALID');
@@ -229,6 +233,11 @@ function field(v,type){
   function receipt(payload, action, args) {
     if (!shape(payload, RECEIPT[action])) fail();
     for (const k of ['run_id', 'run_worker_id', 'candidate_id', 'command_id', 'transfer_id', 'instruction_id']) if (Object.hasOwn(args, k) && !(action==='CANCEL_REQUEST'&&k==='run_id') && !same(payload[k], args[k])) fail();
+    if(action==='CREATE'&&Object.hasOwn(args,'pay_date')&&payload.official_pay_date!==args.pay_date)fail();
+    if(action==='WORK_PAGE'){
+      const ids=args.choices.map(x=>x.work_id.toLowerCase()),positions=payload.skipped.map(x=>ids.indexOf(x.work_id.toLowerCase()));
+      if(positions.some((n,i)=>n<0||(i>0&&n<=positions[i-1])))fail();
+    }
     if (action === 'CASE_PAGE' && (payload.page_no !== args.page_no || payload.selection_revision !== args.selection_revision || payload.item_count !== String(args.component_ids.length))) fail();
     if (action === 'CASE_SEAL' && (payload.selection_revision !== args.selection_revision || BigInt(payload.selected_count) + BigInt(payload.excluded_count) !== BigInt(args.expected_items))) fail();
     if (action === 'WORK_PAGE' && (payload.page_no !== args.page_no || payload.item_count !== String(args.choices.length))) fail();
@@ -451,7 +460,7 @@ function field(v,type){
       if (result.run_id) next.run_id = result.run_id;
       if (result.run_worker_id) next.worker_id = result.run_worker_id;
       if (action === 'CREATE') next.selection_sealed = result.selection_state === 'SEALED';
-      if (action === 'WORK_PAGE') { next.selection_pages = result.page_no; next.selection_count = result.selection_count; next.accepted_page_work_ids=Array.from(new Set([...state.accepted_page_work_ids,...args.choices.map(x=>x.work_id.toLowerCase())]));if(next.accepted_page_work_ids.length>100)fail('JOURNAL_INVALID'); }
+      if (action === 'WORK_PAGE') { next.selection_pages = result.page_no; next.selection_count = result.selection_count; next.accepted_page_work_ids=Array.from(new Set([...state.accepted_page_work_ids,...args.choices.filter(x=>!result.skipped.some(s=>same(s.work_id,x.work_id))).map(x=>x.work_id.toLowerCase())]));if(next.accepted_page_work_ids.length>100)fail('JOURNAL_INVALID'); }
       if (action === 'CASE_PAGE') { next.case_pages=result.page_no;next.case_items=String(BigInt(state.case_items)+BigInt(result.item_count));const selected=BigInt(args.selected.filter(x=>x).length);next.case_selected_count=String(BigInt(state.case_selected_count)+selected);next.case_excluded_count=String(BigInt(state.case_excluded_count)+BigInt(result.item_count)-selected);next.accepted_page_component_ids=[...state.accepted_page_component_ids,...args.component_ids.map(x=>x.toLowerCase())];next.accepted_page_component_selected=[...state.accepted_page_component_selected,...args.selected];if(!ids(next.accepted_page_component_ids))fail('JOURNAL_INVALID'); }
       if (action === 'CASE_SEAL') { if(result.selected_count!==state.case_selected_count||result.excluded_count!==state.case_excluded_count)fail();next.case_sealed=true; }
       if (action === 'SEAL_ENQUEUE') {if(state.accepted_prepare&&(!same(state.accepted_prepare.command_id,result.command_id)||state.accepted_prepare.agency_sequence!==result.agency_sequence))fail('ACCEPTED_IDENTITY_CONFLICT');next.selection_sealed=true;next.accepted_prepare={command_id:result.command_id,agency_sequence:result.agency_sequence};}
