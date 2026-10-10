@@ -177,7 +177,7 @@ function field(v,type){
   if(type==='rateFamily')return ['STANDARD','ADDITIONAL','MILEAGE'].includes(v);
   if(type==='standardSchedule')return Array.isArray(v)&&v.length<=5&&v.every(x=>shape(x,{rate_schedule_id:'uuid',bucket:'bucket',available_paye_rate:'money?',available_umbrella_rate:'money?',available_charge_rate:'money?',approved_charge_rate:'money?'}))&&new Set(v.map(x=>x.bucket)).size===v.length&&new Set(v.map(x=>x.rate_schedule_id.toLowerCase())).size===v.length;
 
-    if(type==='descriptor')return shape(v,{namespace:'choiceNamespace',intent:'choiceIntent',revision:'localRevision',workbench_revision:'integer',adoption_revision:'integer'})&&encoder.encode(JSON.stringify(v)).byteLength<=32768;
+    if(type==='descriptor')return shape(v,{namespace:'choiceNamespace',intent:'choiceIntent',revision:'localRevision',workbench_revision:'integer',adoption_revision:'integer',...(record(v)&&Object.hasOwn(v,'memory_baseline_run_id')?{memory_baseline_run_id:'uuid?'}:{})})&&encoder.encode(JSON.stringify(v)).byteLength<=32768;
     if(type==='scopeChannel')return ['ALL','PAYE','UMBRELLA'].includes(v);
     if(type==='localRevision')return Number.isSafeInteger(v)&&v>=0;
     if(type==='choiceMode')return ['ALL_MATCHING','NONE'].includes(v);
@@ -623,7 +623,7 @@ function field(v,type){
                 }
                 member=page.rows[0];const remaining=state.descriptor.intent.components.filter(row=>same(row.work_id,member.work_id)&&same(row.expected_revision_id,member.expected_revision_id)&&row.selected).map(row=>row.approved_line_id).sort();
                 save({...state,upload:{...state.upload,member_no:page.header.uploaded_choice_work_count==='0'?null:page.header.uploaded_choice_work_count,subset:member,
-                  component_page:member.component_page_count??'0',component_count:member.component_count??'0',component_scan_after:null,component_scan_count:'0',component_ready:member.component_count==='0',remaining_ids:remaining}});
+                  component_page:member.component_page_count??'0',component_count:member.component_count??'0',component_scan_after:null,component_scan_count:'0',component_ready:member.choice_state==='SEALED'||member.component_count==='0',remaining_ids:member.choice_state==='SEALED'?[]:remaining}});
               }
                 if(BigInt(member.member_no)>BigInt(state.upload.member_no??'0')){
                   await submit('WORK_PAGE',{run_id:state.run_id,page_no:String(BigInt(state.selection_pages)+1n),choices:[{work_id:member.work_id,expected_revision_id:member.expected_revision_id,mode:'SUBSET'}]},true);
@@ -666,7 +666,9 @@ function field(v,type){
         authority();if(operation.busy||state.pending!==null||!['COMPLETE','EMPTY'].includes(state.phase)
           ||typeof store?.acknowledge!=='function'||JSON.stringify(store.namespace)!==JSON.stringify(state.descriptor.namespace))fail('REQUEST_INVALID');
         try{storage?.removeItem(key);}catch{persistent=false;return false;}
-        store.acknowledge(state.descriptor.revision);
+        // Only completed sealed readback owns an acknowledged memory baseline.
+        // An empty Create has no preparation command; keep its local choices.
+        if(state.phase==='COMPLETE'&&Object.hasOwn(state.descriptor,'memory_baseline_run_id'))store.acknowledge(state.descriptor.revision,state.run_id);
         operation.retired=true;
         if(choiceSubmissionMemory.get(key)===state)choiceSubmissionMemory.delete(key);
         if(choiceSubmissionOperations.get(key)===operation)choiceSubmissionOperations.delete(key);
