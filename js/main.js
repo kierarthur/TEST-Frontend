@@ -7162,14 +7162,12 @@ function renderTopNav(){
                 currentActorId: () => SESSION?.user?.id || null,
                 pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
                 openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
-                openWorkbenchIssue: async (issue) => {
-                  // Current issue evidence before Draft; WB14 supplies its separate decision window.
-                  if (typeof window.CloudTMSBpayNextWorkbench?.openIssueWindow === 'function') {
-                    return window.CloudTMSBpayNextWorkbench.openIssueWindow(issue);
+                issueOwners: {
+                  timesheet: (issue) => {
+                    if (String(SESSION?.user?.id || '').toLowerCase() !== issue.context.actor_user_id
+                        || ownerClient.peek()?.active_owner !== 'NEXT' || !issue.physical_timesheet_id) throw new Error('Payment unavailable');
+                    return openTimesheet({ timesheet_id: issue.physical_timesheet_id });
                   }
-                  window.CloudTMSBpayNextOffice.close();
-                  if (issue.physical_timesheet_id) return openTimesheet({ id: issue.physical_timesheet_id });
-                  return openCandidate({ id: issue.candidate_id });
                 },
                 ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT',
                 onOwnerStale: (code) => ownerClient.invalidate(code)

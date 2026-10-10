@@ -144,3 +144,36 @@
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-ready-list .bpay-next-ready-scroll td[data-label=Candidate] {display:block;}
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-ready-list .bpay-next-ready-scroll td[data-label=Candidate]::before {content:none;}
 }
+
+/* WB14 reason-driven standard lists and preserved parent/child navigation. */
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-lists {border:0;margin:0;padding:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-table {max-height:min(600px,56vh);min-height:120px;overscroll-behavior:contain;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-table table {min-width:0;width:100%;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-table th button {background:none;border:0;color:inherit;font:inherit;padding:0;min-height:32px;text-align:left;white-space:nowrap;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-table td {vertical-align:top;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-table small {display:block;margin-top:4px;color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-table tr[aria-selected=true] {background:var(--ctms-modal-panel-raised);box-shadow:inset 3px 0 var(--ctms-modal-accent-bright);}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-table tr:focus-visible {outline:2px solid var(--ctms-modal-accent-bright);outline-offset:-2px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-money {text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-table>table[hidden] {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-lists [role=alert] {color:var(--ctms-modal-danger);}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-lists form {margin:0 0 12px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-mobile-sort {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-issue-phone-open {display:none;}
+@media(max-width:720px) {
+ #modal.ctms-kind-bpay-next-read .bpay-next-issue-mobile-sort {display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-issue-mobile-sort select {min-height:44px;max-width:100%;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-issue-phone-open {display:inline-flex;min-height:44px;align-items:center;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-issue-table {max-height:56vh;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-lists td[data-label=Candidate] {display:block;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-lists td[data-label=Candidate]::before {content:none;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-issue-money {text-align:left;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-issue-table td[data-label=Actions] {display:flex;flex-wrap:wrap;gap:8px;}
+}
+
+@media(max-width:720px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-lists .bpay-next-issue-table td[data-label=Candidate] {display:block;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-lists .bpay-next-issue-table td[data-label=Candidate]::before {content:none;}
+}
+
+@media(max-width:720px){#modal.ctms-kind-bpay-next-read .bpay-next-issue-record-open {display:none;}}
