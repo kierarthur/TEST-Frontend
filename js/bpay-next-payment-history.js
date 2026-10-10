@@ -86,6 +86,25 @@ class HistoryError extends Error {
 const fail = (code, status, retryable) => { throw new HistoryError(code,status,retryable); };
 const invalidRequest = () => fail('BPAY_NEXT_HISTORY_REQUEST_INVALID',400);
 const invalidResponse = () => fail('BPAY_NEXT_HISTORY_RESPONSE_INVALID');
+function projectBpayNextMemberOrigin(data) {
+  if (!record(data) || !uuid(data.transfer_id) || !uuid(data.run_worker_id)
+    || typeof data.signed_cash_contribution !== 'string'
+    || !/^-?[0-9]{1,16}\.[0-9]{2}$/.test(data.signed_cash_contribution)) invalidResponse();
+  const line=uuid(data.run_line_id), instruction=uuid(data.case_instruction_id), result=uuid(data.case_allocation_result_id);
+  const hold=data.case_hold_id===null || uuid(data.case_hold_id);
+  let origin;
+  if(data.subject_kind==='WORK' && line && data.case_hold_id===null && data.case_instruction_id===null && data.case_allocation_result_id===null)
+    origin={kind:'FROZEN_RUN_LINE',id:data.run_line_id};
+  else if(data.subject_kind==='CASE' && data.run_line_id===null && instruction && result && hold
+    && (data.case_hold_id!==null || /^-?0\.00$/.test(data.signed_cash_contribution)))
+    origin={kind:'FROZEN_CASE_RESULT',instruction_id:data.case_instruction_id,result_id:data.case_allocation_result_id,hold_id:data.case_hold_id};
+  else if(['NET_ADJUSTMENT','CASH_REISSUE'].includes(data.subject_kind)
+    && [data.run_line_id,data.case_hold_id,data.case_instruction_id,data.case_allocation_result_id].every(value=>value===null))
+    origin={kind:data.subject_kind==='NET_ADJUSTMENT'?'ACCEPTED_PROJECTION_ON_TRANSFER':'RETURN_CASH_ON_TRANSFER',id:data.transfer_id};
+  else invalidResponse();
+  return Object.freeze({kind:data.subject_kind,transfer_id:data.transfer_id,run_worker_id:data.run_worker_id,
+    signed_cash_contribution:data.signed_cash_contribution,origin:Object.freeze(origin)});
+}
 function keyTuple(value, definition) {
   if (!Array.isArray(value) || value.length !== definition.keys.length) return false;
   return value.every((item, index) => {
@@ -162,6 +181,7 @@ function validateBpayNextHistoryResponse(value, request) {
         || !fields.every(field => row.data[field] === null || typeof row.data[field] === 'string')
         || !definition.keys.every(([field], index) => row.data[field] === row.key[index])
         || seen.has(JSON.stringify(row.key)) || (request.after && same(row.key,request.after.key))) invalidResponse();
+      if(request.section==='MEMBERS') {if(row.data.transfer_id!==request.parent_id)invalidResponse();projectBpayNextMemberOrigin(row.data);}
       seen.add(JSON.stringify(row.key));
     }
     if (value.terminal ? value.next_cursor !== null : value.rows.length === 0
@@ -200,8 +220,20 @@ function validateBpayNextHistoryResponse(value, request) {
     validateBpayNextHistoryRequest(base);
     if(!uuid(options.actorId) || typeof options.currentActorId!=='function' || typeof options.authFetch!=='function' || !['TEST','LIVE'].includes(options.environment??'TEST')) invalidRequest();
     let manifest=null,page=null,request=null,closed=false,busy=false,epoch=0,controller=null;
+    const transfers=new Map(),projections=new Map();
+    const retain=(cache,data)=>{cache.delete(data.id);cache.set(data.id,data);if(cache.size>128)cache.delete(cache.keys().next().value);};
+    function originContext(data) {
+      actor();
+      projectBpayNextMemberOrigin(data);
+      const transfer=transfers.get(data.transfer_id)||null;
+      if(transfer && (transfer.id!==data.transfer_id || transfer.run_worker_id!==data.run_worker_id
+        || transfer.candidate_id!==manifest?.candidate_id))invalidResponse();
+      const projection=transfer?.projection_id?projections.get(transfer.projection_id)||null:null;
+      if(projection && (projection.id!==transfer.projection_id || projection.run_worker_id!==data.run_worker_id))invalidResponse();
+      return {transfer,projection};
+    }
     function actor() {if(closed || options.currentActorId()!==options.actorId) {close();fail('BPAY_NEXT_HISTORY_ACTOR_CHANGED',401);} }
-    function close(){closed=true;epoch++;controller?.abort();page=null;manifest=null;request=null;}
+    function close(){closed=true;epoch++;controller?.abort();page=null;manifest=null;request=null;transfers.clear();projections.clear();}
     async function read(call) {
       actor();if(busy)fail('BPAY_NEXT_HISTORY_READ_PENDING',409);
       validateBpayNextHistoryRequest(call);busy=true;const ownEpoch=epoch;
@@ -225,7 +257,11 @@ function validateBpayNextHistoryResponse(value, request) {
         if(ownEpoch!==epoch) fail('BPAY_NEXT_HISTORY_ACTOR_CHANGED',401);
         if(manifest && (result.candidate_id!==manifest.candidate_id || result.work_id!==manifest.work_id)) invalidResponse();
         if(call.section==='MANIFEST') {manifest=frozen(result);page=null;request=null;}
-        else {page=frozen(result);request=frozen({...call});}
+        else {
+          page=frozen(result);request=frozen({...call});
+          if(call.section==='TRANSFERS')for(const row of page.rows)retain(transfers,row.data);
+          if(call.section==='PROJECTIONS')for(const row of page.rows)retain(projections,row.data);
+        }
         return snapshot();
       } finally {clearTimeout(timer);controller?.abort();busy=false;}
     }
@@ -235,7 +271,7 @@ function validateBpayNextHistoryResponse(value, request) {
       section:link=>read({...base,...link,after:null,upper:null}),
       next:()=>{if(!page || page.terminal)invalidRequest();return read({...request,after:page.next_cursor,upper:page.upper});},
       refresh:()=>read(request?{...request,after:null,upper:null}:base),
-      snapshot,close
+      snapshot,originContext,close
     };
   }
   // Only captured typed FK links, not arbitrary UUID entry or current-owner guesses.
@@ -267,7 +303,20 @@ function validateBpayNextHistoryResponse(value, request) {
       add('WORKER',data.run_worker_id,request.timesheet_id?data.instruction_id:null);
     if(['PUBLICATIONS','PROTECTED_RECEIPT','EXPIRY','INTERNAL_RECEIPT'].includes(section))add('COMMAND',data.command_id,request.context_id);
     if(section==='PROJECTIONS')add('COMMAND',data.request_command_id,request.context_id);
-    if(section==='TRANSFERS')add('COMMAND',data.build_command_id,request.context_id);
+    if(section==='TRANSFERS') {
+      add('COMMAND',data.build_command_id,request.context_id);
+      add('PROJECTIONS',data.run_worker_id,request.context_id);
+      if(uuid(data.original_transfer_id))add('RETURN_CASH',data.original_transfer_id,request.context_id);
+    }
+    if(section==='MEMBERS') {
+      const member=projectBpayNextMemberOrigin(data);
+      if(member.kind==='WORK')group('RUN_LINE',data.run_line_id);
+      else if(member.kind==='CASE')group('INSTRUCTION',data.case_instruction_id);
+      else {
+        add('TRANSFERS',data.run_worker_id,request.context_id);
+        if(member.kind==='NET_ADJUSTMENT')add('PROJECTIONS',data.run_worker_id,request.context_id);
+      }
+    }
     // A group leg is a whole-transfer reference, never a cash allocation.
     if(section==='GROUP_LEGS')group('TRANSFER',data.transfer_id,request.context_id);
     return links;
@@ -302,6 +351,23 @@ function validateBpayNextHistoryResponse(value, request) {
     if(value.includes('WORKER'))return 'Whole-worker NET/cash; not a Timesheet allocation.';
     if(value.startsWith('CURRENT') || value.includes('CURRENT_STATUS'))return 'Current cache/status is labelled separately from immutable payments; it is not a payable total.';
     return 'Recorded source, target ex VAT, VAT, NET and cash fields retain their distinct units. No conversion or totals are calculated here.';
+  }
+  function memberDescription(data,context={transfer:null,projection:null}) {
+    const member=projectBpayNextMemberOrigin(data),transfer=context.transfer,projection=context.projection;
+    if(transfer && (transfer.id!==member.transfer_id || transfer.run_worker_id!==member.run_worker_id))invalidResponse();
+    if(projection && (!transfer || projection.id!==transfer.projection_id || projection.run_worker_id!==member.run_worker_id))invalidResponse();
+    if(member.kind==='WORK')return 'WORK · frozen run line '+member.origin.id;
+    if(member.kind==='CASE')return 'CASE · frozen instruction '+member.origin.instruction_id+' · allocation result '+member.origin.result_id
+      +(member.origin.hold_id?' · hold '+member.origin.hold_id:' · zero allocation; no hold');
+    if(member.kind==='NET_ADJUSTMENT') {
+      if(!transfer)return 'NET adjustment · accepted projection/request on transfer '+member.transfer_id+'. Open Transfers, then its recorded Projections to read those exact references.';
+      if(!uuid(transfer.projection_id)||transfer.original_transfer_id!==null)invalidResponse();
+      if(projection && !uuid(projection.request_command_id))invalidResponse();
+      return 'NET adjustment · accepted projection '+transfer.projection_id+(projection?' · accepted request '+projection.request_command_id:'. Open Projections to read this exact projection and its accepted request.');
+    }
+    if(!transfer)return 'Cash reissue · original transfer and return cash on transfer '+member.transfer_id+'. Open Transfers to read those exact references.';
+    if(!uuid(transfer.original_transfer_id)||!uuid(transfer.return_cash_id)||transfer.projection_id!==null)invalidResponse();
+    return 'Cash reissue · original transfer '+transfer.original_transfer_id+' · return cash '+transfer.return_cash_id+' · request '+transfer.build_command_id;
   }
   let active=null;
   function close(){active?.close();active=null;}
@@ -349,6 +415,7 @@ function validateBpayNextHistoryResponse(value, request) {
           html+='<h4>'+escape(label(state.page.section))+'</h4><p>'+escape(amountNotice(state.page.amount_scope))+'</p><p>'+escape(label(state.page.amount_scope))+'</p>';
           if(state.page.rows.length===0)html+='<p>No records in this section.</p>';
           for(const row of state.page.rows) {
+            if(state.page.section==='MEMBERS')html+='<p>'+escape(memberDescription(row.data,client.originContext(row.data)))+'</p><p>Signed member contribution (GBP): '+escape(row.data.signed_cash_contribution)+'. This is a recorded constituent of the transfer; no Timesheet or Client cash allocation is made.</p>';
             html+='<div class="card"><details><summary data-next-focus-key="'+escape('row:'+state.page.section+':'+JSON.stringify(row.key))+'">'+escape(label(state.page.section))+' · '+escape(row.key.map((value,index)=>displayScalar(value,BPAY_NEXT_HISTORY_SECTIONS[state.page.section].keys[index][0])).join(' / '))+'</summary><dl>'+Object.entries(row.data).map(([key,value])=>'<dt>'+escape(label(key))+'</dt><dd style="overflow-wrap:anywhere">'+escape(displayScalar(value,key))+'</dd>').join('')+'</dl></details><div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">'+childLinks(state.page.section,row,state.request).map(linkButton).join('')+'</div></div>';
           }
           html+=state.page.terminal?'<p data-history-terminal="true">End of this section.</p>':button('Next page','next');
@@ -395,5 +462,5 @@ function validateBpayNextHistoryResponse(value, request) {
     return active;
   }
   return Object.freeze({createClient,childLinks,open,close,sections:BPAY_NEXT_HISTORY_SECTIONS,escape,amountNotice,displayScalar,
-    validateRequest:validateBpayNextHistoryRequest,validateResponse:validateBpayNextHistoryResponse});
+    projectMemberOrigin:projectBpayNextMemberOrigin,memberDescription,validateRequest:validateBpayNextHistoryRequest,validateResponse:validateBpayNextHistoryResponse});
 });

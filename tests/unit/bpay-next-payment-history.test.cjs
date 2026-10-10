@@ -186,8 +186,26 @@ test('real modal entry, framework cleanup and versioned asset are connected with
   assert.match(main,/scope: \{candidate_id: top\.entity === 'candidates' \? scopeId : null/);
   assert.match(main,/timesheet_id: top\.entity === 'timesheets' \? scopeId : null/);
   assert.match(main,/currentFrame\(\) !== top \|\| paymentHistoryButton\.disabled/);
-  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261010-next-environment-r1/);
+  assert.match(html,/id="btnPaymentHistory"/);assert.match(html,/bpay-next-payment-history\.js\?v=20261010-next-member-origins-r1/);
   const module=fs.readFileSync(path.join(root,'js/bpay-next-payment-history.js'),'utf8');
   assert.match(module,/frameEntity:'payment-history'/);assert.match(module,/onDismiss/);
   assert.doesNotMatch(module,/console\.|localStorage|sessionStorage|WORK_PAGE|PAYE_NET|CSV_ISSUE|\.reduce\(/);
+});
+
+test('PS03 typed origin labels use exact retained references and real original-return link without cash allocation',()=>{
+  const member={...row('MEMBERS',['1']).data,transfer_id:work,run_worker_id:candidate,subject_kind:'NET_ADJUSTMENT',signed_cash_contribution:'-12.34'};
+  const transfer={id:work,run_worker_id:candidate,projection_id:actor,original_transfer_id:null,return_cash_id:null,build_command_id:timesheet};
+  const projection={id:actor,run_worker_id:candidate,request_command_id:timesheet};
+  assert.match(api.memberDescription(member,{transfer,projection}),new RegExp(actor+'.*'+timesheet));
+  assert.match(api.memberDescription(member),/Open Transfers/);
+  assert.throws(()=>api.memberDescription(member,{transfer:{...transfer,id:actor},projection}));
+  const repayment={...member,subject_kind:'CASH_REISSUE'};
+  const reissue={...transfer,projection_id:null,original_transfer_id:actor,return_cash_id:timesheet};
+  assert.match(api.memberDescription(repayment,{transfer:reissue,projection:null}),new RegExp(actor+'.*'+timesheet));
+  const request=call({section:'TRANSFERS',parent_id:candidate});
+  assert.ok(api.childLinks('TRANSFERS',{data:reissue},request).some(link=>link.section==='RETURN_CASH'&&link.parent_id===actor));
+  const zero={...member,subject_kind:'CASE',case_instruction_id:actor,case_allocation_result_id:timesheet,signed_cash_contribution:'0.00'};
+  assert.match(api.memberDescription(zero),/zero allocation; no hold/);
+  assert.throws(()=>api.projectMemberOrigin({...zero,signed_cash_contribution:'1.00'}));
+  assert.equal(api.projectMemberOrigin(member).signed_cash_contribution,'-12.34');
 });
