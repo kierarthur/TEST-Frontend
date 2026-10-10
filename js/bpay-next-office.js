@@ -550,9 +550,9 @@ function field(v,type){
     const el = (tag, text, className) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; };
     const button = (text, action, disabled = false, direct = false, focusKey = text) => { const b = el('button',text); b.setAttribute('data-next-focus-key','action:'+focusKey); b.type='button'; b.disabled=disabled; b.addEventListener('click', () => { if(direct)action();else void act(action); }); return b; };
     const input = (label, type, value) => { const wrap = el('label', label); const n = el('input'); n.type=type; n.setAttribute('data-next-focus-key','input:'+label); n.value=value || ''; wrap.append(n); return [wrap,n]; };
-    let netInput, resumeInput,workbenchShell=null,issueLists=null,issueReadAvailable=false,readWindow=null,closed=false,started=false;
+    let netInput, resumeInput,workbenchShell=null,issueLists=null,readyLists=null,issueReadAvailable=false,readWindow=null,closed=false,started=false;
     const issueHost=el('div');
-    const dismiss = () => { if(closed)return;closed=true;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);issueLists?.close();workbenchShell?.close();host.remove();sheet=null;if(previousFocus?.isConnected&&same(options.currentActorId(),options.actorId))previousFocus.focus(); };
+    const dismiss = () => { if(closed)return;closed=true;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);readyLists?.close();issueLists?.close();workbenchShell?.close();host.remove();sheet=null;if(previousFocus?.isConnected&&same(options.currentActorId(),options.actorId))previousFocus.focus(); };
     const close = () => {workbenchShell?.close();readWindow?.close();dismiss();};
     const focus=ui.continuity(host,doc,()=>host.querySelector('button'));
     async function act(action) { if (readBusy) return; error=''; readBusy=true; render(); try { await action(); } catch(e) { if(e?.serverCode==='BPAY_NEXT_ENVIRONMENT_MISMATCH'){capabilities=null;capabilityError='Banking environment is unavailable or mismatched. Re-check before continuing.';} error=controller?.snapshot().pending ? 'The result is not known. Payment controls are paused. Retry this exact request; do not start a replacement.' : refusalCopy(e) || 'This action could not be completed. Refresh or sign in again.'; } finally { readBusy=false; render(); } }
@@ -560,9 +560,13 @@ function field(v,type){
       if(capabilities.environment_ready&&!issueLists){
         if(!win.CloudTMSBpayNextWorkbench||typeof options.openWorkbenchIssue!=='function')throw new Failure('SCHEMA_UNAVAILABLE');
         workbenchShell=win.CloudTMSBpayNextWorkbench.mountWorkbenchShell({...options,host:issueHost,debug:controller.debug,
-          windowAlive:()=>readWindow?.alive()===true,onRefresh:()=>issueLists?.reload(),
-          onAvailability:value=>{const issues=issueLists?.snapshot();issueReadAvailable=value.available&&Boolean(issues?.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,issues.context));},
-          onScope:scope=>issueLists?.setScope(scope),onTab:tab=>{if(tab!=='READY')issueLists?.setKind(tab==='ACTION'?'ACTION_REQUIRED':'BLOCKED');}});
+          windowAlive:()=>readWindow?.alive()===true,onRefresh:()=>{issueLists?.reload();readyLists?.reload();},selectionLabel:()=>readyLists?.selectionLabel()??'All except 0',
+          onAvailability:value=>{readyLists?.joinHeader(value);const issues=issueLists?.snapshot();issueReadAvailable=value.available&&Boolean(issues?.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,issues.context));},
+          onScope:scope=>{issueLists?.setScope(scope);readyLists?.setScope(scope);},onTab:tab=>{if(tab!=='READY')issueLists?.setKind(tab==='ACTION'?'ACTION_REQUIRED':'BLOCKED');}});
+        readyLists=win.CloudTMSBpayNextWorkbench.mountReadyCandidates({...options,host:workbenchShell.readyHost,client:workbenchShell.client,debug:controller.debug,windowAlive:()=>readWindow?.alive()===true,
+          onSelection:()=>workbenchShell?.refreshSelectionLabel(),openBankRecord:id=>openCandidateRecord(options,id,close),
+          openCandidate:address=>typeof options.openWorkbenchCandidate==='function'?options.openWorkbenchCandidate(address):openCandidateRecord(options,address.candidate_id,close)});
+        readyLists.joinHeader(workbenchShell.snapshot());
         issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:workbenchShell.issueHost,windowAlive:()=>readWindow?.alive()===true,client:workbenchShell.client,externalTabs:true,debug:controller.debug,
           openIssue:options.openWorkbenchIssue,onAvailability:value=>{workbenchShell.setIssueAvailability(value);const header=workbenchShell.snapshot();issueReadAvailable=value.available&&header.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,header.context);if(host.isConnected)render();}});
       }

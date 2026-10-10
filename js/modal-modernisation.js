@@ -704,7 +704,7 @@
       if (compact === 'no.ofunits' || compact === 'units') return 'Units';
       return text;
     };
-    const headerLabels = Array.from(table.querySelectorAll(':scope > thead > tr:last-child > th')).map((cell) => normaliseHeader(cell.textContent));
+    const headerLabels = Array.from(table.querySelectorAll(':scope > thead > tr:last-child > th')).map((cell) => normaliseHeader(table.closest('.bpay-next-ready-list') ? cell.textContent.replace(/[▲▼]\s*$/g, '') : cell.textContent));
     table.querySelectorAll(':scope > tbody > tr').forEach((row) => {
       const rowCells = Array.from(row.children);
       const effectiveLabels = headerLabels.length === rowCells.length

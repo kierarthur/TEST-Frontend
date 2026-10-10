@@ -110,3 +110,37 @@
  #modal.ctms-modern-modal .bpay-next-picker-list small {width:100%;order:2;}
  #modal.ctms-modern-modal .bpay-next-phone-open {display:inline-flex;margin-left:auto;align-items:center;min-height:44px;}
 }
+/* WB12 Ready list components; existing standard table/cards and tokens. */
+#modal.ctms-modern-modal .bpay-next-ready-scroll {max-height:min(600px,56vh);overflow:auto;overscroll-behavior:contain;border:1px solid var(--ctms-modal-line);border-radius:13px;}
+#modal.ctms-modern-modal .bpay-next-ready-scroll table {min-width:0;width:100%;}
+#modal.ctms-modern-modal .bpay-next-ready-scroll thead {position:sticky;top:0;z-index:1;}
+#modal.ctms-modern-modal .bpay-next-ready-scroll th>.btn {border:0;background:transparent;box-shadow:none;color:var(--ctms-modal-table-head-text,var(--ctms-modal-sub));padding:0;font-size:11px;text-transform:uppercase;letter-spacing:.055em;}
+#modal.ctms-modern-modal .bpay-next-ready-scroll td:first-child {width:36px;}
+#modal.ctms-modern-modal .bpay-next-ready-scroll input[type=checkbox] {width:18px;height:18px;accent-color:var(--ctms-modal-accent);}
+#modal.ctms-modern-modal .bpay-next-ready-scroll tr[aria-selected=true] {box-shadow:inset 3px 0 var(--ctms-modal-cyan);background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-ready-scroll tr:focus-visible {outline:2px solid var(--ctms-modal-accent-bright);outline-offset:-2px;}
+#modal.ctms-modern-modal .bpay-next-ready-scroll small {display:block;margin-top:4px;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-ready-scroll .candidate-office-badge {margin:2px 5px 2px 0;}
+#modal.ctms-modern-modal .bpay-next-ready-money {text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-ready-foot {color:var(--ctms-modal-sub);font-size:12px;margin:8px 0 0;}
+#modal.ctms-modern-modal .bpay-next-ready-empty {padding:24px;font-weight:700;}
+#modal.ctms-modern-modal .bpay-next-ready-mobile-sort,#modal.ctms-modern-modal .bpay-next-ready-open-cell {display:none;}
+@media(max-width:700px) {
+ #modal.ctms-modern-modal .bpay-next-ready-mobile-sort {display:flex;align-items:center;gap:8px;margin:8px 0 12px;}
+ #modal.ctms-modern-modal .bpay-next-ready-mobile-sort select {min-height:44px;flex:1;min-width:0;}
+ #modal.ctms-modern-modal .bpay-next-ready-scroll {max-height:52vh;border:0;}
+ #modal.ctms-modern-modal .bpay-next-ready-scroll td:first-child {width:auto;min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-ready-scroll .bpay-next-ready-open-cell {display:flex;min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-ready-scroll .bpay-next-ready-open-cell .btn,#modal.ctms-modern-modal .bpay-next-ready-scroll button.candidate-office-badge {min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-ready-money {text-align:left;}
+}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-ready-scroll>table[hidden] {display:none;}
+@media(max-width:700px) {
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window,#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-small-window {width:calc(100vw - 12px);}
+ #modal.ctms-modern-modal .bpay-next-ready-scroll table>thead {display:none;}
+ #modal.ctms-modern-modal .bpay-next-ready-scroll a.candidate-office-badge {display:inline-flex;align-items:center;min-height:44px;}
+}
+@media(max-width:700px) {
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-ready-list .bpay-next-ready-scroll td[data-label=Candidate] {display:block;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-ready-list .bpay-next-ready-scroll td[data-label=Candidate]::before {content:none;}
+}

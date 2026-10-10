@@ -4031,8 +4031,8 @@
     overflow: visible;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table,
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table,
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody {
     display: grid;
     width: 100% !important;
     min-width: 0 !important;
@@ -4042,8 +4042,8 @@
     background: transparent;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > thead,
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > colgroup {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > thead,
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > colgroup {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -4052,7 +4052,7 @@
     white-space: nowrap;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) !important;
     width: 100% !important;
@@ -4065,11 +4065,11 @@
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.15);
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr[hidden] {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr[hidden] {
     display: none !important;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr > td {
     display: grid;
     grid-column: 1 / -1 !important;
     grid-template-columns: minmax(92px, 0.42fr) minmax(0, 1fr);
@@ -4085,7 +4085,7 @@
     overflow-wrap: anywhere;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td[colspan] {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr > td[colspan] {
     display: block !important;
     grid-column: 1 / -1;
     width: auto !important;
@@ -4097,11 +4097,11 @@
     overflow-wrap: break-word;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td[colspan]::before {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr > td[colspan]::before {
     content: none !important;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td > * {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr > td > * {
     min-width: 0 !important;
     max-width: 100% !important;
   }
@@ -4126,7 +4126,7 @@
     max-width: 100% !important;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td:not([data-ctms-label=""])::before {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr > td:not([data-ctms-label=""])::before {
     content: attr(data-ctms-label);
     color: #9fb0c7;
     font-size: 10px;
@@ -4135,11 +4135,11 @@
     text-transform: uppercase;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table > tbody > tr > td[data-ctms-label=""] {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table > tbody > tr > td[data-ctms-label=""] {
     display: block;
   }
 
-  #modal.ctms-modern-modal.ctms-generic-modal table.ctms-universal-card-table button {
+  #modal.ctms-modern-modal:is(.ctms-generic-modal,.ctms-kind-bpay-next-read) table.ctms-universal-card-table button {
     width: fit-content;
     max-width: 100%;
     white-space: normal;

@@ -5,12 +5,15 @@
 const BPAY_NEXT_WORKBENCH_LIMITS=Object.freeze({requestBytes:32768,responseBytes:131072,timeoutMs:4000});
 const ENCODER=new TextEncoder(),UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const KINDS=['HEADER','CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS','GROUP_LINES','PICK_CANDIDATES','PICK_CLIENTS','EXPORT_ROWS'];
-const COMMON={candidate_id:'uuid?',client_id:'uuid?',channel:'scopeChannel',section:'scopeSection',search:'search',sort:'sort',group_key:'groupKey?',item_id:'uuid?',reason_code:'code?',after:'cursor?',limit:'limit'};
+const COMMON={candidate_id:'uuid?',client_id:'uuid?',channel:'scopeChannel',section:'scopeSection',search:'search',sort:'sort',group_key:'groupKey?',item_id:'uuid?',reason_code:'code?',count_selection:'countSelection?',after:'cursor?',limit:'limit'};
 const BPAY_NEXT_WORKBENCH_PAGE_INPUTS=Object.freeze(Object.fromEntries(KINDS.map(k=>[k,Object.freeze({...COMMON})])));
 // Generated once from the explicit SQL projections; reviewed source is durable.
 const ROWS=Object.freeze({
   "HEADER": {
     "candidate_count": "integer",
+    "selectable_member_count": "integer?",
+    "selected_candidate_count": "integer?",
+    "selected_member_count": "integer?",
     "item_count": "integer",
     "contribution_count": "integer",
     "segment_count": "integer",
@@ -385,7 +388,7 @@ const FAILURE_CODES=['BPAY_NEXT_MODULE_NOT_ACTIVE','BPAY_NEXT_WORKBENCH_FORBIDDE
 const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&[Object.prototype,null].includes(Object.getPrototypeOf(v));
 function exact(v,keys){return record(v)&&Reflect.ownKeys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k)&&Object.getOwnPropertyDescriptor(v,k)?.enumerable===true&&Object.hasOwn(Object.getOwnPropertyDescriptor(v,k),'value'));}
 const same=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,n)=>same(v,b[n])))||(record(a)&&record(b)&&exact(a,Object.keys(b))&&Object.keys(a).every(k=>same(a[k],b[k])));
-const enums={kind:KINDS,scopeChannel:['ALL','PAYE','UMBRELLA'],channel:['PAYE','UMBRELLA'],scopeSection:['ALL','READY','ACTION','BLOCKED','WAITING'],section:['READY','ACTION','BLOCKED','WAITING'],sort:['NAME_ASC','NAME_DESC','AMOUNT_ASC','AMOUNT_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','PAYMENT_ASC','PAYMENT_DESC'],bank:['BANK_DETAILS_MISSING','BANK_DETAILS_CHANGED'],group:['WORK','CASE'],member:['WORK_COMPONENT','WORK_SEGMENT','CASE_COMPONENT','GROUP_EVIDENCE'],portion:['AVAILABLE','RESERVED','RECOVERY','ZERO','EVIDENCE','WITHDRAWN'],direction:['PAYMENT','DEDUCTION','INFORMATIONAL'],stage:['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'],query:['NOT_APPLICABLE','UNAVAILABLE','CLEAR','OPEN'],progress:['CURRENT','PROCESSING','UNAVAILABLE'],adoption:['UNSEEDED','SEEDING','CURRENT','ERROR']};
+const enums={kind:KINDS,scopeChannel:['ALL','PAYE','UMBRELLA'],channel:['PAYE','UMBRELLA'],scopeSection:['ALL','READY','ACTION','BLOCKED','WAITING'],section:['READY','ACTION','BLOCKED','WAITING'],sort:['NAME_ASC','NAME_DESC','AMOUNT_ASC','AMOUNT_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','PAYMENT_ASC','PAYMENT_DESC','STATUS_ASC','STATUS_DESC'],bank:['BANK_DETAILS_MISSING','BANK_DETAILS_CHANGED'],group:['WORK','CASE'],member:['WORK_COMPONENT','WORK_SEGMENT','CASE_COMPONENT','GROUP_EVIDENCE'],portion:['AVAILABLE','RESERVED','RECOVERY','ZERO','EVIDENCE','WITHDRAWN'],direction:['PAYMENT','DEDUCTION','INFORMATIONAL'],stage:['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'],query:['NOT_APPLICABLE','UNAVAILABLE','CLEAR','OPEN'],progress:['CURRENT','PROCESSING','UNAVAILABLE'],adoption:['UNSEEDED','SEEDING','CURRENT','ERROR']};
 function field(v,type){
   if(type.endsWith('?'))return v===null||field(v,type.slice(0,-1));
   if(Object.hasOwn(enums,type))return enums[type].includes(v);
@@ -399,6 +402,7 @@ function field(v,type){
   if(type==='code')return typeof v==='string'&&/^[A-Z][A-Z0-9_]{0,255}$/.test(v);
   if(type==='groupKey')return typeof v==='string'&&/^(?:WORK|CASE):[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v);
   if(type==='date'){if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v)||v.startsWith('0000'))return false;const d=new Date(`${v}T00:00:00Z`);return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===v;}
+  if(type==='countSelection')return exact(v,['mode','candidate_ids'])&&['ALL','NONE'].includes(v.mode)&&Array.isArray(v.candidate_ids)&&v.candidate_ids.every(id=>field(id,'uuid'))&&new Set(v.candidate_ids).size===v.candidate_ids.length&&ENCODER.encode(JSON.stringify(v)).byteLength<=32768;
   if(type==='scope')return shape(v,SCOPE);
   if(type==='cursor')return exact(v,['context','key'])&&shape(v.context,CONTEXT)&&validKey(v.key,v.context.kind,v.context.scope.sort);
   if(type==='refusal')return FAILURE_CODES.includes(v);
@@ -407,13 +411,13 @@ function field(v,type){
 const shape=(v,schema)=>exact(v,Object.keys(schema))&&Object.entries(schema).every(([k,type])=>field(v[k],type));
 function validKey(key,kind,sort){
   if(!Array.isArray(key))return false;
-  if(['CANDIDATES','PICK_CANDIDATES'].includes(kind))return sort.startsWith('DEDUCTIONS_')?key.length===5&&field(key[0],'boolean')&&field(key[1],'text')&&field(key[2],'boolean')&&field(key[3],'text')&&field(key[4],'uuid'):sort.startsWith('AMOUNT_')?key.length===3&&field(key[0],'boolean')&&field(key[1],'decimal')&&field(key[2],'uuid'):key.length===4&&field(key[0],'text')&&field(key[1],'boolean')&&field(key[2],'text')&&field(key[3],'uuid');
+  if(['CANDIDATES','PICK_CANDIDATES'].includes(kind))return sort.startsWith('STATUS_')?key.length===5&&field(key[0],'boolean')&&field(key[1],'boolean')&&field(key[2],'text')&&field(key[3],'text')&&field(key[4],'uuid'):sort.startsWith('DEDUCTIONS_')?key.length===5&&field(key[0],'boolean')&&field(key[1],'text')&&field(key[2],'boolean')&&field(key[3],'text')&&field(key[4],'uuid'):sort.startsWith('AMOUNT_')?key.length===3&&field(key[0],'boolean')&&field(key[1],'decimal')&&field(key[2],'uuid'):key.length===4&&field(key[0],'text')&&field(key[1],'boolean')&&field(key[2],'text')&&field(key[3],'uuid');
   if(kind==='CANDIDATE_GROUPS')return key.length===4&&field(key[0],'boolean')&&(key[0]?key[1]==='':field(key[1],'date'))&&field(key[2],'group')&&field(key[3],'uuid');
   if(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind))return sort.startsWith('PAYMENT_')?key.length===2&&field(key[0],'text')&&field(key[1],'uuid'):sort.startsWith('AMOUNT_')?key.length===3&&field(key[0],'boolean')&&field(key[1],'decimal')&&field(key[2],'uuid'):key.length===3&&field(key[0],'text')&&field(key[1],'uuid')&&field(key[2],'uuid');
   return kind!=='HEADER'&&key.length===1&&field(key[0],kind==='CANDIDATE_GROUPS'?'groupKey':'uuid');
 }
 function rowKey(kind,scope,row){
-  if(['CANDIDATES','PICK_CANDIDATES'].includes(kind)){if(scope.sort.startsWith('DEDUCTIONS_'))return [row.has_deduction,row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];if(scope.sort.startsWith('AMOUNT_'))return [row.unknown_amount_count!=='0',row.amount??'0',row.candidate_id];return [row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];}
+  if(['CANDIDATES','PICK_CANDIDATES'].includes(kind)){if(scope.sort.startsWith('STATUS_'))return [row.payable_count==='0',row.bank_warning_code===null,row.bank_warning_code??'',row.candidate_sort_name,row.candidate_id];if(scope.sort.startsWith('DEDUCTIONS_'))return [row.has_deduction,row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];if(scope.sort.startsWith('AMOUNT_'))return [row.unknown_amount_count!=='0',row.amount??'0',row.candidate_id];return [row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];}
   if(kind==='HEADER')return null;
   if(kind==='CANDIDATE_GROUPS')return [row.week_ending_date===null,row.week_ending_date??'',row.group_kind,row.work_id??row.case_id];
   if(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)){if(scope.sort.startsWith('PAYMENT_'))return [row.timesheet_reference??'',row.item_id];if(scope.sort.startsWith('AMOUNT_'))return [row.nominal_source_ex_vat===null,row.nominal_source_ex_vat??'0',row.item_id];return [row.candidate_display_name??'',row.candidate_id,row.item_id];}
@@ -426,8 +430,9 @@ function keyCompare(a,b,kind,sort){for(let n=0;n<a.length;n++){const value=typeo
 function fail(code,status=503,retryable=false,reload=false){return Object.assign(new Error(code),{code,status,retryable,reload});}
 function normalizeWorkbenchInput(kind,input={}){
   if(!KINDS.includes(kind)||!record(input)||Reflect.ownKeys(input).some(k=>typeof k!=='string'||!Object.hasOwn(COMMON,k)))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
-  const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
+  const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,count_selection:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
   for(const k of ['candidate_id','client_id','item_id'])if(typeof args[k]==='string')args[k]=args[k].toLowerCase();
+  if(args.count_selection!==null&&(kind!=='HEADER'||args.section!=='READY')||kind!=='CANDIDATES'&&String(args.sort).startsWith('STATUS_'))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
   if(!shape(args,COMMON)||(kind==='CANDIDATE_GROUPS'&&args.limit>10)||(!['CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort!=='NAME_ASC')||(kind==='CANDIDATES'&&args.sort.startsWith('PAYMENT_'))||(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort.startsWith('DEDUCTIONS_'))
     ||(['CANDIDATE_GROUPS','GROUP_LINES'].includes(kind)&&args.candidate_id===null)||(['GROUP_LINES','ISSUE_DETAIL'].includes(kind)&&args.group_key===null)||(kind==='ISSUE_DETAIL'&&args.reason_code===null)
     ||(!['GROUP_LINES','ISSUE_DETAIL'].includes(kind)&&[args.group_key,args.item_id,args.reason_code].some(v=>v!==null))
@@ -460,6 +465,10 @@ function validateWorkbenchResponse(payload,kind,args,actorId=null){
     if(Object.hasOwn(row,'amount_known')&&row.selectable===true&&(row.section!=='READY'||row.amount_known!==true||!['AVAILABLE','ZERO'].includes(row.portion_kind)))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(Object.hasOwn(row,'group_key')){if(!field(row.group_key,'groupKey')||(row.work_id!==null)===(row.case_id!==null)||row.group_key!==(row.work_id!==null?'WORK:'+row.work_id:'CASE:'+row.case_id))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
     if(kind==='CANDIDATE_GROUPS'&&row.selectable&&(!row.complete||row.dirty||row.progress_state!=='CURRENT'))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+    if(kind==='HEADER'){
+      const counted=args.count_selection!==null;
+      if((row.selected_candidate_count!==null)!==counted||(row.selected_member_count!==null)!==counted||(row.selectable_member_count!==null)!==(args.section==='READY')||counted&&(BigInt(row.selected_candidate_count)>BigInt(row.candidate_count)||BigInt(row.selected_member_count)>BigInt(row.selectable_member_count)))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+    }
     if(['HEADER','CANDIDATES'].includes(kind)){const unknown=row.unknown_amount_count!=='0';for(const k of ['amount','waiting_amount','ready_net_add_amount','waiting_net_add_amount','gross_deduction_balance','net_deduction_balance','approved_amount','paid_credit_amount','reserved_amount','excluded_amount','recovery_amount'])if((row[k]===null)!==unknown)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');if((row.selected_amount===null)!==(row.unknown_selected_amount_count!=='0')||row.has_deduction!==(row.deduction_item_count!=='0'))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
   }
   const expected=payload.complete?null:{context,key:last};if(!same(payload.next_cursor,expected)||!exact(payload.page_receipt,['context','start_key','end_key','row_count'])||!same(payload.page_receipt.context,context)||!same(payload.page_receipt.start_key,args.after?.key??null)||!same(payload.page_receipt.end_key,last)||payload.page_receipt.row_count!==String(payload.rows.length))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
@@ -486,7 +495,7 @@ function createWorkbenchClient(options){
     try{
       assertActor();const args=normalizeWorkbenchInput(kind,params);
       if(args.after!==null&&args.after.context.actor_user_id!==actor)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
-      const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,key==='after'?JSON.stringify(value):String(value));
+      const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection'].includes(key)?JSON.stringify(value):String(value));
       if(ENCODER.encode(query.toString()).byteLength>32768)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
       controller=new AbortController();const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{timedOut=true;controller.abort();reject(new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true));},BPAY_NEXT_WORKBENCH_LIMITS.timeoutMs);});
       const read=async()=>{
@@ -661,7 +670,69 @@ function mountWorkbenchShell(options){
  tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const keys=Object.keys(tabButtons),i=keys.indexOf(tab),next=event.key==='Home'?keys[0]:event.key==='End'?keys.at(-1):keys[(i+(event.key==='ArrowRight'?1:2))%3];setTab(next);tabButtons[next].focus();});
  const ownerChanged=()=>{if(!actorCurrent()){generation++;bundle=null;busy=false;dialog?.close();dialog?.close();closed=true;root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
  render();void load();
- return Object.freeze({readyHost,issueHost,client,load,setTab,openFilters,setIssueAvailability(value){if(!current())return;issueAvailability=value;render();},snapshot:()=>Object.freeze({scope:{...scope},labels:{...labels},tab,available:Boolean(bundle&&!busy&&!error&&current()),context:bundle?.READY.context??null,headers:bundle}),invalidate(){if(!current())return;generation++;bundle=null;busy=false;error='Payments changed; refresh to continue.';render();},close(){closed=true;generation++;dialog?.close();dialog?.close();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}});
+ return Object.freeze({readyHost,issueHost,client,load,setTab,openFilters,refreshSelectionLabel(){if(current())render();},setIssueAvailability(value){if(!current())return;issueAvailability=value;render();},snapshot:()=>Object.freeze({scope:{...scope},labels:{...labels},tab,available:Boolean(bundle&&!busy&&!error&&current()),context:bundle?.READY.context??null,headers:bundle}),invalidate(){if(!current())return;generation++;bundle=null;busy=false;error='Payments changed; refresh to continue.';render();},close(){closed=true;generation++;dialog?.close();dialog?.close();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}});
+}
+
+function mountReadyCandidates(options){
+ if(!record(options)||!options.host?.ownerDocument||!field(options.actorId?.toLowerCase(),'uuid')||typeof options.currentActorId!=='function'||typeof options.ownerReady!=='function'||typeof options.openCandidate!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
+ const doc=options.host.ownerDocument,win=doc.defaultView,client=options.client??createWorkbenchClient(options),ui=win.CloudTMSBpayNextUi;
+ const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+ const button=(text,fn)=>{const b=el('button',text,'btn');b.type='button';b.addEventListener('click',fn);return b;};
+ let scope={candidate_id:null,client_id:null,channel:'ALL',...(options.scope??{})},sort='NAME_ASC',pages=[],history=[],context=null,header=null,joined={available:false,context:null},busy=false,error='',selectionError='',closed=false,generation=0,highlight=null,baseline='ALL',exceptions=new Set(),intentRevision=0,reloadRequired=false,pending={direction:'reset',after:null};
+ const root=el('section',undefined,'bpay-next-ready-list'),mobileSort=el('label','Sort by','bpay-next-ready-mobile-sort'),select=el('select'),scroller=el('div',undefined,'ctms-universal-table-host bpay-next-ready-scroll'),status=el('p',''),foot=el('p','', 'bpay-next-ready-foot'),retry=button('Try again',()=>{if(reloadRequired){context=null;pages=[];history=[];void read('reset',null);}else void read(pending.direction,pending.after);});
+ select.setAttribute('data-next-focus-key','ready-sort');for(const [key,label] of [['NAME','Candidate'],['DEDUCTIONS','Deductions'],['AMOUNT','Amount ex VAT'],['STATUS','Status']])for(const dir of ['ASC','DESC']){const o=el('option',label+(dir==='ASC'?' ▲':' ▼'));o.value=key+'_'+dir;select.append(o);}mobileSort.append(select);
+ scroller.setAttribute('role','region');scroller.setAttribute('aria-label','Ready payments');scroller.tabIndex=0;status.setAttribute('data-next-live-copy','');status.setAttribute('role','status');foot.setAttribute('data-next-live-copy','');root.append(mobileSort,scroller,status,retry,foot);options.host.append(root);
+ function actorCurrent(){try{return options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}}
+ function current(){return !closed&&(root.isConnected||options.windowAlive?.()===true)&&actorCurrent();}
+ function coherent(){return current()&&!busy&&!error&&context&&header&&joined.available&&sameWorkbenchRevision(context,joined.context);}
+ function selected(id){return (baseline==='ALL')!==exceptions.has(id);}
+ function intent(){return {mode:baseline,candidate_ids:[...exceptions]};}
+ function selectionLabel(){return baseline==='ALL'?'All except '+exceptions.size:exceptions.size===0?'None':exceptions.size+' chosen';}
+ function notify(){try{options.onAvailability?.({available:Boolean(coherent()),context});}catch{}}
+ function choose(row,value){if(!coherent()||row.payable_count==='0')return;const next=new Set(exceptions);if(value===(baseline==='ALL'))next.delete(row.candidate_id);else next.add(row.candidate_id);const proposed={mode:baseline,candidate_ids:[...next]};const args=normalizeWorkbenchInput('HEADER',{...scope,section:'READY',count_selection:proposed}),query=new URLSearchParams({kind:'HEADER'});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection'].includes(key)?JSON.stringify(value):String(value));if(!field(proposed,'countSelection')||ENCODER.encode(query.toString()).byteLength>32768){selectionError='Too many choices to count; clear some choices and try again.';render();return;}selectionError='';exceptions=next;intentRevision++;options.onSelection?.(Object.freeze(intent()));render();}
+ function open(row){if(!coherent())return;Promise.resolve(options.openCandidate(Object.freeze({candidate_id:row.candidate_id,context,scope:{...scope}}))).catch(()=>{if(current()){error='Could not open this Candidate; try again.';render();}});}
+ function pageHeight(page){const ids=new Set(page.rows.map(row=>row.candidate_id));return Array.from(scroller.querySelectorAll('tr[data-candidate-id]')).filter(n=>ids.has(n.dataset.candidateId)).reduce((sum,n)=>sum+n.getBoundingClientRect().height,0);}
+ function render(){
+  const focus=ui.capture(root,doc),available=coherent(),table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),thead=el('thead'),trHead=el('tr'),tbody=el('tbody');
+  const tickHead=el('th');tickHead.setAttribute('aria-label','Selected');trHead.append(tickHead);
+  for(const [key,label] of [['NAME','Candidate'],['DEDUCTIONS','Deductions'],['AMOUNT','Amount ex VAT'],['STATUS','Status']]){const th=el('th');th.scope='col';const active=sort.startsWith(key+'_'),b=button(label+(active?(sort.endsWith('ASC')?' ▲':' ▼'):''),()=>setSort(key+'_'+(sort===key+'_ASC'?'DESC':'ASC')));b.setAttribute('data-next-focus-key','ready-heading:'+key);b.disabled=busy||!current();if(active)th.setAttribute('aria-sort',sort.endsWith('ASC')?'ascending':'descending');th.append(b);trHead.append(th);}const openHead=el('th','');openHead.className='bpay-next-ready-open-cell';trHead.append(openHead);thead.append(trHead);
+  for(const row of pages.flatMap(p=>p.rows)){
+   const id=row.candidate_id,tr=el('tr');tr.tabIndex=0;tr.dataset.candidateId=id;tr.setAttribute('data-next-focus-key','ready:'+id);tr.setAttribute('aria-selected',String(highlight===id));
+   const ticks=el('td'),tick=el('input');tick.type='checkbox';tick.checked=row.payable_count!=='0'&&selected(id);tick.disabled=!available||row.payable_count==='0';tick.setAttribute('aria-label','Select '+(row.candidate_sort_name??'Candidate'));tick.setAttribute('data-next-focus-key','ready-tick:'+id);tick.addEventListener('click',event=>event.stopPropagation());tick.addEventListener('change',()=>choose(row,tick.checked));ticks.append(tick);tr.append(ticks);
+   const name=el('td'),ded=el('td'),amount=el('td'),state=el('td'),phone=el('td');for(const [n,label] of [[name,'Candidate'],[ded,'Deductions'],[amount,'Amount ex VAT'],[state,'Status']])n.dataset.label=label;
+   name.append(el('strong',row.candidate_sort_name??'Candidate'));if(row.tms_ref!==null)name.append(el('small','TMS '+row.tms_ref));ded.textContent=row.has_deduction&&(row.payable_count==='0'||selected(id))?'Yes':'No';const money=el('strong',displayPounds(row.amount));money.setAttribute('data-next-formatted-money','');amount.className='bpay-next-ready-money';amount.append(money);
+   // NET additions and debts retain their own provenance; never combine with SOURCE.
+   if(row.ready_net_add_amount!==null&&decimalCompare(row.ready_net_add_amount,'0')!==0){const net=el('small','Payment addition '+displayPounds(row.ready_net_add_amount));net.setAttribute('data-next-formatted-money','');amount.append(net);}
+   state.append(el('span',row.payable_count==='0'?'Nothing to pay this week':'Ready','candidate-office-badge candidate-office-badge--'+(row.payable_count==='0'?'neutral':'success')));
+   if(row.bank_warning_code!==null){const label=row.bank_warning_code==='BANK_DETAILS_CHANGED'?'Bank details changed':'Bank details missing',bank=el('a',label,'candidate-office-badge candidate-office-badge--warning');bank.href='#';bank.tabIndex=available?0:-1;bank.setAttribute('aria-disabled',String(!available));bank.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(available)options.openBankRecord?.(id);});bank.setAttribute('data-next-focus-key','ready-bank:'+id);state.append(bank);}
+   const b=button('Open',event=>{event.stopPropagation();open(row);});b.setAttribute('data-next-focus-key','ready-open:'+id);b.disabled=!available;phone.className='bpay-next-ready-open-cell';phone.append(b);tr.append(name,ded,amount,state,phone);
+   const focusRow=()=>{if(!available)return;highlight=id;for(const n of tbody.children)n.setAttribute('aria-selected',String(n===tr));tr.focus({preventScroll:true});};tr.addEventListener('click',event=>{if(!event.target.closest('button,input'))focusRow();});tr.addEventListener('dblclick',event=>{if(!event.target.closest('button,input'))open(row);});
+   tr.addEventListener('keydown',event=>{if(event.target!==tr||!available)return;if(event.key==='Enter'){event.preventDefault();open(row);}else if(event.key===' '){event.preventDefault();choose(row,!selected(id));}else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const nodes=Array.from(tbody.children),i=nodes.indexOf(tr),at=event.key==='Home'?0:event.key==='End'?nodes.length-1:Math.max(0,Math.min(nodes.length-1,i+(event.key==='ArrowDown'?1:-1)));nodes[at]?.focus();}});tbody.append(tr);
+  }
+  table.append(thead,tbody);table.hidden=Boolean(context&&(!joined.available||!sameWorkbenchRevision(context,joined.context)));scroller.replaceChildren(table);scroller.classList.toggle('bpay-next-stale',!available);select.value=sort;select.disabled=busy||!current();
+  if(available&&!pages.some(p=>p.rows.length))scroller.append(el('p','No payments are ready.','bpay-next-ready-empty'));
+  status.setAttribute('role',error||selectionError?'alert':'status');status.textContent=error||selectionError||(busy?(pending.direction==='reset'?'Loading…':'Loading more…'):context&&!available?'Payments changed; refresh to continue.':'');retry.hidden=!error;retry.textContent=reloadRequired?'Refresh':'Try again';
+  foot.textContent=available?BigInt(header.candidate_count).toLocaleString('en-GB')+' Candidates · '+BigInt(header.selectable_member_count).toLocaleString('en-GB')+' payment items · Sorted by '+(sort.startsWith('NAME')?'Candidate':sort.startsWith('AMOUNT')?'amount':sort.startsWith('DEDUCTIONS')?'deductions':'status')+(sort.endsWith('ASC')?', ascending':', descending'):'';
+  root.setAttribute('aria-busy',String(busy));if(focus&&current()&&root.isConnected)ui.restore(root,focus,scroller);notify();
+ }
+ async function read(direction,after){
+  if(busy||!current())return;const ticket=++generation,readScope={...scope},readSort=sort,scroll=scroller.scrollTop;let adjustment=0;busy=true;error='';reloadRequired=false;pending={direction,after};render();
+  try{const page=await client.loadWorkbenchPage('CANDIDATES',{...readScope,sort:readSort,after,limit:100});if(ticket!==generation||!current())return;validateWorkbenchResponse(page,'CANDIDATES',normalizeWorkbenchInput('CANDIDATES',{...readScope,sort:readSort,after,limit:100}),options.actorId.toLowerCase());
+   const summary=await client.loadWorkbenchPage('HEADER',{...readScope,section:'READY'});if(ticket!==generation||!current())return;validateWorkbenchResponse(summary,'HEADER',normalizeWorkbenchInput('HEADER',{...readScope,section:'READY'}),options.actorId.toLowerCase());
+   if(!sameWorkbenchRevision(page.context,summary.context)||context&&!sameWorkbenchRevision(context,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+   context=page.context;header=summary.rows[0];const block={after,next:page.next_cursor,rows:page.rows};if(direction==='reset'){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();adjustment=page.rows.length;}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
+  }catch(e){if(ticket===generation&&current()){reloadRequired=e?.reloadRequired===true||e?.reload===true;error=reloadRequired?'Payments changed; refresh to continue.':'Could not load payments; try again.';}}
+  finally{if(ticket===generation&&current()){busy=false;render();if(!error){if(direction==='back')adjustment=pageHeight(pages[0]);scroller.scrollTop=direction==='reset'?0:Math.max(0,scroll+adjustment);}}}
+ }
+ function reset(){generation++;busy=false;context=null;header=null;pages=[];history=[];highlight=null;void read('reset',null);}
+ function setSort(value){if(!current()||busy||!['NAME_ASC','NAME_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','AMOUNT_ASC','AMOUNT_DESC','STATUS_ASC','STATUS_DESC'].includes(value))return;sort=value;reset();}
+ select.addEventListener('change',()=>setSort(select.value));scroller.addEventListener('scroll',()=>{if(busy||error||!coherent())return;if(scroller.scrollTop<40&&history.length){const key=history.at(-1);void read('back',key===null?null:{context,key});}else if(pages.at(-1)?.next&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<120)void read('forward',pages.at(-1).next);});
+ const ownerChanged=()=>{if(!actorCurrent()){closed=true;generation++;pages=[];exceptions.clear();root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
+ render();void read('reset',null);
+ return Object.freeze({selectionLabel,snapshot:()=>Object.freeze({scope:{...scope},sort,context,available:Boolean(coherent()),intent:Object.freeze(intent())}),joinHeader(value){if(!current())return;joined=value;render();},reload(){if(current())reset();},setScope(value){if(!current()||!exact(value,['candidate_id','client_id','channel'])||!field(value.candidate_id,'uuid?')||!field(value.client_id,'uuid?')||!field(value.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');scope={...value};baseline='ALL';exceptions.clear();intentRevision++;options.onSelection?.(Object.freeze(intent()));reset();},
+  async countSelection(){if(!coherent())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);const revision=intentRevision,captured=context,args={...scope,section:'READY',count_selection:intent()};const page=await client.loadWorkbenchPage('HEADER',args);if(!current()||revision!==intentRevision||!sameWorkbenchRevision(captured,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);validateWorkbenchResponse(page,'HEADER',normalizeWorkbenchInput('HEADER',args),options.actorId.toLowerCase());return Object.freeze({context:page.context,candidate_count:page.rows[0].selected_candidate_count,member_count:page.rows[0].selected_member_count});},
+  close(){closed=true;generation++;pages=[];exceptions.clear();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}
+ });
 }
 
 function mountIssueLists(options){
@@ -737,6 +808,6 @@ function mountIssueLists(options){
   snapshot(){return Object.freeze({kind,search,sort,scope:{...base},context:bundle?.page.context??null,available:Boolean(bundle&&!busy&&!error&&current())});}
  });
 }
-return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountIssueLists,issueReason,issueAmounts});
+return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,issueReason,issueAmounts});
 
 });
