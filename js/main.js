@@ -5110,6 +5110,52 @@ function weeklySourcePresentAuthoriseResult(value, actor) {
   const copy = weeklySourceAuthoriseRefusalPresentation(value, actor);
   return copy ? {...value, reason: copy.message, message: copy.message, retryable: copy.retryable} : value;
 }
+// WB-01: a definite typed refusal uses the real Contract rates screen.
+function bpayNextMissingRatePresentation(value, actor) {
+  const body = value?.json || value?.response || value || {};
+  if (!actor || SESSION?.user?.id !== actor || body.ok === true || body.success === true
+      || ![body.code, body.error_code, body.error].includes('BPAY_NEXT_ORDINARY_USED_RATE_MISSING')
+      || typeof body.bucket !== 'string' || !body.bucket.length || body.bucket.length > 245
+      || typeof body.contract_id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.contract_id)) return null;
+  const labels = { DAY: 'Day', NIGHT: 'Night', SAT: 'Saturday', SUN: 'Sunday', BH: 'Bank Holiday', MILE: 'Mileage' };
+  return { code: 'BPAY_NEXT_ORDINARY_USED_RATE_MISSING', bucket: body.bucket, contract_id: body.contract_id,
+    message: 'Pay rate missing for ' + (Object.prototype.hasOwnProperty.call(labels, body.bucket) ? labels[body.bucket] : body.bucket) + '; set the rate on the Contract, then authorise again.' };
+}
+function bpayNextPresentMissingRateResult(value, actor) {
+  const copy = bpayNextMissingRatePresentation(value, actor);
+  return copy ? { ...value, ...copy, reason: copy.message, retryable: false } : value;
+}
+async function bpayNextOpenMissingRateContract(refusal, actor, parentFrame) {
+  if (!bpayNextMissingRatePresentation(refusal, actor) || _currentFrame() !== parentFrame) return false;
+  const fresh = await getContract(refusal.contract_id);
+  if (SESSION?.user?.id !== actor || _currentFrame() !== parentFrame) return false;
+  const contract = fresh?.contract || fresh;
+  if (String(contract?.id || '').toLowerCase() !== refusal.contract_id.toLowerCase()) throw new Error('The Contract rates could not be loaded.');
+  openContract(fresh);
+  const frame = _currentFrame();
+  if (SESSION?.user?.id !== actor || !frame || frame === parentFrame
+      || window.modalCtx?.entity !== 'contracts'
+      || String(window.modalCtx?.data?.id || '').toLowerCase() !== refusal.contract_id.toLowerCase()) return false;
+  frame.currentTabKey = 'rates';
+  await frame.setTab('rates');
+  return SESSION?.user?.id === actor && _currentFrame() === frame
+    && window.modalCtx?.entity === 'contracts'
+    && String(window.modalCtx?.data?.id || '').toLowerCase() === refusal.contract_id.toLowerCase();
+}
+async function bpayNextShowMissingRateRefusal(value, actor, parentFrame) {
+  const copy = bpayNextMissingRatePresentation(value, actor);
+  if (!copy) return null;
+  // A late response from a dismissed frame never opens an unrelated window.
+  if (_currentFrame() !== parentFrame) return { ok: false, handled: true, ...copy };
+  const answer = await openUiConfirmModal({ title: 'Pay rate missing', message: copy.message,
+    confirm_label: 'Open Contract rates', cancel_label: 'Close' });
+  if (answer?.confirmed === true && SESSION?.user?.id === actor && _currentFrame() === parentFrame) {
+    try { await bpayNextOpenMissingRateContract(copy, actor, parentFrame); }
+    catch (error) { if (SESSION?.user?.id === actor && _currentFrame() === parentFrame) window.alert(error?.message || 'The Contract rates could not be loaded.'); }
+  }
+  return { ok: false, handled: true, ...copy };
+}
 function bankingNextOwnerMessage(status, legacy=false) {
   return window.CloudTMSBpayNextOwner?.message(status,legacy) || 'Banking ownership is unavailable. Money controls are disabled.';
 }
@@ -90196,6 +90242,8 @@ function renderBankingPayBatchPayeEntryModal() {
 
 function openBulkTimesheetActionProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const missingRateActor = SESSION?.user?.id || null;
+  const missingRateParentFrame = _currentFrame();
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const toFiniteNumber = (value, fallback = 0) => {
     const num = Number(value);
@@ -90415,14 +90463,20 @@ function openBulkTimesheetActionProgressModal(options = {}) {
 
   const renderFailures = () => {
     if (!failuresWrapEl || !failuresEl || !failuresSummaryEl) return;
-    const count = state.failures.length;
+    const structuralRate = bpayNextMissingRatePresentation(state.structuralFailure, missingRateActor);
+    const count = state.failures.length + (structuralRate ? 1 : 0);
     failuresWrapEl.style.display = count > 0 ? '' : 'none';
     failuresSummaryEl.textContent = count === 1 ? '1 failure' : `${count} failures`;
     const visibleFailures = state.failures.slice(0, 200);
-    const lines = visibleFailures.map((failure) => {
+    const terminal = !!(state.completed || state.stopped || state.structuralFailure);
+    const rateButton = (failure, index) => bpayNextMissingRatePresentation(failure, missingRateActor)
+      ? `<br><button class="btn" data-act="bulk-ts-progress-contract-rates" data-failure-index="${index}" ${terminal ? '' : 'disabled'}>Open Contract rates</button>` : '';
+    const lines = visibleFailures.map((failure, index) => {
       const chunkText = failure.chunk_index ? `Chunk ${failure.chunk_index}: ` : '';
-      return `<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);"><strong>${enc(chunkText + String(failure.row_key || 'row'))}</strong><br>${enc(failure.message || 'Failed')}</div>`;
+      const rate = bpayNextMissingRatePresentation(failure, missingRateActor);
+      return `<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);"><strong>${enc(chunkText + String(failure.row_key || 'row'))}</strong><br>${enc(rate?.message || failure.message || 'Failed')}${rateButton(failure, index)}</div>`;
     });
+    if (structuralRate) lines.push(`<div style="padding:6px 0;">${enc(structuralRate.message)}${rateButton(state.structuralFailure, -1)}</div>`);
     if (state.failures.length > visibleFailures.length) {
       lines.push(`<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);font-weight:700;">${enc(`${state.failures.length - visibleFailures.length} more failures not shown here.`)}</div>`);
     }
@@ -90569,10 +90623,22 @@ function openBulkTimesheetActionProgressModal(options = {}) {
     overlay
   };
 
-  function onClick(ev) {
+  async function onClick(ev) {
     const btn = ev?.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
     if (!btn) return;
     const act = trimStr(btn.getAttribute('data-act'));
+    if (act === 'bulk-ts-progress-contract-rates') {
+      if (btn.disabled || state.closed || !root.isConnected || !(state.completed || state.stopped || state.structuralFailure)
+          || SESSION?.user?.id !== missingRateActor || _currentFrame() !== missingRateParentFrame) return;
+      const index = Number(btn.getAttribute('data-failure-index'));
+      const failure = index === -1 ? state.structuralFailure : (Number.isInteger(index) && index >= 0 ? state.failures[index] : null);
+      const rate = bpayNextMissingRatePresentation(failure, missingRateActor);
+      if (!rate) return;
+      controller.close();
+      try { await bpayNextOpenMissingRateContract(rate, missingRateActor, missingRateParentFrame); }
+      catch (error) { if (SESSION?.user?.id === missingRateActor && _currentFrame() === missingRateParentFrame) window.alert(error?.message || 'The Contract rates could not be loaded.'); }
+      return;
+    }
     if (act === 'bulk-ts-progress-stop') {
       controller.requestStop();
       return;
@@ -195474,6 +195540,14 @@ function bindBulkAuthoriseShellControls(state) {
     });
   };
 
+  (Array.isArray(st.__missing_rate_refusals) ? st.__missing_rate_refusals : []).forEach((value, index) => {
+    bindClick('bulkAuthoriseContractRates_' + index, async () => {
+      if (window.modalCtx?.bulkAuthoriseState !== st || _currentFrame() !== st.__missing_rate_parent_frame) return;
+      const rate = bpayNextMissingRatePresentation(st.__missing_rate_refusals[index], st.__missing_rate_actor);
+      if (rate) await bpayNextOpenMissingRateContract(rate, st.__missing_rate_actor, st.__missing_rate_parent_frame);
+    });
+  });
+
   const getVisibleModel = () => {
     const visible = (typeof getVisibleBulkAuthoriseRows === 'function') ? getVisibleBulkAuthoriseRows(st) : {
       visible_rows: [],
@@ -197010,8 +197084,8 @@ async function authoriseSelectedTimesheets(payload) {
       if (!json || typeof json !== 'object') json = {};
     }
   const refusalActor = await weeklySourceQualifyAuthoriseRefusal([...(Array.isArray(json.results) ? json.results : []), ...(Array.isArray(json.failed_items) ? json.failed_items : [])], requestActor);
-  const results = Array.isArray(json.results) ? json.results.map(normalizeResult).map(value => weeklySourcePresentAuthoriseResult(value, refusalActor)) : [];
-  const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items).map(value => weeklySourcePresentAuthoriseResult(value, refusalActor)) : results.filter((item) => item && item.success !== true);
+  const results = Array.isArray(json.results) ? json.results.map(normalizeResult).map(value => bpayNextPresentMissingRateResult(weeklySourcePresentAuthoriseResult(value, refusalActor), requestActor)) : [];
+  const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items).map(value => bpayNextPresentMissingRateResult(weeklySourcePresentAuthoriseResult(value, refusalActor), requestActor)) : results.filter((item) => item && item.success !== true);
   const staleItems = Array.isArray(json.stale_items) ? clonePayload(json.stale_items) : failedItems.filter((item) => {
     const code = firstString(item?.error_code, item?.error).toUpperCase();
     return code === 'TIMESHEET_MOVED' || code === 'EXPECTED_TIMESHEET_MISMATCH' || code === 'ROW_SIGNATURE_MISMATCH' || item?.was_stale === true;
@@ -256667,6 +256741,11 @@ function renderBulkAuthoriseShell(state) {
           ? `<div class="mini" style="margin-top:8px;color:var(--bad,#ff6b6b);white-space:pre-wrap;">${enc(String(st.error_text || ''))}</div>`
           : ''}
 
+        ${(Array.isArray(st.__missing_rate_refusals) ? st.__missing_rate_refusals : []).map((value, index) => {
+          const rate = bpayNextMissingRatePresentation(value, st.__missing_rate_actor);
+          return rate ? `<div class="mini" style="margin-top:8px;">${enc(rate.message)} <button id="bulkAuthoriseContractRates_${index}" class="btn" ${st.loading || st.batch_busy ? 'disabled' : ''}>Open Contract rates</button></div>` : '';
+        }).join('')}
+
         ${st.loading
           ? '<div class="mini" style="margin-top:8px;opacity:.85;">Loading Bulk Authorise data…</div>'
           : ''}
@@ -261004,6 +261083,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       .filter((key) => key && set.has(key));
   };
   const refusalActor = SESSION?.user?.id || null;
+  const missingRateParentFrame = _currentFrame();
   const mutationKey = `bulk-authorise-selected:${trimStr(opts.source || '')}:${Date.now()}`;
   if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
   if (st.batch_busy || st.__bulk_authorise_selected_in_flight) {
@@ -261099,6 +261179,9 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
 
     st.batch_busy = true;
     st.error_text = '';
+    st.__missing_rate_refusals = [];
+    st.__missing_rate_actor = refusalActor;
+    st.__missing_rate_parent_frame = missingRateParentFrame;
     if (typeof rerenderBulkAuthoriseWorkbench === 'function') await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][AUTHORISE-SELECTED][START]');
 
     const result = await authoriseSelectedTimesheets({
@@ -261229,6 +261312,8 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       for (const failed of refusedRows) summaryLines.push(`- ${firstString(failed?.row_key, failed?.row_key_before, failed?.timesheet_id, 'row')}: ${firstString(failed?.reason, failed?.message, failed?.error_code, 'Failed')}`);
     }
     if (staleRows.length) summaryLines.push('', `${staleRows.length} stale row${staleRows.length === 1 ? '' : 's'} need rechecking.`);
+    st.__missing_rate_refusals = [...failedRows, result?.structural_failure]
+      .map(value => bpayNextMissingRatePresentation(value, refusalActor)).filter(Boolean);
     st.summary_message = summaryLines.join('\n');
     const completionModal = { shouldShow: true, title: 'Bulk Authorise result', message: st.summary_message, confirm_label: 'OK', cancel_label: '' };
 
@@ -261285,7 +261370,11 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     st.batch_busy = false;
     st.__bulk_authorise_selected_in_flight = false;
     markButtonsBusy(false);
-    st.error_text = String(err?.message || err || 'Bulk authorise failed.');
+    const missingRate = bpayNextMissingRatePresentation(err, refusalActor);
+    st.__missing_rate_refusals = missingRate ? [missingRate] : [];
+    st.__missing_rate_actor = refusalActor;
+    st.__missing_rate_parent_frame = missingRateParentFrame;
+    st.error_text = missingRate?.message || String(err?.message || err || 'Bulk authorise failed.');
     if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
       try {
         await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][AUTHORISE-SELECTED][ERROR]');
@@ -314645,6 +314734,7 @@ function renderTimesheetLinesTab(ctx) {
 
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
   const requestActor = SESSION?.user?.id || null;
+  const requestFrame = _currentFrame();
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
 
@@ -315187,6 +315277,8 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       }
     }
     if (!json) {
+      const missingRate = await bpayNextShowMissingRateRefusal(authoriseError, requestActor, requestFrame);
+      if (missingRate) { GE(); return missingRate; }
       const err = await weeklySourceMapAuthoriseError(authoriseError, requestActor);
       try {
         if (typeof tsHandleLifecycleReconcileModal === 'function') {
@@ -315686,6 +315778,7 @@ function scheduleTimesheetPostMutationLazyRefresh(args = {}) {
 
 async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */) {
   const requestActor = SESSION?.user?.id || null;
+  const requestFrame = _currentFrame();
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const pickSignature = (...values) => {
     for (const value of values) {
@@ -315784,6 +315877,8 @@ async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */
 
     return { ...json, affected_refresh: affectedRefresh };
   } catch (error) {
+    const missingRate = await bpayNextShowMissingRateRefusal(error, requestActor, requestFrame);
+    if (missingRate) return missingRate;
     throw await weeklySourceMapAuthoriseError(error, requestActor);
   } finally {
     window.__timesheetLifecycleMutationInFlight.delete(mutationKey);
