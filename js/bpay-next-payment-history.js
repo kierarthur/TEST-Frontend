@@ -468,7 +468,7 @@ function validateBpayNextHistoryResponse(value, request) {
           html+='<h4>'+escape(label(state.page.section))+'</h4><p>'+escape(amountNotice(state.page.amount_scope,state.page.section))+'</p><p>'+escape(label(state.page.amount_scope))+'</p>';
           if(state.page.rows.length===0)html+='<p>No records in this section.</p>';
           for(const row of state.page.rows) {
-            if(state.page.section==='TRANSFERS')html+='<p>'+escape(transferNetDescription(row.data,client.netContext(row.data)))+'</p>'; 
+            if(state.page.section==='TRANSFERS')html+='<p>'+escape(transferNetDescription(row.data,client.netContext(row.data)))+'</p>';
             if(state.page.section==='MEMBERS')html+='<p>'+escape(memberDescription(row.data,client.originContext(row.data)))+'</p><p>Signed member contribution (GBP): '+escape(row.data.signed_cash_contribution)+'. This is a recorded constituent of the transfer; no Timesheet or Client cash allocation is made.</p>';
             html+='<div class="card"><details><summary data-next-focus-key="'+escape('row:'+state.page.section+':'+JSON.stringify(row.key))+'">'+escape(label(state.page.section))+' · '+escape(row.key.map((value,index)=>displayScalar(value,BPAY_NEXT_HISTORY_SECTIONS[state.page.section].keys[index][0])).join(' / '))+'</summary><dl>'+Object.entries(row.data).map(([key,value])=>'<dt>'+escape(label(key))+'</dt><dd style="overflow-wrap:anywhere">'+escape(displayScalar(value,key,state.page.section,row.data))+'</dd>').join('')+'</dl></details><div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">'+childLinks(state.page.section,row,state.request).map(linkButton).join('')+'</div></div>';
           }
