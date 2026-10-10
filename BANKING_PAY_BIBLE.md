@@ -845,3 +845,5 @@ PS-14 shows the server's confirmed original obligation while materialisation is 
 ### 10 October2026 — frozen revision attribution in historical detail
 
 PS-15 exposes the six existing immutable revision display fields (Candidate name/reference, Client name, job, band and Timesheet reference) through the same authenticated52-section history route, including paid/cancelled/returned detail. Office mirrors the closed schema; captured_revision_id selects its exact historical revision. No duplicate capture or live Client/Contract lookup is added. Operational Draft-review guards remain. Approved new Summary APIs/filters/consistent export belong to S1 in the plan. Actual joined application/fullWorker/queue/minute acceptance remains NOT_RUN; local source only.
+
+SP-02 local source: Source workspace uses the existing F15 actor-scoped owner client on open and shows the NEXT publication notice/refusal only for a positive NEXT peek. Factual finalisation/protected/local facts remain available. Recover/externalC1 admission belongs to the DB; no screen can select financial ownership. Asset import-workspace 20261010-next-source-retirement-r1. Joined acceptance NOT_RUN.

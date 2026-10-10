@@ -343033,7 +343033,8 @@ async function apiResolveTimesheetClient(timesheetId, clientId) {
 
 async function openImportsModal() {
   if (window.CloudTMSWeeklySourceImportWorkspaceV1?.open) {
-    return window.CloudTMSWeeklySourceImportWorkspaceV1.open();
+    return window.CloudTMSWeeklySourceImportWorkspaceV1.open('imports', { bankingOwnerClient: bankingNextOwnerClient(),
+      actorId: SESSION?.user?.id || null, currentActorId: () => SESSION?.user?.id || null });
   }
   // Seed a neutral modalCtx for this screen
   window.modalCtx = {

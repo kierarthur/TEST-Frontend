@@ -65,10 +65,13 @@
   const tone = (value, fallback = 'neutral') => TONES.has(asText(value).toLowerCase()) ? asText(value).toLowerCase() : fallback;
   const safeKey = (value) => asText(value).replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'row';
 
-  function friendlyWorkspaceError(value) {
+  const NEXT_PAY_NOTICE = 'Pay is published through Banking Pay NEXT; there is nothing to recover here';
+
+  function friendlyWorkspaceError(value, owner = session.bankingOwnerClient?.peek()) {
     const error = value instanceof Error ? value : null;
     const raw = asText(error?.message || value);
-    const code = asText(error?.code || raw.match(/WEEKLY_SOURCE_[A-Z0-9_]+/)?.[0]).toUpperCase();
+    const code = asText(error?.code || raw.match(/(?:WEEKLY_SOURCE|BPAY_NEXT)_[A-Z0-9_]+/)?.[0]).toUpperCase();
+    if (code === 'BPAY_NEXT_LEGACY_WRITER_RETIRED' && owner?.active_owner === 'NEXT') return NEXT_PAY_NOTICE;
     if (code === 'WEEKLY_SOURCE_CYCLE_NOT_FOUND') return 'This source is still being prepared. Recheck in a moment.';
     if (code === 'WEEKLY_SOURCE_CUTOFF_NOT_REACHED') return 'This source can be finalised after the cutoff shown above.';
     if (code === 'WEEKLY_SOURCE_GROUP_NOT_ACTIVE') return 'This source is no longer available. Choose another source.';
@@ -907,17 +910,21 @@
 
   function renderWorkspace(workspace, tabKey, state = {}) {
     const tab = TABS.includes(tabKey) ? tabKey : 'imports';
+    const nextPayNotice = state.bankingOwnerClient?.peek()?.active_owner === 'NEXT'
+      ? `<div class="ws-notice ws-notice--info" role="status"><span>${escapeHtml(NEXT_PAY_NOTICE)}</span></div>` : '';
     const notices = workspace.notices.map((notice) => `<div class="ws-notice ws-notice--${escapeHtml(notice.tone)}"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');
-    const error = asText(state.error) ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>Weekly source information could not be loaded</strong><span>${escapeHtml(state.error)}</span></div>` : '';
+    const visibleError = state.error === NEXT_PAY_NOTICE && !nextPayNotice
+      ? 'Weekly source information is temporarily unavailable. Recheck or try again shortly.' : state.error;
+    const error = asText(visibleError) ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>Weekly source information could not be loaded</strong><span>${escapeHtml(visibleError)}</span></div>` : '';
     const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;
     const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;
-    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
+    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${nextPayNotice}${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
     const body = state.loading === true ? '<div class="ws-loading" role="status">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);
-    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${notices}${error}${body}</div>`;
+    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${body}</div>`;
   }
 
   const session = {
-    reviews: {}, reviewSingleScope: false, sourceFilters: {},
+    bankingOwnerClient: null, openGeneration: 0, reviews: {}, reviewSingleScope: false, sourceFilters: {},
     combined: { model: null, filters: {}, list: 'ready', sort: '', direction: 'asc', seek: '', selected: new Set(), exclusions: new Set(), batch: null, error: '' },
     workspace: null, activeTab: 'imports', loading: false, error: '', requestSequence: 0,
     query: { filters: {} },
@@ -1731,18 +1738,32 @@
     return typeof root.html === 'function' ? root.html(markup) : markup;
   }
 
-  async function open(initialTab = 'imports') {
+  async function open(initialTab = 'imports', options = {}) {
     const tab = TABS.includes(initialTab) ? initialTab : 'imports';
+    const generation = ++session.openGeneration;
+    const actorId = options.actorId;
+    const current = () => generation === session.openGeneration
+      && (!options.currentActorId || options.currentActorId() === actorId);
+    if (!current()) return;
     session.activeTab = tab; session.loading = true; session.error = '';
+    session.bankingOwnerClient = options.bankingOwnerClient || null;
+    // F15 qualifies this actor/open. Display lookup failure never blocks factual Source.
+    const ownerRead = session.bankingOwnerClient?.begin('weekly-source-workspace').catch(() => null);
+
     try {
-      session.workspace = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`));
+      const loaded = await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`);
+      if (!current()) return;
+      session.workspace = normaliseWorkspace(loaded);
       session.uploadProfileId = '';
       syncUploadProfile(session.workspace);
       session.loadedTab = tab;
       if(['finalise','imports','queries','history'].includes(tab)&&session.workspace.combined_source_workspace) session.loadedTab='';
     } catch (error) {
+      if (!current()) return;
       session.workspace = emptyWorkspace(); session.loadedTab = tab; session.error = friendlyWorkspaceError(error);
     }
+    await ownerRead;
+    if (!current()) return;
     session.loading = false; root.modalCtx = { entity: 'weekly-source-imports', data: {}, weeklySourceState: session };
     if (typeof root.showModal !== 'function') throw new Error('The Imports screen is unavailable.');
     root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => {
@@ -1751,6 +1772,12 @@
     }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
     if (tab !== 'imports') await currentFrame()?.setTab?.(tab);
   }
+
+  root.addEventListener?.('cloudtms:bpay-next-owner-changed', () => {
+    if (!session.bankingOwnerClient) return;
+    if (currentFrame()) repaint();
+    else session.reloadOnReturn = true;
+  });
 
   async function navigateToExistingShift(target) {
     if (!currentFrame() || !target?.client_id || !target?.source_group_id) return false;
