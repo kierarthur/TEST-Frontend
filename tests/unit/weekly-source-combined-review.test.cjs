@@ -1,6 +1,64 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const view=require('../../js/weekly-source/combined-review.js');
+function contactFixture(){
+  const owner={key:'cycle',bulk_actions:{ask_candidates:{enabled:true,request:{}},send_manager_now:{enabled:true,request:{}}}};
+  const rows=[1,2,3].map(n=>({combined_key:'row'+n,scope_key:'cycle',group_key:'group'+n,
+    candidate_id:'candidate'+n,client_id:'client',candidate:'Same name',client:'Trust',children:[{issue:'Hours differ'}],
+    contact_policy:{contract:'WEEKLY_SOURCE_CONTACT_POLICY_V1',
+      candidate:{eligible:n!==3,reason:n===3?'No active MyTMS access.':null,recipient_key:'candidate:'+n,
+        recipient:'Same name',channel:'MyTMS notification',request_kind:'CHECK_HOURS',summary:'Review hours.'},
+      manager:{eligible:false,reason:'Candidate timesheet required.',recipient_key:'manager:one',recipient:'Manager',channel:'Email'}}}));
+  return {contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'questions',owners:[owner],rows,has_more:true};
+}
+test('contact selection fails closed and counts distinct recipient identities, not names',()=>{
+  const m=contactFixture();
+  assert.equal(view.contactPolicy(m.rows[0],m).eligible,true);
+  assert.equal(view.contactPolicy({...m.rows[0],contact_policy:null},m).eligible,false);
+  assert.equal(view.contactPolicy(m.rows[0],{...m,owners:[]}).eligible,false);
+  const plan=view.contactPlan(m,new Set(m.rows.map(row=>row.combined_key)));
+  assert.equal(plan.recipientCount,2);assert.equal(plan.messageCount,2);
+  assert.equal(plan.included.length,2);assert.equal(plan.excluded.length,1);
+  assert.match(plan.excluded[0].reason,/MyTMS/);
+  assert.equal(view.contactPlan(m,new Set(['row1']),'manager').included.length,0);
+});
+test('contact UI explains audience eligibility and limits select-all to shown records',()=>{
+  const html=view.render(contactFixture(),{selected:new Set()});
+  assert.match(html,/Select all eligible records shown \(2\)/);
+  assert.match(html,/Load more to include more records/);
+  assert.match(html,/data-wsr-select="row3"[^>]*disabled/);
+  assert.match(html,/Candidate timesheet required/);
+  assert.doesNotMatch(html,/data-wsr-outreach/);
+});
+test('contact planning separates candidate request kinds and preserves manager owner boundaries',()=>{
+  const m=contactFixture();m.rows=m.rows.slice(0,2);
+  m.rows[1].contact_policy.candidate.recipient_key=m.rows[0].contact_policy.candidate.recipient_key;
+  m.rows[1].contact_policy.candidate.request_kind='SUBMIT_TIMESHEET';
+  const selected=new Set(m.rows.map(row=>row.combined_key));
+  const candidatePlan=view.contactPlan(m,selected);
+  assert.equal(candidatePlan.recipientCount,1);assert.equal(candidatePlan.recipients.length,2);
+  assert.equal(candidatePlan.messageCount,2);
+  m.rows.forEach(row=>row.contact_policy.manager.eligible=true);
+  assert.equal(view.contactPlan(m,selected,'manager').messageCount,1);
+  m.rows[1].scope_key='another-cycle';m.owners.push({...m.owners[0],key:'another-cycle'});
+  const managerPlan=view.contactPlan(m,selected,'manager');
+  assert.equal(managerPlan.recipientCount,1);assert.equal(managerPlan.messageCount,2);
+});
+test('contact outcomes require durable new intents and never count an unchanged partial result as queued',()=>{
+  const rows=contactFixture().rows.slice(0,2);
+  const result={ok:true,included_count:2,results:[{ok:true,message_intent_id:'intent',status:'CREATED'}]};
+  assert.deepEqual(view.contactOutcome(result,rows).map(row=>row.state),['queued','queued']);
+  assert.deepEqual(view.contactOutcome({...result,results:[...result.results,{ok:true,status:'UNCHANGED'}]},rows).map(row=>row.state),['unconfirmed','unconfirmed']);
+  assert.deepEqual(view.contactOutcome({...result,results:[]},rows).map(row=>row.state),['unconfirmed','unconfirmed']);
+  assert.deepEqual(view.contactOutcome({ok:false},rows).map(row=>row.state),['failed','failed']);
+  assert.deepEqual(view.contactOutcome({...result,included_count:1,excluded:[{group_key:'group2'}]},rows).map(row=>row.state),['queued','skipped']);
+});
+test('contact review escapes recipients and shows no delivery promise',()=>{
+  const m=contactFixture();m.rows[0].contact_policy.candidate.recipient='<private&recipient>';
+  const html=view.render(m,{selected:new Set(['row1']),contactReview:view.contactPlan(m,new Set(['row1']))});
+  assert.match(html,/&lt;private&amp;recipient&gt;/);assert.match(html,/No message has been queued yet/);
+  assert.match(html,/Queue candidate requests/);assert.match(html,/checked again/);
+});
 const model={contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'checks',
   counts:{checks:1},owners:[],rows:[{combined_key:'check',candidate:'<Baljit>',client:'Trust A',
     source:'NHSP',period:'27 Sep 2026',day_date:'21 Sep 2026',system_hours:'09:00–17:00 · 30 min break',

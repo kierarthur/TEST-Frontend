@@ -1040,7 +1040,7 @@
     state.filters=tab==='history'?{...session.sourceFilters,...(state.historyDates||{})}:session.sourceFilters;
     const filterIdentity=JSON.stringify(state.filters);
     if(state.filterIdentity!==filterIdentity){
-      state.selected?.clear();state.reportDetail=null;state.seek='';state.filterIdentity=filterIdentity;
+      state.selected?.clear();state.contactReview=null;state.reportDetail=null;state.seek='';state.filterIdentity=filterIdentity;
       append=false;
     }
     if(append&&state.loadingMore)return;
@@ -1075,7 +1075,7 @@
   function bindCombinedReview(host,tab) {
     const state=session.reviews[tab],model=state?.model; if(!model)return;
     state.selected ||= new Set();
-    const reload=()=>{state.seek='';state.selected.clear();session.scrollByTab[tab]=0;loadCombinedReview(tab);};
+    const reload=()=>{if(state.busy)return;state.seek='';state.selected.clear();state.contactReview=null;session.scrollByTab[tab]=0;loadCombinedReview(tab);};
     const loadReport=async(key,append=false)=>{
       if(state.reportBusy)return;
       state.reportBusy=true;
@@ -1110,31 +1110,93 @@
     }));
     host.querySelector('[data-wsr-close-report]')?.addEventListener('click',()=>{state.reportDetail=null;repaint();});
     host.querySelector('[data-wsr-report-more]')?.addEventListener('click',()=>loadReport(state.reportDetail.report.report_key,true));
-    host.querySelectorAll('[data-wsr-select]').forEach(input=>input.addEventListener('change',()=>{input.checked?state.selected.add(input.dataset.wsrSelect):state.selected.delete(input.dataset.wsrSelect);repaint();}));
-    host.querySelectorAll('[data-wsr-outreach]').forEach(button=>button.addEventListener('click',async()=>{
-      if(state.busy||model.attention_kind)return;
-      const command=button.dataset.wsrOutreach,requests=[];
-      for(const owner of model.owners){
-        const rows=model.rows.filter(row=>row.scope_key===owner.key&&state.selected.has(row.combined_key));
-        if(!rows.length)continue;
-        const payload=buildOutreachRequest({bulk_actions:owner.bulk_actions},{mode:'EXPLICIT',ids:rows.map(row=>row.group_key)},command);
-        if(!payload){session.error='Recheck the selected questions before contacting anyone.';await repaint();return;}
-        requests.push({payload,keys:rows.map(row=>row.combined_key)});
+    const contactView=root.CloudTMSCombinedReviewV1;
+    const contactEnabled=()=>tab==='queries'&&model.section==='questions'&&!model.attention_kind&&!!contactView;
+    const freshContacts=async(keys)=>{
+      const wanted=new Set(keys),rows=[],seen=new Set();let cursor='',fresh;
+      for(let page=0;page<100;page++){
+        const next=await issueCommand('COMBINED_REVIEW_WORKSPACE',{...state.filters,tab:'queries',section:'questions',
+          sort_key:state.sort||(state.filters.client_id?'candidate':'client'),sort_direction:state.direction,
+          attention_first:false,limit:100,...(cursor?{cursor}:{})});
+        if(next?.contract!=='WEEKLY_SOURCE_COMBINED_REVIEW_V1')throw new Error('Contact eligibility could not be verified.');
+        fresh=next;
+        for(const row of asArray(next.rows))if(wanted.has(row.combined_key)&&!seen.has(row.combined_key)){rows.push(row);seen.add(row.combined_key);}
+        if(seen.size===wanted.size||!next.has_more)break;
+        if(!next.next_cursor||next.next_cursor===cursor)throw new Error('Refresh the source questions before continuing.');
+        cursor=next.next_cursor;
       }
-      if(!requests.length)return;
-      state.busy=true;await repaint();
-      try {
-        for(const request of requests){
-          const result=await issueCommand(command,request.payload);
-          if(result?.ok!==true)throw new Error('The contact request is not confirmed. Refresh the questions before trying again.');
-          request.keys.forEach(key=>state.selected.delete(key));
-        }
-        await loadCombinedReview(tab);
-      } catch(error){session.error=friendlyWorkspaceError(error);}
-      finally{state.busy=false;await repaint();}
+      return {...fresh,rows};
+    };
+    host.querySelectorAll('[data-wsr-audience]').forEach(button=>button.addEventListener('click',()=>{
+      if(state.busy||!contactEnabled())return;
+      state.audience=button.dataset.wsrAudience;state.selected.clear();state.contactReview=null;repaint();
     }));
+    host.querySelectorAll('[data-wsr-select]').forEach(input=>input.addEventListener('change',()=>{
+      if(state.busy||state.contactReview||!contactEnabled())return;
+      const row=model.rows.find(item=>item.combined_key===input.dataset.wsrSelect);
+      if(input.checked&&contactView.contactPolicy(row,model,state.audience).eligible)state.selected.add(input.dataset.wsrSelect);
+      else state.selected.delete(input.dataset.wsrSelect);
+      repaint();
+    }));
+    host.querySelector('[data-wsr-select-eligible]')?.addEventListener('change',event=>{
+      if(state.busy||state.contactReview||!contactEnabled())return;
+      for(const row of model.rows)if(contactView.contactPolicy(row,model,state.audience).eligible){
+        event.target.checked?state.selected.add(row.combined_key):state.selected.delete(row.combined_key);
+      }
+      repaint();
+    });
+    host.querySelector('[data-wsr-contact-review]')?.addEventListener('click',async()=>{
+      if(state.busy||!contactEnabled()||!state.selected.size)return;
+      state.busy=true;session.error='';await repaint();
+      try{
+        const fresh=await freshContacts([...state.selected]);
+        const plan=contactView.contactPlan(fresh,state.selected,state.audience);
+        for(const key of state.selected)if(!fresh.rows.some(row=>row.combined_key===key))plan.excluded.push({key,
+          candidate:model.rows.find(row=>row.combined_key===key)?.candidate||'Selected record',reason:'This question is no longer in the current filtered results.'});
+        state.contactReview=plan;
+      }catch(error){session.error=friendlyWorkspaceError(error);}
+      finally{state.busy=false;await repaint();}
+    });
+    host.querySelector('[data-wsr-contact-back]')?.addEventListener('click',()=>{if(!state.busy){state.contactReview=null;repaint();}});
+    host.querySelector('[data-wsr-contact-dismiss]')?.addEventListener('click',()=>{if(!state.busy){state.contactResults=[];repaint();}});
+    host.querySelector('[data-wsr-contact-confirm]')?.addEventListener('click',async()=>{
+      const review=state.contactReview;
+      if(state.busy||!review||!contactEnabled()||!review.recipients.length)return;
+      const command=review.audience==='manager'?'SEND_MANAGER_NOW':'ASK_CANDIDATES';
+      state.busy=true;state.contactResults=review.excluded.map(item=>({...item,state:'skipped'}));await repaint();
+      try{
+        // Execute one recipient/owner at a time so one failure cannot hide
+        // another recipient's successful queueing. Re-read after each mutation.
+        for(const recipient of review.recipients){
+          let outcome;
+          try{
+            const fresh=await freshContacts(recipient.rows.map(row=>row.combined_key));
+            const rows=recipient.rows.map(row=>fresh.rows.find(item=>item.combined_key===row.combined_key));
+            if(rows.some((row,index)=>!row||!contactView.contactPolicy(row,fresh,review.audience).eligible
+              ||contactView.contactSignature(row)!==contactView.contactSignature(recipient.rows[index]))) {
+              outcome=recipient.rows.map(row=>({key:row.combined_key,candidate:row.candidate,state:'skipped',
+                reason:'The question, recipient or eligibility changed after review. Refresh and review it again.'}));
+            }else{
+              const owner=asArray(fresh.owners).find(item=>item.key===recipient.scope_key);
+              const payload=buildOutreachRequest({bulk_actions:owner?.bulk_actions},{mode:'EXPLICIT',ids:rows.map(row=>row.group_key)},command);
+              if(!payload)throw new Error('Contact permission changed.');
+              outcome=contactView.contactOutcome(await issueCommand(command,payload),rows);
+            }
+          }catch(error){
+            outcome=recipient.rows.map(row=>({key:row.combined_key,candidate:row.candidate,state:'failed',
+              reason:`Contact not confirmed. ${friendlyWorkspaceError(error)} Refresh and check request status before retrying.`}));
+          }
+          for(const item of outcome){state.contactResults.push({...item,recipient:recipient.recipient,channel:recipient.channel});
+            if(item.state==='queued')state.selected.delete(item.key);}
+          await repaint();
+        }
+        state.contactReview=null;
+        await loadCombinedReview(tab);
+      }finally{state.busy=false;await repaint();}
+    });
     host.querySelector('[data-wsr-refresh]')?.addEventListener('click',reload);
     host.querySelectorAll('[data-wsr-filter]').forEach(input=>input.addEventListener('change',()=>{
+      if(state.busy)return;
       state.filterFocus=input.dataset.wsrFilter;
       if(tab==='history'&&['date_from','date_to','week_ending'].includes(input.dataset.wsrFilter)){
         state.historyDates={...(state.historyDates||{}),[input.dataset.wsrFilter]:input.value};
@@ -1142,13 +1204,14 @@
       state.sort=tab==='history'?'finalised_at':tab==='imports'?'uploaded':'';reload();
     }));
     host.querySelectorAll('[data-wsr-section]').forEach(button=>button.addEventListener('click',()=>{
+      if(state.busy)return;
       state.section=button.dataset.wsrSection;
       state.selected?.clear();
       state.attentionKind=button.dataset.wsrAttention||'';
       if(button.hasAttribute('data-wsr-attention')){state.sort='';state.seek='';state.direction='asc';}
       reload();
     }));
-    host.querySelectorAll('[data-wsr-sort]').forEach(button=>button.addEventListener('click',()=>{const key=button.dataset.wsrSort;state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc';state.sort=key;reload();}));
+    host.querySelectorAll('[data-wsr-sort]').forEach(button=>button.addEventListener('click',()=>{if(state.busy)return;const key=button.dataset.wsrSort;state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc';state.sort=key;reload();}));
     host.querySelectorAll('[data-wsr-action]').forEach(button=>button.addEventListener('click',()=>{
       const row=model.rows.find(item=>item.combined_key===button.dataset.wsrRow);
       const actions=button.hasAttribute('data-wsr-child')?row?.children?.[Number(button.dataset.wsrChild)]?.actions:row?.actions;
@@ -1181,13 +1244,13 @@
     const table=host.querySelector('[data-wsr-table]');
     if(table){table.scrollTop=session.scrollByTab[tab]||0;table.addEventListener('scroll',()=>{session.scrollByTab[tab]=table.scrollTop;},{passive:true});}
     table?.addEventListener('keydown',event=>{
-      if(event.target!==table||event.ctrlKey||event.altKey||event.metaKey||event.key.length!==1||!/\S/.test(event.key))return;
+      if(state.busy||state.contactReview||event.target!==table||event.ctrlKey||event.altKey||event.metaKey||event.key.length!==1||!/\S/.test(event.key))return;
       event.preventDefault();const now=Date.now();state.seek=now-(state.typedAt||0)>900?event.key:state.seek+event.key;state.typedAt=now;
-      clearTimeout(state.seekTimer);state.seekTimer=setTimeout(()=>loadCombinedReview(tab).then(()=>root.document?.querySelector('[data-wsr-table]')?.focus()),250);
+      clearTimeout(state.seekTimer);state.seekTimer=setTimeout(()=>{if(!state.busy&&!state.contactReview)loadCombinedReview(tab).then(()=>root.document?.querySelector('[data-wsr-table]')?.focus());},250);
     });
-    const more=host.querySelector('[data-wsr-more]');more?.addEventListener('click',()=>loadCombinedReview(tab,true));
+    const more=host.querySelector('[data-wsr-more]');more?.addEventListener('click',()=>{if(!state.busy&&!state.contactReview)loadCombinedReview(tab,true);});
     session.observer?.disconnect?.();
-    if(more&&typeof IntersectionObserver==='function'){session.observer=new IntersectionObserver(entries=>{if(entries.some(item=>item.isIntersecting))loadCombinedReview(tab,true);},{root:table,rootMargin:'160px'});session.observer.observe(more);}
+    if(more&&typeof IntersectionObserver==='function'){session.observer=new IntersectionObserver(entries=>{if(!state.busy&&!state.contactReview&&entries.some(item=>item.isIntersecting))loadCombinedReview(tab,true);},{root:table,rootMargin:'160px'});session.observer.observe(more);}
   }
 
   async function loadCombinedFinalise(append = false) {

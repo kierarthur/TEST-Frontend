@@ -123,7 +123,9 @@ test('Queries attention summary keeps three tabs, counts genuine decisions and o
   await expect(page.getByText('Different Worker',{exact:true}).first()).toBeVisible();
   await expect(page.getByText('Unsigned Worker',{exact:true}).first()).toBeVisible();
   await expect(page.locator('[data-wsr-select]')).toHaveCount(3);
-  await expect(page.locator('[data-wsr-outreach]')).toHaveCount(2);
+  await expect(page.locator('[data-wsr-audience]')).toHaveCount(2);
+  await expect(page.locator('[data-wsr-contact-review]')).toBeDisabled(); // Missing policy fails closed.
+  await expect(page.locator('[data-wsr-outreach]')).toHaveCount(0);
   await summary.getByRole('button',{name:'Protected shifts ready to reconcile 1'}).click();
   await expect(page.getByRole('button',{name:'Review and reconcile',exact:true})).toBeVisible();
   const readyReview=page.getByRole('button',{name:'Review and reconcile',exact:true});
@@ -333,6 +335,9 @@ test('combined queries retain independent cycle actions and full-result seek',as
     const rows=[1,2].map(n=>({combined_key:'row'+n,scope_key:'cycle'+n,row_key:'qg_'+String(n).repeat(64),
       group_key:'qg_'+String(n).repeat(64),candidate:'Worker '+n,candidate_sort:'Worker '+n,client:'Trust '+n,
       source:'NHSP',period:'27 Sep 2026',issues:1,status:{text:'Needs action'},actions:[{label:'Open',enabled:true}],
+      client_id:'client'+n,candidate_id:'candidate'+n,contact_policy:{contract:'WEEKLY_SOURCE_CONTACT_POLICY_V1',
+        candidate:{eligible:true,recipient_key:'candidate:'+n,recipient:'Worker '+n,channel:'MyTMS notification',request_kind:'CHECK_HOURS'},
+        manager:{eligible:false,reason:'Manager queries are disabled.'}},
       children:[{day_date:'21 Sep 2026',candidate_hours:'7 hours',system_hours:'7.5 hours',issue:'Hours differ',
         actions:[{label:'Protect pay',enabled:true,payload:{work_date:'2026-09-21',candidate_id:'candidate'+n}}]}]}));
     const owners=[1,2].map(n=>({key:'cycle'+n,protected_pay_enabled:true,bulk_actions:{
@@ -348,7 +353,7 @@ test('combined queries retain independent cycle actions and full-result seek',as
           counts:{questions:2},rows:request.payload.tab==='queries'?rows:[],owners,scope_options:[],
           has_more:false,sort_key:request.payload.sort_key,sort_direction:request.payload.sort_direction
         })};
-        return {ok:true,json:async()=>({ok:true,status:'COMPLETE'})};
+        return {ok:true,json:async()=>({ok:true,included_count:1,results:[{ok:true,status:'CREATED',message_intent_id:'intent-'+request.payload.source_cycle_id}]})};
       }
       return {ok:true,json:async()=>workspace};
     };
@@ -366,7 +371,10 @@ test('combined queries retain independent cycle actions and full-result seek',as
   await page.screenshot({path:testInfo.outputPath('combined-queries-desktop.png'),fullPage:true});
   await page.locator('[data-wsr-select="row1"]').check();
   await page.locator('[data-wsr-select="row2"]').check();
-  await page.locator('[data-wsr-outreach="ASK_CANDIDATES"]').click();
+  await page.locator('[data-wsr-contact-review]').click();
+  await expect(page.locator('.ws-contact-review')).toContainText('2 recipients');
+  expect(await page.evaluate(()=>(window as any).__requests.filter((item:any)=>item.action==='ASK_CANDIDATES').length)).toBe(0);
+  await page.locator('[data-wsr-contact-confirm]').click();
   await expect.poll(()=>page.evaluate(()=>(window as any).__requests.filter((item:any)=>item.action==='ASK_CANDIDATES'))).toHaveLength(2);
   const sent=await page.evaluate(()=>(window as any).__requests.filter((item:any)=>item.action==='ASK_CANDIDATES'));
   expect(sent.map((item:any)=>item.payload.source_cycle_id)).toEqual(['cycle1','cycle2']);
@@ -432,6 +440,100 @@ async function loadOfficeFoundation(page: import('@playwright/test').Page) {
   await page.waitForFunction(()=>typeof (window as any).CloudTMSWeeklySourceImportWorkspaceV1?.open==='function');
   await page.evaluate(()=>{(window as any).__requests=[];});
 }
+
+test('policy-led manager review groups recipients within each cycle and queues only after confirmation',async({page})=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any,queued=new Set<string>();
+    const rows=[1,2,3].map(n=>({combined_key:'m'+n,scope_key:n===3?'cycle2':'cycle1',
+      group_key:'qg_'+String(n).repeat(64),candidate:'Worker '+n,candidate_id:'c'+n,client_id:'client',client:'Trust',
+      period:'27 Sep',children:[{day_date:'21 Sep 2026',issue:'Hours differ',candidate_hours:'7 hours',system_hours:'7.5 hours'}],
+      contact_policy:{contract:'WEEKLY_SOURCE_CONTACT_POLICY_V1',candidate:{eligible:false,reason:'Candidate queries disabled.'},
+        manager:{eligible:true,recipient_key:'manager:manager@example.invalid',recipient:'manager@example.invalid',
+          channel:'Email',request_kind:'REVIEW_HOURS',summary:'Review the selected hours questions using a secure link.'}},actions:[]}));
+    const owners=[1,2].map(n=>({key:'cycle'+n,bulk_actions:{selection_complete:true,send_manager_now:{enabled:true,
+      request:{source_cycle_id:'cycle'+n,projection_publication_id:'pub'+n,expected_workspace_version:'v'+n,
+        selection:{filters:{},selection_proof:'proof'+n}}}}}));
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>({...fixture,combined_source_workspace:true})};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action==='COMBINED_REVIEW_WORKSPACE')return {ok:true,json:async()=>({
+        contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'questions',owners,counts:{questions:3},
+        rows:rows.map(row=>({...row,contact_policy:{...row.contact_policy,manager:{...row.contact_policy.manager,
+          eligible:!queued.has(row.scope_key),reason:queued.has(row.scope_key)?'Already queued.':null}}})),scope_options:[],has_more:false})};
+      if(request.action!=='SEND_MANAGER_NOW')throw new Error('Unexpected contact command');
+      queued.add(request.payload.source_cycle_id);
+      return {ok:true,json:async()=>({ok:true,included_count:request.payload.selection.group_keys.length,
+        results:[{ok:true,status:'CREATED',message_intent_id:'local-intent-'+request.payload.source_cycle_id}]})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  await page.locator('[data-wsr-audience="manager"]').click();
+  await page.locator('[data-wsr-select-eligible]').check();
+  await page.locator('[data-wsr-contact-review]').click();
+  await expect(page.locator('.ws-contact-review')).toContainText('1 recipients · up to 2 messages · 3 records · 3 shifts');
+  await expect(page.locator('.ws-contact-review')).toContainText('manager@example.invalid');
+  await expect(page.locator('.ws-contact-review')).toContainText('without waiting for candidate replies');
+  expect(await page.evaluate(()=>(window as any).__requests.filter((r:any)=>r.action==='SEND_MANAGER_NOW'))).toEqual([]);
+  await page.locator('[data-wsr-contact-confirm]').click();
+  await expect(page.locator('.ws-contact-result')).toContainText('3 records queued');
+  await expect(page.locator('.ws-contact-result')).toContainText('Queued does not mean delivered');
+  const sent=await page.evaluate(()=>(window as any).__requests.filter((r:any)=>r.action==='SEND_MANAGER_NOW'));
+  expect(sent.map((r:any)=>r.payload.source_cycle_id)).toEqual(['cycle1','cycle2']);
+  expect(sent.map((r:any)=>r.payload.selection.group_keys.length)).toEqual([2,1]);
+  for(const input of await page.locator('[data-wsr-select]').all())await expect(input).not.toBeChecked();
+  expect(externalRequests(page)).toEqual([]);
+});
+
+test('policy-led contact rejects ineligible and stale selections, preserving failed records',async({page},testInfo)=>{
+  await loadOfficeFoundation(page);
+  await page.evaluate(async fixture=>{
+    const win=window as any;
+    win.__contactStage='normal';
+    const rows=[1,2,3].map(n=>({combined_key:'p'+n,scope_key:'s'+n,group_key:'qg_'+String(n).repeat(64),
+      candidate:'Worker '+n,candidate_id:'c'+n,client_id:'client',client:'Trust',period:'27 Sep',children:[{issue:'Timesheet missing'}],
+      contact_policy:{contract:'WEEKLY_SOURCE_CONTACT_POLICY_V1',candidate:{eligible:n!==3,
+        reason:n===3?'No active MyTMS access for this agency.':null,recipient_key:'candidate:'+n,
+        recipient:'Worker '+n,channel:'MyTMS notification',request_kind:'SUBMIT_TIMESHEET'},
+        manager:{eligible:false,reason:'Candidate timesheet required before this manager query.'}},actions:[]}));
+    const owners=[1,2,3].map(n=>({key:'s'+n,bulk_actions:{selection_complete:true,ask_candidates:{enabled:true,request:{source_cycle_id:'s'+n,
+      projection_publication_id:'pub'+n,expected_workspace_version:'v'+n,selection:{filters:{},selection_proof:'proof'+n}}}}}));
+    win.authFetch=async(url:string,options:any={})=>{
+      if(!url.includes('/commands'))return {ok:true,json:async()=>({...fixture,combined_source_workspace:true})};
+      const request=JSON.parse(options.body);win.__requests.push(request);
+      if(request.action==='COMBINED_REVIEW_WORKSPACE'){
+        const projected=JSON.parse(JSON.stringify(rows));
+        if(win.__contactStage==='stale')projected[0].contact_policy.candidate.eligible=false;
+        return {ok:true,json:async()=>({contract:'WEEKLY_SOURCE_COMBINED_REVIEW_V1',tab:'queries',section:'questions',
+          rows:projected,owners,counts:{questions:3},scope_options:[],has_more:false})};
+      }
+      if(request.payload.source_cycle_id==='s2')throw new Error('Test contact unavailable');
+      return {ok:true,json:async()=>({ok:true,included_count:1,results:[{ok:true,message_intent_id:'local-test-intent',status:'CREATED'}]})};
+    };
+    await win.CloudTMSWeeklySourceImportWorkspaceV1.open('queries');
+  },fixtures.workspace);
+  await expect(page.locator('[data-wsr-select="p3"]')).toBeDisabled();
+  await page.locator('[data-wsr-audience="manager"]').click();
+  await expect(page.locator('[data-wsr-select-eligible]')).toBeDisabled();
+  await expect(page.locator('[data-wsr-contact-review]')).toBeDisabled();
+  await page.locator('[data-wsr-audience="candidate"]').click();
+  await page.locator('[data-wsr-select-eligible]').check();
+  await page.locator('[data-wsr-contact-review]').click();
+  await expect(page.locator('.ws-contact-review')).toContainText('2 recipients');
+  await page.evaluate(()=>(window as any).__contactStage='stale');
+  await page.locator('[data-wsr-contact-confirm]').click();
+  await expect(page.locator('.ws-contact-result')).toContainText('0 records queued · 1 skipped · 1 failed');
+  expect(await page.evaluate(()=>(window as any).__requests.filter((r:any)=>r.action==='ASK_CANDIDATES').map((r:any)=>r.payload.source_cycle_id))).toEqual(['s2']);
+  await expect(page.locator('[data-wsr-select="p2"]')).toBeChecked();
+  await expect(page.locator('[data-wsr-select="p1"]')).toBeChecked();
+  await expect(page.locator('[data-wsr-select="p1"]')).toBeDisabled();
+  for(const width of [390,1700]){
+    await page.setViewportSize({width,height:1000});
+    expect(await page.locator('[data-wsr-table]').evaluate(el=>el.scrollWidth-el.clientWidth)).toBe(0);
+  }
+  await page.locator('#modal').screenshot({path:testInfo.outputPath('contact-policy-results.png')});
+  expect(externalRequests(page)).toEqual([]);
+});
 
 test('single-scope protected reviews are green only for ready enabled comparisons', async ({page},testInfo) => {
   await loadOfficeFoundation(page);
