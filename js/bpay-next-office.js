@@ -54,12 +54,19 @@
     CSV_ISSUE: { instruction_id: 'uuid', transfer_id: 'uuid', file_name: 'file', csv_sha256: 'sha', csv_text: 'csv', phase: 'csv', payment_recorded: 'boolean', replay: 'boolean' }
   };
   const ROWS = {
+    RATES:{rate_detail_id:'uuid',bucket:'bucket',approved_hours:'money',source_pay_rate:'money?',rate_schedule_id:'uuid?',available_paye_rate:'money?',available_umbrella_rate:'money?',available_charge_rate:'money?',approved_charge_rate:'money?'},
+    BREAKS:{break_detail_id:'uuid',break_no:'positive',break_start_at:'timestamp?',break_end_at:'timestamp?',break_start_local:'clock?',break_end_local:'clock?',break_minutes:'integer'},
+    SHIFTS:{shift_detail_id:'uuid',detail_no:'positive',work_date:'date',shift_start_at:'timestamp?',shift_end_at:'timestamp?',shift_start_local:'clock?',shift_end_local:'clock?',
+    shift_overnight:'boolean?',submitted_minutes:'integer?',approved_minutes:'integer?',approved_hours:'money?',detail_label:'label?',segment_pay_ex_vat:'money?',pay_excluded:'boolean?',
+    hours_day:'money?',hours_night:'money?',hours_sat:'money?',hours_sun:'money?',hours_bh:'money?',segment_key:'key?',approved_segment_id:'uuid?',job_title:'label?',band_label:'label?'},
+    COMPONENTS:{approved_line_id:'uuid',line_no:'positive',component_key:'key',component_kind:'component',work_date:'date?',source_pay_channel:'channel',
+    approved_source_ex_vat:'money',realised_source_ex_vat:'money?',held_source_ex_vat:'money?',residual_source_ex_vat:'money?',position_ready:'boolean',unit_label:'unit?',approved_quantity:'money?',approved_unit_rate:'money?',job_title:'label?',band_label:'label?',original_work_ref:'label?',original_timesheet_id:'uuid?',is_adjustment:'boolean?',correction_kind:'label?',associated_rate_schedule_id:'uuid?',associated_rate_family:'rateFamily?',associated_rate_code:'nativeRateCode?',available_paye_rate:'money?',available_umbrella_rate:'money?',available_charge_rate:'money?',approved_charge_rate:'money?',standard_rate_schedule:'standardSchedule'},
     WORK_CHOICES:{work_id:'uuid',expected_revision_id:'uuid?',selection_mode:'mode',selection_state:'selection',page_count:'integer',component_count:'integer'},
     SELECTED_COMPONENTS:{selection_no:'positive',approved_line_id:'uuid',expected_revision_id:'uuid',component_key:'key'},
     ACCEPTED_CANDIDATES:{candidate_id:'uuid',accepted_input_id:'uuid',module_epoch:'positive',target_pay_channel:'channel',target_umbrella_id:'uuid?',pay_week_start:'date',case_scope:'acceptedCaseScope',case_selection_revision:'positive?',settings_witness_kind:'settingsWitness',input_evidence_sha256:'sha',prepare_job_id:'uuid?',prepare_job_status:'prepareJobStatus?',prepare_job_phase:'prepareJobPhase?',run_worker_id:'uuid?',worker_status:'worker?',has_unsealed_work:'boolean',waiting_command_id:'uuid?',waiting_command_sequence:'positive?',progress_state:'acceptedProgress',progress_code:'acceptedProgressCode?',review_issue_code:'issue?'},
     ACCEPTED_WORK:{candidate_id:'uuid',accepted_input_id:'uuid',accepted_work_input_id:'uuid',work_id:'uuid',original_revision_id:'uuid',effective_revision_id:'uuid',selection_mode:'mode',selected_line_count:'integer',publication_command_id:'uuid',predecessor_sequence:'positive',source_kind:'acceptedSourceKind',query_disposition:'acceptedQuery?',query_state_sha256:'sha?',input_evidence_sha256:'sha',effective_cut_id:'uuid?',cut_state:'acceptedCutState'},
     CURRENT_CASES: { case_id: 'uuid', candidate_id: 'uuid', case_kind: 'caseKind', tax_treatment: 'tax', status: 'caseStatus', principal_approved: 'money', principal_funded: 'money', principal_recovered: 'money', principal_written_off: 'money', active_hold_amount: 'money' },
-    CASE_COMPONENTS: { case_component_id: 'uuid', case_id: 'uuid', candidate_id: 'uuid', component_ordinal: 'positive', component_revision: 'positive', case_kind: 'caseKind', case_subtype: 'caseSubtype', tax_treatment: 'tax', instruction_kind: 'instruction', direction: 'direction', payroll_stage: 'stage', source_pay_channel: 'channel', resolution_state: 'resolution', approved_source_ex_vat: 'money', funded_source_ex_vat: 'money', recovered_source_ex_vat: 'money', written_off_source_ex_vat: 'money', active_payout_source_ex_vat: 'money', active_recovery_source_ex_vat: 'money' },
+    CASE_COMPONENTS: { case_component_id: 'uuid', case_id: 'uuid', candidate_id: 'uuid', component_ordinal: 'positive', component_revision: 'positive', case_kind: 'caseKind', case_subtype: 'caseSubtype', tax_treatment: 'tax', instruction_kind: 'instruction', direction: 'direction', payroll_stage: 'stage', source_pay_channel: 'channel', resolution_state: 'resolution', approved_source_ex_vat: 'money', funded_source_ex_vat: 'money', recovered_source_ex_vat: 'money', written_off_source_ex_vat: 'money', active_payout_source_ex_vat: 'money', active_recovery_source_ex_vat: 'money' ,case_principal_approved:'money',rule_id:'uuid',current_rule_id:'uuid?',rule_revision:'positive?',weekly_due_source_ex_vat:'money?',minimum_earnings_threshold:'money?',take_home_floor_override:'money?',schedule_start_monday:'date?',next_due_monday:'date?',schedule_week_count:'positive?',outstanding_source_ex_vat:'money',amount_due:'money?',recoverable_this_run:'null'},
     CURRENT_WORK: { work_id: 'uuid', candidate_id: 'uuid', original_timesheet_id: 'uuid', work_kind: 'workKind', week_ending_date: 'date', approval_state: 'approval', current_revision_id: 'uuid?', applied_revision_id: 'uuid?', position_ready: 'boolean', source_pay_channel: 'channel?', timesheet_reference: 'label?', client_display_name: 'label?', approved_source_ex_vat: 'money?' },
     WORKERS: { run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', frozen_ex_vat: 'money?', frozen_vat: 'money?', frozen_inc_vat: 'money?', review_issue_code: 'issue?' },
     CHANNEL_WORKERS: { run_worker_id: 'uuid', candidate_id: 'uuid', pay_channel:'channel', worker_status:'worker', frozen_ex_vat:'money', frozen_vat:'money', frozen_inc_vat:'money', review_issue_code:'issue?' },
@@ -74,6 +81,10 @@
   };
   const RETURN_HEADER = {run_id:'uuid',run_worker_id:'uuid',candidate_id:'uuid',financial_view_revision:'integer'};
   const PAGES = {
+    RATES:{work_id:'uuid',expected_revision_id:'uuid',approved_line_id:'uuid',after_bucket:'bucket?',limit:'limit'},
+    BREAKS:{work_id:'uuid',expected_revision_id:'uuid',approved_line_id:'uuid',shift_detail_id:'uuid',after_break_no:'integer?',limit:'limit'},
+    SHIFTS:{work_id:'uuid',expected_revision_id:'uuid',approved_line_id:'uuid',after_detail_no:'integer?',limit:'limit'},
+    COMPONENTS:{work_id:'uuid',expected_revision_id:'uuid',after_line_no:'integer?',limit:'limit'},
     WORK_CHOICES:{run_id:'uuid',after_work_id:'uuid?',limit:'limit'},
     SELECTED_COMPONENTS:{run_id:'uuid',work_id:'uuid',after_selection_no:'integer?',limit:'limit'},
     ACCEPTED_CANDIDATES:{run_id:'uuid',after_candidate_id:'uuid?',limit:'limit'},
@@ -153,6 +164,12 @@ function validReservation(h,row=null){
   return true;
 }
 function field(v,type){
+  if(type==='null')return v===null;
+  if(type==='unit')return typeof v==='string'&&!v.includes('\0')&&encoder.encode(v).byteLength<=512;
+  if(type==='nativeRateCode')return typeof v==='string'&&!v.includes('\0')&&[...v].length>=1&&[...v].length<=245;
+  if(type==='rateFamily')return ['STANDARD','ADDITIONAL','MILEAGE'].includes(v);
+  if(type==='standardSchedule')return Array.isArray(v)&&v.length<=5&&v.every(x=>shape(x,{rate_schedule_id:'uuid',bucket:'bucket',available_paye_rate:'money?',available_umbrella_rate:'money?',available_charge_rate:'money?',approved_charge_rate:'money?'}))&&new Set(v.map(x=>x.bucket)).size===v.length&&new Set(v.map(x=>x.rate_schedule_id.toLowerCase())).size===v.length;
+
     if(type==='descriptor')return shape(v,{namespace:'choiceNamespace',intent:'choiceIntent',revision:'localRevision',workbench_revision:'integer',adoption_revision:'integer'})&&encoder.encode(JSON.stringify(v)).byteLength<=32768;
     if(type==='scopeChannel')return ['ALL','PAYE','UMBRELLA'].includes(v);
     if(type==='localRevision')return Number.isSafeInteger(v)&&v>=0;
@@ -426,16 +443,23 @@ function field(v,type){
         if(kind==='CHANNEL_WORKERS'&&(body.rows.some(r=>r.pay_channel!==args.pay_channel)||new Set(body.rows.map(r=>r.run_worker_id.toLowerCase())).size!==body.rows.length))fail();
         if (kind === 'CASE_COMPONENTS' && new Set(body.rows.map(r=>r.case_component_id.toLowerCase())).size !== body.rows.length) fail();
         if(statusKind){const h=body.header,facts=['projection_input_kind','entered_paye_net','accepted_recoveries','accepted_net_additions','cash_amount'];if(h.projection_id===null&&facts.some(k=>h[k]!==null))fail();if(h.projection_id!==null&&(h.projection_input_kind===null||['accepted_recoveries','accepted_net_additions','cash_amount'].some(k=>h[k]===null)||(['UMBRELLA','CASE_PAYOUT'].includes(h.projection_input_kind)!==(h.entered_paye_net===null))))fail();}
-        let prior = kind === 'CURRENT_WORK' ? (args.after_week === null ? null : [args.after_week, args.after_work_id]) : (statusKind ? args.after_transfer_no : (args.after_case_id ?? args.after_component_ordinal ?? args.after_candidate_id ?? args.after_line_no ?? args.after_selection_no ?? args.after_work_id ?? null));
+        let prior = kind === 'CURRENT_WORK' ? (args.after_week === null ? null : [args.after_week, args.after_work_id]) : (statusKind ? args.after_transfer_no : (args.after_detail_no ?? args.after_break_no ?? args.after_bucket ?? args.after_case_id ?? args.after_component_ordinal ?? args.after_candidate_id ?? args.after_line_no ?? args.after_selection_no ?? args.after_work_id ?? null));
         for (const r of body.rows) {
+      if(kind==='COMPONENTS'){
+        if((r.associated_rate_schedule_id===null)!==(r.associated_rate_family===null)||(r.associated_rate_schedule_id===null)!==(r.associated_rate_code===null)
+          ||(r.associated_rate_schedule_id===null&&['available_paye_rate','available_umbrella_rate','available_charge_rate','approved_charge_rate'].some(k=>r[k]!==null))
+          ||(r.original_timesheet_id===null&&r.original_work_ref!==null))fail();
+      }
+      if(kind==='RATES'&&r.rate_schedule_id===null&&['available_paye_rate','available_umbrella_rate','available_charge_rate','approved_charge_rate'].some(k=>r[k]!==null))fail();
+      if(kind==='SHIFTS'&&r.segment_key===null&&r.approved_segment_id!==null)fail();
           if(statusKind&&!validReservation(body.header,r))fail();
-          const v = kind === 'CURRENT_WORK' ? [r.week_ending_date, r.work_id] : kind === 'CURRENT_CASES' ? r.case_id : kind === 'CASE_COMPONENTS' ? r.component_ordinal : kind==='SELECTED_COMPONENTS'?r.selection_no:statusKind ? r.transfer_no : workerKind ? r.candidate_id : kind === 'LINES' ? r.line_no : r.work_id;
-          if (prior !== null) { const ordered = Array.isArray(v) ? v[0] > prior[0] || (v[0] === prior[0] && v[1] > prior[1]) : (statusKind||['LINES','CASE_COMPONENTS','SELECTED_COMPONENTS'].includes(kind)) ? BigInt(v) > BigInt(prior) : v > prior; if (!ordered) fail(); }
+          const v = kind==='COMPONENTS'?r.line_no:kind==='SHIFTS'?r.detail_no:kind==='BREAKS'?r.break_no:kind==='RATES'?r.bucket:kind === 'CURRENT_WORK' ? [r.week_ending_date, r.work_id] : kind === 'CURRENT_CASES' ? r.case_id : kind === 'CASE_COMPONENTS' ? r.component_ordinal : kind==='SELECTED_COMPONENTS'?r.selection_no:statusKind ? r.transfer_no : workerKind ? r.candidate_id : kind === 'LINES' ? r.line_no : r.work_id;
+          if (prior !== null) { const ordered = Array.isArray(v) ? v[0] > prior[0] || (v[0] === prior[0] && v[1] > prior[1]) : (statusKind||['LINES','CASE_COMPONENTS','SELECTED_COMPONENTS','COMPONENTS','SHIFTS','BREAKS'].includes(kind)) ? BigInt(v) > BigInt(prior) : v > prior; if (!ordered) fail(); }
           if(kind==='WORK_CHOICES'&&r.selection_mode==='ALL'&&(r.selection_state!=='SEALED'||r.page_count!=='0'||r.component_count!=='0'))fail();
           if (['CURRENT_CASES','CASE_COMPONENTS'].includes(kind) && (!same(r.candidate_id,args.candidate_id) || (kind === 'CASE_COMPONENTS' && !same(r.case_id,args.case_id)))) fail();
           if (kind === 'CURRENT_WORK' && (!same(r.candidate_id, args.candidate_id) || (r.position_ready&&(r.approval_state!=='APPROVED'||r.current_revision_id===null||!same(r.current_revision_id,r.applied_revision_id))))) fail(); prior = v;
         }
-        const cursor = body.complete ? null : kind === 'CURRENT_WORK' ? { after_week: prior[0], after_work_id: prior[1] } : { [kind === 'CURRENT_CASES' ? 'after_case_id' : kind === 'CASE_COMPONENTS' ? 'after_component_ordinal' : kind==='SELECTED_COMPONENTS'?'after_selection_no':statusKind ? 'after_transfer_no' : workerKind ? 'after_candidate_id' : kind === 'LINES' ? 'after_line_no' : 'after_work_id']: prior };
+        const cursor = body.complete ? null : kind === 'CURRENT_WORK' ? { after_week: prior[0], after_work_id: prior[1] } : { [kind==='COMPONENTS'?'after_line_no':kind==='SHIFTS'?'after_detail_no':kind==='BREAKS'?'after_break_no':kind==='RATES'?'after_bucket':kind === 'CURRENT_CASES' ? 'after_case_id' : kind === 'CASE_COMPONENTS' ? 'after_component_ordinal' : kind==='SELECTED_COMPONENTS'?'after_selection_no':statusKind ? 'after_transfer_no' : workerKind ? 'after_candidate_id' : kind === 'LINES' ? 'after_line_no' : 'after_work_id']: prior };
         if (JSON.stringify(body.next_cursor) !== JSON.stringify(cursor)) fail();
         return body;
       }
@@ -732,7 +756,7 @@ function field(v,type){
           onScope:scope=>{issueLists?.setScope(scope);readyLists?.setScope(scope);},onTab:tab=>{if(tab!=='READY')issueLists?.setKind(tab==='ACTION'?'ACTION_REQUIRED':'BLOCKED');}});
         readyLists=win.CloudTMSBpayNextWorkbench.mountReadyCandidates({...options,host:workbenchShell.readyHost,client:workbenchShell.client,debug:controller.debug,windowAlive:()=>readWindow?.alive()===true,
           onChoiceStore:store=>choiceStores.set(store.key,store),onSelection:()=>workbenchShell?.refreshSelectionLabel(),openBankRecord:id=>openCandidateRecord(options,id,close),
-          openCandidate:address=>{if(candidateWindow?.alive())return;candidateWindow=win.CloudTMSBpayNextWorkbench.openCandidateWindow({...options,host:workbenchShell.readyHost,client:workbenchShell.client,choiceStore:readyLists.choiceStore(),onSelection:()=>workbenchShell?.refreshSelectionLabel(),onChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);}});
+          openCandidate:address=>{if(candidateWindow?.alive())return;candidateWindow=win.CloudTMSBpayNextWorkbench.openCandidateWindow({...options,host:workbenchShell.readyHost,client:workbenchShell.client,preparationTransport:transport,choiceStore:readyLists.choiceStore(),onSelection:()=>workbenchShell?.refreshSelectionLabel(),onChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);}});
         readyLists.joinHeader(workbenchShell.snapshot());
         issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:workbenchShell.issueHost,windowAlive:()=>readWindow?.alive()===true,client:workbenchShell.client,externalTabs:true,debug:controller.debug,parentContext:()=>workbenchShell.snapshot().context,parentAvailable:()=>workbenchShell.snapshot().available,canInteract:()=>readWindow?.active()===true,
           openIssue:address=>{if(issueWindow?.alive())return;issueWindow=win.CloudTMSBpayNextWorkbench.openIssueWindow({...options,host:workbenchShell.issueHost,client:workbenchShell.client,windowAlive:()=>readWindow?.alive()===true,onIssueChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);},onAvailability:value=>{workbenchShell.setIssueAvailability(value);const header=workbenchShell.snapshot();issueReadAvailable=value.available&&header.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,header.context);if(host.isConnected)render();}});

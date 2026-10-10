@@ -212,3 +212,35 @@
  #modal.ctms-kind-bpay-next-read .bpay-next-candidate-window .btn,#modal.ctms-kind-bpay-next-read:has(.bpay-next-candidate-window) :is(#btnCloseModal,[data-next-window-footer] .btn) {min-height:44px;}
  #modal.ctms-kind-bpay-next-read .bpay-next-candidate-money {text-align:left;}
 }
+
+/* WB16 factual detail remains inside its native Candidate row. */
+#modal.ctms-kind-bpay-next-read .bpay-next-payment-detail {padding:12px;border-left:2px solid var(--ctms-modal-accent);background:var(--ctms-modal-panel);}
+#modal.ctms-kind-bpay-next-read .bpay-next-payment-detail-scroll {max-height:420px;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table {width:100%;table-layout:auto;border-collapse:collapse;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table th {font-size:12px;color:var(--ctms-modal-sub);text-align:left;white-space:normal;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td {padding:10px 8px;vertical-align:top;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Amount],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Original],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Outstanding],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Due] {text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-day {background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-shift td:first-child {padding-left:20px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-section {font-weight:600;color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-status {display:block;color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-shift-list {max-height:240px;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-kind-bpay-next-read .bpay-next-factual-list {max-height:60vh;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-kind-bpay-next-read .bpay-next-factual-list small {display:block;color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-payment-detail [role=alert] {color:var(--ctms-modal-danger);}
+@media(max-width:720px){
+ #modal.ctms-kind-bpay-next-read .bpay-next-payment-detail {padding:8px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-payment-detail-scroll {max-height:55vh;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-detail-table thead {display:none;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label] {text-align:left;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-detail-day td:empty {display:none;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-payment-detail .btn,#modal.ctms-kind-bpay-next-read .bpay-next-factual-list .btn {min-height:44px;}
+}
+
+#modal.ctms-kind-bpay-next-read .bpay-next-shift-list thead {display:none;}
+
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Cap] span {display:block;margin-top:4px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table thead[hidden] {display:none;}
+
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td:is([data-label="Original rate"],[data-label="Original charge"],[data-label="Suggested rate"],[data-label="Suggested margin"],[data-label="Units"],[data-label="PAYE"],[data-label="Umbrella"],[data-label="Charge"]) {text-align:right;font-variant-numeric:tabular-nums;}
+@media(max-width:720px){#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label] {text-align:left;}}
