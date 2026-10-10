@@ -19,6 +19,15 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildWeeklySourcePresentationApi() {
   'use strict';
 
+  const SOURCE_ADMISSION_BUSY_MESSAGE = 'Another Source update is in progress. Try again in a moment.';
+  function isSourceAdmissionBusy(error) {
+    const body = error?.json || error?.response || error;
+    return error?.status === 409 && body && !Array.isArray(body)
+      && (body.error_code || body.code) === 'WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY'
+      && body.retryable === true && body.failed_rpc_outcome === 'ROLLED_BACK'
+      && body.automatic_retry === false;
+  }
+
   const CONTRACT = 'WEEKLY_SOURCE_OFFICE_PRESENTATION_V1';
   const PRESENTATION_KEY = 'weekly_source_presentation';
   const COMMAND_ENDPOINT = '/api/weekly-source/v1/commands';
@@ -904,7 +913,7 @@
       ? { ...info } : null;
     if (supplied.ok !== true) {
       const errors = lifecycleErrors(supplied.errors);
-      return deepFreeze({
+        return deepFreeze({
         present: true,
         ok: false,
         ui_state: null,
@@ -2450,6 +2459,8 @@
     approvedHoursActionAllowsSchedule,
     buildApprovedHoursCommand,
     protectedActionConfirmation,
+    isSourceAdmissionBusy,
+    SOURCE_ADMISSION_BUSY_MESSAGE,
     renderSelectionHeaderCheckbox,
     applySelectionHeaderState,
     renderUnavailable

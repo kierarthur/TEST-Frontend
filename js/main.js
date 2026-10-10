@@ -178896,7 +178896,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
     root?.querySelectorAll?.('button, input, select, textarea').forEach(control => {
       control.disabled = control !== modalState.pending.trigger;
     });
-    modalState.pending.trigger.textContent = 'Retry exact request';
+    modalState.pending.trigger.textContent = modalState.sourceAdmissionBusy ? 'Try again' : 'Retry exact request';
   };
 
   const updateScheduleAvailability = (card) => {
@@ -178976,6 +178976,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         const body = error?.json || error?.response || {};
         const code = String(body.code || body.error_code || error?.code || '').trim();
         const status = Number(error?.status || error?.response?.status || 0);
+        modalState.sourceAdmissionBusy = presentationApi.isSourceAdmissionBusy?.(error) === true;
         const localOwnerRequired = ['LOCAL_OWNER_REQUIRED','BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(code);
         const definite = localOwnerRequired || (body.ok === false && !!code
           && body.retryable !== true && !/UNKNOWN|OUTCOME_UNCERTAIN/.test(code)
@@ -178992,7 +178993,8 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         setBusy(root, false);
         root.querySelectorAll('[data-weekly-source-manage-item]').forEach((item) => updateScheduleAvailability(item));
         retainExactRequestControls(root);
-        setWeeklySourceApprovedHoursStatus(root, localOwnerRequired
+        setWeeklySourceApprovedHoursStatus(root, modalState.sourceAdmissionBusy
+          ? presentationApi.SOURCE_ADMISSION_BUSY_MESSAGE : localOwnerRequired
           ? 'Save this change through the Source editor. No payment change was accepted.'
           : modalState.pending ? 'The save could not be confirmed. Retry exact request.'
           : (weeklySourceCommandRefusalMessage(body) || 'The change was refused. Review the details before trying again.'), 'error');

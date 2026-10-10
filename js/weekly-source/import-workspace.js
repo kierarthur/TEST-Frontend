@@ -67,7 +67,17 @@
 
   const NEXT_PAY_NOTICE = 'Pay is published through Banking Pay NEXT; there is nothing to recover here';
 
+  const SOURCE_ADMISSION_BUSY_MESSAGE = 'Another Source update is in progress. Try again in a moment.';
+  function isSourceAdmissionBusy(error) {
+    const body = error?.json || error?.response || error;
+    return error?.status === 409 && body && !Array.isArray(body)
+      && (body.error_code || body.code) === 'WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY'
+      && body.retryable === true && body.failed_rpc_outcome === 'ROLLED_BACK'
+      && body.automatic_retry === false;
+  }
+
   function friendlyWorkspaceError(value, owner = session.bankingOwnerClient?.peek()) {
+    if (isSourceAdmissionBusy(value)) return SOURCE_ADMISSION_BUSY_MESSAGE;
     const error = value instanceof Error ? value : null;
     const raw = asText(error?.message || value);
     const code = asText(error?.code || raw.match(/(?:WEEKLY_SOURCE|BPAY_NEXT)_[A-Z0-9_]+/)?.[0]).toUpperCase();
@@ -924,6 +934,7 @@
   }
 
   const session = {
+    pendingSourceOutreach: null, pendingSourceFinalise: null, pendingSourceRate: null, openCurrent: null,
     bankingOwnerClient: null, openGeneration: 0, reviews: {}, reviewSingleScope: false, sourceFilters: {},
     combined: { model: null, filters: {}, list: 'ready', sort: '', direction: 'asc', seek: '', selected: new Set(), exclusions: new Set(), batch: null, error: '' },
     workspace: null, activeTab: 'imports', loading: false, error: '', requestSequence: 0,
@@ -940,6 +951,23 @@
   };
 
   const currentFrame = () => { const stack = Array.isArray(root.__modalStack) ? root.__modalStack : []; const frame = stack[stack.length - 1]; return frame?.kind === 'weekly-source-imports-v1' ? frame : null; };
+  // These named UI actions retain literal inputs; there is no automatic reissue.
+  function sourceRequestContext() {
+    const generation = session.openGeneration, frame = currentFrame(), current = session.openCurrent;
+    const selected = JSON.stringify(session.workspace?.selected), filters = JSON.stringify(session.sourceFilters);
+    return () => !!frame && generation === session.openGeneration && frame === currentFrame()
+      && (!current || current()) && selected === JSON.stringify(session.workspace?.selected)
+      && filters === JSON.stringify(session.sourceFilters);
+  }
+  const sourceRequestCopy = value => JSON.parse(JSON.stringify(value));
+  function lockSourceRequest(host, pending, actionSelector, actionAttribute) {
+    if (!pending) return;
+    host.querySelectorAll('input, select, textarea, button').forEach(control => {
+      const retry = control.matches(actionSelector) && (!actionAttribute || control.dataset[actionAttribute] === pending.command);
+      control.disabled = !retry || pending.inFlight === true;
+      if (retry) control.textContent = pending.busy ? 'Try again' : 'Retry exact request';
+    });
+  }
   const endpoint = (path) => typeof root.API === 'function' ? root.API(path) : path;
 
   async function requestJson(path, options) {
@@ -952,6 +980,12 @@
       error.status = response.status;
       error.code = asText(payload.error_code);
       error.details = asObject(payload.details);
+      if (response.status === 409 && payload.error_code === 'WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY'
+          && payload.retryable === true && payload.failed_rpc_outcome === 'ROLLED_BACK'
+          && payload.automatic_retry === false) {
+        error.retryable = true; error.failed_rpc_outcome = 'ROLLED_BACK'; error.automatic_retry = false;
+        error.message = SOURCE_ADMISSION_BUSY_MESSAGE;
+      }
       throw error;
     }
     return payload;
@@ -1080,6 +1114,7 @@
   }
 
   function bindCombinedReview(host,tab) {
+    const requestCurrent = sourceRequestContext();
     const state=session.reviews[tab],model=state?.model; if(!model)return;
     state.selected ||= new Set();
     const reload=()=>{state.seek='';state.selected.clear();session.scrollByTab[tab]=0;loadCombinedReview(tab);};
@@ -1120,25 +1155,34 @@
     host.querySelectorAll('[data-wsr-select]').forEach(input=>input.addEventListener('change',()=>{input.checked?state.selected.add(input.dataset.wsrSelect):state.selected.delete(input.dataset.wsrSelect);repaint();}));
     host.querySelectorAll('[data-wsr-outreach]').forEach(button=>button.addEventListener('click',async()=>{
       if(state.busy||model.attention_kind)return;
-      const command=button.dataset.wsrOutreach,requests=[];
-      for(const owner of model.owners){
+      const command=button.dataset.wsrOutreach,retained=state.pendingSourceOutreach;
+      if(retained&&(retained.command!==command||!retained.current()))return;
+      const pending=retained||{command,requests:[],nextIndex:0,current:requestCurrent};
+      if(!retained)for(const owner of model.owners){
         const rows=model.rows.filter(row=>row.scope_key===owner.key&&state.selected.has(row.combined_key));
         if(!rows.length)continue;
         const payload=buildOutreachRequest({bulk_actions:owner.bulk_actions},{mode:'EXPLICIT',ids:rows.map(row=>row.group_key)},command);
         if(!payload){session.error='Recheck the selected questions before contacting anyone.';await repaint();return;}
-        requests.push({payload,keys:rows.map(row=>row.combined_key)});
+        pending.requests.push({payload:sourceRequestCopy(payload),keys:rows.map(row=>row.combined_key)});
       }
-      if(!requests.length)return;
-      state.busy=true;await repaint();
+      if(!pending.requests.length||!pending.current())return;
+      pending.busy=false;state.busy=true;await repaint();
       try {
-        for(const request of requests){
+        for(;pending.nextIndex<pending.requests.length;pending.nextIndex++){
+          if(!pending.current())return;
+          const request=pending.requests[pending.nextIndex];
           const result=await issueCommand(command,request.payload);
+          if(!pending.current())return;
           if(result?.ok!==true)throw new Error('The contact request is not confirmed. Refresh the questions before trying again.');
           request.keys.forEach(key=>state.selected.delete(key));
         }
-        await loadCombinedReview(tab);
-      } catch(error){session.error=friendlyWorkspaceError(error);}
-      finally{state.busy=false;await repaint();}
+        state.pendingSourceOutreach=null;session.error='';await loadCombinedReview(tab);
+      } catch(error){
+        if(!pending.current())return;
+        pending.busy=isSourceAdmissionBusy(error);
+        if(pending.busy||retained)state.pendingSourceOutreach=pending;
+        session.error=friendlyWorkspaceError(error);
+      } finally{state.busy=false;if(pending.current())await repaint();}
     }));
     host.querySelector('[data-wsr-refresh]')?.addEventListener('click',reload);
     host.querySelectorAll('[data-wsr-filter]').forEach(input=>input.addEventListener('change',()=>{
@@ -1192,6 +1236,7 @@
       event.preventDefault();const now=Date.now();state.seek=now-(state.typedAt||0)>900?event.key:state.seek+event.key;state.typedAt=now;
       clearTimeout(state.seekTimer);state.seekTimer=setTimeout(()=>loadCombinedReview(tab).then(()=>root.document?.querySelector('[data-wsr-table]')?.focus()),250);
     });
+    lockSourceRequest(host, state.pendingSourceOutreach, '[data-wsr-outreach]', 'wsrOutreach');
     const more=host.querySelector('[data-wsr-more]');more?.addEventListener('click',()=>loadCombinedReview(tab,true));
     session.observer?.disconnect?.();
     if(more&&typeof IntersectionObserver==='function'){session.observer=new IntersectionObserver(entries=>{if(entries.some(item=>item.isIntersecting))loadCombinedReview(tab,true);},{root:table,rootMargin:'160px'});session.observer.observe(more);}
@@ -1227,6 +1272,7 @@
   }
 
   function bindCombinedFinalise(host) {
+    const requestCurrent = sourceRequestContext();
     const state = session.combined, model = state.model;
     if (!model) return;
     const reload = () => { state.seek = ''; state.selected.clear(); state.exclusions.clear(); session.scrollByTab.finalise=0; loadCombinedFinalise(); };
@@ -1260,7 +1306,7 @@
       repaint();
     });
     host.querySelector('[data-wsc-review]')?.addEventListener('click',()=>{
-      try { state.batch=root.CloudTMSWeeklySourceFinaliseBatchV1.create(model.scopes,[...state.selected],[...state.exclusions]); state.error=''; }
+      try { if (!requestCurrent()) return; state.batch=root.CloudTMSWeeklySourceFinaliseBatchV1.create(model.scopes,[...state.selected],[...state.exclusions]); state.batch.current=requestCurrent; state.error=''; }
       catch(error){ state.error=error.message; } repaint();
     });
     host.querySelector('[data-wsc-dismiss]')?.addEventListener('click',()=>{
@@ -1270,9 +1316,12 @@
       }
     });
     host.querySelector('[data-wsc-run]')?.addEventListener('click',async()=>{
-      if(state.batch?.running)return;
-      try { await root.CloudTMSWeeklySourceFinaliseBatchV1.run(state.batch,issueCommand,()=>repaint()); await loadCombinedFinalise(); }
-      catch(error){ state.error=asText(error.message); await repaint(); }
+      const batch=state.batch;
+      if(batch?.running||!batch?.current?.())return;
+      try {
+        await root.CloudTMSWeeklySourceFinaliseBatchV1.run(batch,issueCommand,()=>batch.current()?repaint():undefined,batch.current);
+        if(batch.current())await loadCombinedFinalise();
+      } catch(error){ if(batch.current()){state.error=asText(error.message);await repaint();} }
     });
     host.querySelectorAll('[data-wsc-action]').forEach(button=>button.addEventListener('click',()=>{
       const row=model.rows.find(item=>item.scope_key===button.dataset.wscRow&&asText(item.row_key)===button.dataset.wscKey);
@@ -1352,6 +1401,7 @@
   }
 
   function bindQueries(host) {
+    const requestCurrent = sourceRequestContext();
     if (root.matchMedia?.('(max-width: 1500px)').matches) {
       host.querySelectorAll('.ws-query-filter-menu, .ws-query-actions-menu').forEach((menu) => menu.removeAttribute('open'));
     }
@@ -1369,11 +1419,26 @@
       loadWorkspace('queries');
     }));
     host.querySelectorAll('[data-ws-bulk-action]').forEach((button) => button.addEventListener('click', async () => {
-      const payload = buildOutreachRequest(session.workspace.queries, selectionSpec(), button.dataset.wsBulkAction);
-      if (!payload) return;
-      button.disabled = true;
-      try { await issueCommand(button.dataset.wsBulkAction, payload); session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() }; await loadWorkspace('queries'); }
-      catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      const retained = session.pendingSourceOutreach;
+      if (retained?.inFlight) return;
+      if (retained && (retained.command !== button.dataset.wsBulkAction || !retained.current())) return;
+      const built = retained?.payload || buildOutreachRequest(session.workspace.queries, selectionSpec(), button.dataset.wsBulkAction);
+      if (!built) return;
+      const request = retained || { command: button.dataset.wsBulkAction, current: requestCurrent, payload: sourceRequestCopy(built) };
+      if (!request.current()) return;
+      request.busy = false; request.inFlight = true; session.pendingSourceOutreach = request; button.disabled = true;
+      try {
+        await issueCommand(request.command, request.payload);
+        if (!request.current()) return;
+        session.pendingSourceOutreach = null; session.error = '';
+        session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() }; await loadWorkspace('queries');
+      } catch (error) {
+        if (!request.current()) return;
+        request.busy = isSourceAdmissionBusy(error);
+        if (request.busy || retained) session.pendingSourceOutreach = request;
+        request.inFlight = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
+      finally { request.inFlight = false; }
     }));
     host.querySelector('[data-ws-accept-selected]')?.addEventListener('click', async (event) => {
       const payload = combinedAcceptSystemHoursPayload();
@@ -1388,6 +1453,7 @@
       }));
     });
     updateSelection(host);
+    lockSourceRequest(host, session.pendingSourceOutreach, '[data-ws-bulk-action]', 'wsBulkAction');
   }
 
   function selectedUploadProfileId() {
@@ -1469,6 +1535,7 @@
   }
 
   function bindCommon(host) {
+    const requestCurrent = sourceRequestContext();
     host.querySelector('[data-ws-tracker-cycle]')?.addEventListener('change', (event) => {
       if (!session.workspace?.selected) return;
       session.workspace.selected.source_cycle_id = asText(event.target.value);
@@ -1489,7 +1556,7 @@
       const contextKey = control.dataset.wsContext;
       const chosenValue = control.value;
       session.contextFocus = { key: contextKey, value: chosenValue, tab: session.activeTab };
-      session.pendingRecheck = null; // The server retains resumable work for its exact scope.
+      session.pendingRecheck = null; session.pendingRecheckCurrent = null; // The server retains resumable work for its exact scope.
       const keyMap = { source_group: 'source_group_id', cycle: 'source_cycle_id', client: 'client_id' };
       const key = keyMap[control.dataset.wsContext] || control.dataset.wsContext;
       if (key === 'client_id') {
@@ -1517,15 +1584,21 @@
       await loadWorkspace(session.activeTab);
     }));
     host.querySelectorAll('[data-ws-recheck]').forEach((button) => button.addEventListener('click', async () => {
-      if (session.recheckBusy) return;
-      const payload = session.pendingRecheck || session.workspace.recheck_payload;
+      if (session.recheckBusy || !requestCurrent()) return;
+      if (session.pendingRecheck && !session.pendingRecheckCurrent?.()) return;
+      const payload = session.pendingRecheck || sourceRequestCopy(session.workspace.recheck_payload);
       if (!payload?.request_id) return loadWorkspace(session.activeTab);
-      session.recheckBusy = true; session.pendingRecheck = payload; button.disabled = true;
+      session.recheckBusy = true; session.pendingRecheck = payload; session.pendingRecheckCurrent ||= requestCurrent; session.pendingRecheckBusy = false; button.disabled = true;
       try {
         await issueCommand('RECHECK_SOURCE', payload);
-        session.pendingRecheck = null;
+        if (!requestCurrent()) return;
+        session.pendingRecheck = null; session.pendingRecheckCurrent = null;
         await loadWorkspace(session.activeTab);
-      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      } catch (error) {
+        if (!requestCurrent()) return;
+        session.pendingRecheckBusy = isSourceAdmissionBusy(error);
+        session.recheckBusy = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
       finally { session.recheckBusy = false; }
     }));
     host.querySelectorAll('.ws-row-action').forEach((button) => button.addEventListener('click', () => {
@@ -1570,9 +1643,12 @@
         ? button.dataset.wsSignedTab : 'checks';
       repaint();
     }));
+    if (session.pendingRecheck) lockSourceRequest(host,
+      { busy: session.pendingRecheckBusy, inFlight: session.recheckBusy }, '[data-ws-recheck]');
   }
 
   function bindFinalise(host) {
+    const requestCurrent = sourceRequestContext();
     host.querySelector('[data-ws-prepare]')?.addEventListener('click', async (event) => {
       event.currentTarget.disabled = true;
       try { await issueCommand('PREPARE_FINALISATION', session.workspace.finalise.prepare_action.payload); await loadWorkspace('finalise'); }
@@ -1590,19 +1666,33 @@
       && (!session.workspace.finalise.exclusion_confirmation || host.querySelector('[data-ws-exclusion-confirm]')?.checked);
     const sync = () => {
       if (!action) return;
-      const allowed = canFinalise();
-      action.disabled = !allowed;
+      const allowed = session.pendingSourceFinalise ? session.pendingSourceFinalise.current() : canFinalise();
+      action.disabled = !allowed || session.pendingSourceFinalise?.inFlight === true;
       if (allowed) delete action.dataset.ctmsIntentionalLock;
       else action.dataset.ctmsIntentionalLock = '1';
     };
     confirmation?.addEventListener('change', sync); sync();
     host.querySelector('[data-ws-exclusion-confirm]')?.addEventListener('change', sync);
     action?.addEventListener('click', async () => {
-      if (!canFinalise()) { sync(); return; }
-      action.disabled = true;
-      action.dataset.ctmsIntentionalLock = '1';
-      try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', { ...session.workspace.finalise.finalise_payload,
-        ...(session.workspace.finalise.exclusion_confirmation ? { exclude_unfinalised_acknowledged: true } : {}) }); await loadWorkspace('finalise'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      const retained = session.pendingSourceFinalise;
+      if (retained?.inFlight) return;
+      if (retained ? !retained.current() : !canFinalise()) { sync(); return; }
+      const request = retained || { command: 'FINALISE_WEEK', current: requestCurrent, payload: sourceRequestCopy({
+        ...session.workspace.finalise.finalise_payload,
+        ...(session.workspace.finalise.exclusion_confirmation ? { exclude_unfinalised_acknowledged: true } : {}) }) };
+      if (!request.current()) return;
+      request.busy = false; request.inFlight = true; session.pendingSourceFinalise = request; action.disabled = true; action.dataset.ctmsIntentionalLock = '1';
+      try {
+        session.finaliseRetry = null; await issueCommand(request.command, request.payload);
+        if (!request.current()) return;
+        session.pendingSourceFinalise = null; session.error = ''; await loadWorkspace('finalise');
+      } catch (error) {
+        if (!request.current()) return;
+        request.busy = isSourceAdmissionBusy(error);
+        if (request.busy || retained) session.pendingSourceFinalise = request;
+        request.inFlight = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
+      finally { request.inFlight = false; }
     });
     host.querySelector('[data-ws-approved-follow-up]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
@@ -1675,21 +1765,35 @@
     }));
     host.querySelector('[data-ws-rate-warning-confirm]')?.addEventListener('change', () => updateRateWarningSelection());
     host.querySelector('[data-ws-rate-warning-accept]')?.addEventListener('click', async (event) => {
-      const visibleSelected = [...host.querySelectorAll('[data-ws-rate-warning-select]:not(:disabled):checked')].map((input) => input.value);
-      const request = buildRateWarningAcceptancePayload(warnings, visibleSelected);
-      if (!request) return;
-      event.currentTarget.disabled = true;
+      const retained = session.pendingSourceRate;
+      if (retained?.inFlight) return;
+      if (retained && !retained.current()) return;
+      const visibleSelected = [...host.querySelectorAll('[data-ws-rate-warning-select]:not(:disabled):checked')].map(input => input.value);
+      const built = retained || buildRateWarningAcceptancePayload(warnings, visibleSelected);
+      if (!built) return;
+      const request = retained || { ...sourceRequestCopy(built), current: requestCurrent };
+      if (!request.current()) return;
+      request.busy = false; request.inFlight = true; session.pendingSourceRate = request; event.currentTarget.disabled = true;
       try {
         await issueCommand(request.action, request.payload);
-        session.rateWarningSelection.clear();
+        if (!request.current()) return;
+        session.pendingSourceRate = null; session.error = ''; session.rateWarningSelection.clear();
         await loadWorkspace('finalise');
-      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      } catch (error) {
+        if (!request.current()) return;
+        request.busy = isSourceAdmissionBusy(error);
+        if (request.busy || retained) session.pendingSourceRate = request;
+        request.inFlight = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
+      finally { request.inFlight = false; }
     });
     host.querySelectorAll('[data-ws-rate-expand]').forEach((button) => button.addEventListener('click', () => {
       session.expandedRateWarning = session.expandedRateWarning === button.dataset.wsRateExpand ? '' : button.dataset.wsRateExpand;
       repaint();
     }));
     updateRateWarningSelection();
+    lockSourceRequest(host, session.pendingSourceFinalise, '[data-ws-finalise]');
+    lockSourceRequest(host, session.pendingSourceRate, '[data-ws-rate-warning-accept]');
   }
 
   function bindInfiniteScroll(host) {
@@ -1745,6 +1849,10 @@
     const current = () => generation === session.openGeneration
       && (!options.currentActorId || options.currentActorId() === actorId);
     if (!current()) return;
+    session.openCurrent = current;
+    session.pendingRecheck = null; session.pendingRecheckCurrent = null; session.pendingRecheckBusy = false;
+    session.pendingSourceOutreach = null; session.pendingSourceFinalise = null; session.pendingSourceRate = null;
+    for (const state of Object.values(session.reviews)) state.pendingSourceOutreach = null;
     session.activeTab = tab; session.loading = true; session.error = '';
     session.bankingOwnerClient = options.bankingOwnerClient || null;
     // F15 qualifies this actor/open. Display lookup failure never blocks factual Source.
@@ -1827,7 +1935,7 @@
   return Object.freeze({
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
     normaliseBulkActions, normaliseRateWarnings, buildRateWarningAcceptancePayload, buildOutreachRequest,
-    open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
+    isSourceAdmissionBusy, SOURCE_ADMISSION_BUSY_MESSAGE, open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     acceptSystemShiftSelectionPayload,
     refresh: (tab = session.activeTab) => loadWorkspace(tab), navigateToExistingShift,
     clearShiftSelections: () => { session.shiftSelections.clear(); },

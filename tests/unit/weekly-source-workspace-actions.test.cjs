@@ -118,80 +118,80 @@ test('missing-week reminder confirmation identifies the week and source-link err
   assert.match(actions._plainMessage('WEEKLY_SOURCE_RECHECK_REPLAY_CONFLICT'), /refresh Queries/);
 });
 
+// Existing action cases drive the actual actor/frame and confirmation controls.
+function sourceActionModal(issue) {
+  const { runInNewContext } = require('node:vm');
+  const calls = [], timers = [], parent = { kind: 'weekly-source-imports-v1' };
+  const controls = Object.fromEntries(['close', 'confirm', 'run-command'].map(key => [key,
+    { handlers: {}, addEventListener(event, handler) { this.handlers[event] = handler; } }]));
+  const host = { dataset: {}, querySelector: selector => controls[selector.match(/data-wsa-(.+)\]/)?.[1]] };
+  let choose, pickerOptions, markup = '';
+  const root = { module: { exports: {} }, SESSION: { user: { id: 'office-actor' } }, __modalStack: [parent],
+    setTimeout: callback => timers.push(callback),
+    document: { querySelector: () => host, getElementById: () => ({ click: () => root.__modalStack.pop() }) },
+    CloudTMSWeeklySourceImportWorkspaceV1: { issueCommand: async (...args) => {
+      calls.push(args); return issue ? issue(...args) : { ok: true };
+    }, refresh: async () => calls.push(['refresh']) },
+    openCandidatePicker: (callback, options) => { choose = callback; pickerOptions = options; root.__modalStack.push({ kind: 'candidate-picker' }); },
+    showModal: (title, tabs, render, save, edit, wire, options) => {
+      host.dataset = {};
+      root.__modalStack.push({ kind: options.kind, setTab: () => { host.dataset = {}; markup = render(); } });
+      markup = render();
+    } };
+  runInNewContext(readFileSync(resolve(__dirname, '../../js/weekly-source/workspace-actions.js'), 'utf8'), root);
+  const flush = () => { while (timers.length) timers.shift()(); };
+  return { root, calls, parent, controls, get markup() { return markup; }, get pickerOptions() { return pickerOptions; },
+    handle: detail => root.module.exports.handleAction(detail),
+    choose: value => choose(value),
+    finishPicker: () => { root.__modalStack.pop(); flush(); },
+    confirm: async () => { flush(); controls.confirm.handlers.change({ target: { checked: true } }); await controls['run-command'].handlers.click(); flush(); } };
+}
+
 test('source linking opens the existing picker and rechecks the exact saved row', async () => {
-  const calls = [];
-  const saved = { picker: globalThis.openCandidatePicker, workspace: globalThis.CloudTMSWeeklySourceImportWorkspaceV1 };
-  let choose;
-  try {
-    globalThis.openCandidatePicker = (callback, options) => { choose = callback; calls.push(['picker', options]); };
-    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = {
-      issueCommand: async (...args) => calls.push(args), refresh: async () => calls.push(['refresh'])
-    };
-    actions.handleAction({ label: 'Link candidate', payload: { candidate: 'Source Worker', client: 'Trust',
-      recheck_payload: { request_id: 'request', upload_id: 'upload', upload_row_id: 'row' } } });
-    assert.equal(typeof choose, 'function');
-    await choose({ id: 'chosen-candidate' });
-    assert.equal(calls[0][1].context.staffName, 'Source Worker');
-    assert.deepEqual(calls[1], ['RECHECK_SOURCE', { request_id: 'request', upload_id: 'upload', upload_row_id: 'row', candidate_id: 'chosen-candidate' }]);
-    assert.deepEqual(calls[2], ['refresh']);
-  } finally {
-    globalThis.openCandidatePicker = saved.picker;
-    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = saved.workspace;
-  }
+  const ui = sourceActionModal();
+  ui.handle({ label: 'Link candidate', payload: { candidate: 'Source Worker', client: 'Trust',
+    recheck_payload: { request_id: 'request', upload_id: 'upload', upload_row_id: 'row' } } });
+  await ui.choose({ id: 'chosen-candidate' });
+  assert.equal(ui.pickerOptions.context.staffName, 'Source Worker');
+  assert.deepEqual(ui.calls, [], 'selection makes no business POST');
+  ui.finishPicker();
+  assert.deepEqual(ui.calls, [], 'opening the confirmation makes no business POST');
+  await ui.confirm();
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls)), [['RECHECK_SOURCE', {
+    request_id: 'request', upload_id: 'upload', upload_row_id: 'row', candidate_id: 'chosen-candidate' }], ['refresh']]);
+  assert.equal(ui.root.__modalStack.at(-1), ui.parent);
 });
 
 test('source linking explains that a selected inactive Candidate must be reactivated', async () => {
-  const saved = { picker: globalThis.openCandidatePicker, workspace: globalThis.CloudTMSWeeklySourceImportWorkspaceV1 };
-  let choose;
-  try {
-    globalThis.openCandidatePicker = (callback) => { choose = callback; };
-    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = {
-      issueCommand: () => { throw new Error('An inactive candidate must not be sent to recheck.'); },
-      refresh: () => { throw new Error('An inactive candidate must not refresh the workspace.'); }
-    };
-    actions.handleAction({ label: 'Link candidate', payload: {
-      candidate: 'Source Worker', recheck_payload: { request_id: 'request', upload_id: 'upload', upload_row_id: 'row' }
-    } });
-    await assert.rejects(choose({ id: 'inactive-candidate', candidate: { active: false } }),
-      /currently inactive\. Reactivate their Candidate record before linking this shift/);
-    assert.match(actions._plainMessage('RPC failed: {"message":"WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING"}'),
-      /reactivate their Candidate record/);
-  } finally {
-    globalThis.openCandidatePicker = saved.picker;
-    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = saved.workspace;
-  }
+  const ui = sourceActionModal(() => { throw new Error('Inactive Candidate must not be sent to recheck'); });
+  ui.handle({ label: 'Link candidate', payload: { candidate: 'Source Worker',
+    recheck_payload: { request_id: 'request', upload_id: 'upload', upload_row_id: 'row' } } });
+  await assert.rejects(ui.choose({ id: 'inactive-candidate', candidate: { active: false } }),
+    /currently inactive\. Reactivate their Candidate record before linking this shift/);
+  assert.deepEqual(ui.calls, []);
+  assert.match(actions._plainMessage('RPC failed: {"message":"WEEKLY_SOURCE_CANDIDATE_INACTIVE_OR_MISSING"}'),
+    /reactivate their Candidate record/);
 });
 
 test('saved source recheck retry reuses its exact request and refreshes without closing the parent modal', async () => {
-  const calls=[];
-  const previous=globalThis.CloudTMSWeeklySourceImportWorkspaceV1;
-  const payload={request_id:'saved-request',candidate_id:'saved-candidate',upload_row_id:'saved-row'};
-  try {
-    globalThis.CloudTMSWeeklySourceImportWorkspaceV1={
-      issueCommand:async (...args)=>calls.push(args),refresh:async()=>calls.push(['refresh'])
-    };
-    await actions.handleAction({label:'Retry recheck',command:'RECHECK_SOURCE',payload});
-    assert.deepEqual(calls,[['RECHECK_SOURCE',payload],['refresh']]);
-  } finally {globalThis.CloudTMSWeeklySourceImportWorkspaceV1=previous;}
+  const ui = sourceActionModal();
+  const payload = { request_id: 'saved-request', candidate_id: 'saved-candidate', upload_row_id: 'saved-row' };
+  ui.handle({ label: 'Retry recheck', command: 'RECHECK_SOURCE', payload });
+  assert.deepEqual(ui.calls, []);
+  await ui.confirm();
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls)), [['RECHECK_SOURCE', payload], ['refresh']]);
+  assert.equal(ui.root.__modalStack.at(-1), ui.parent);
 });
 
 test('saved linking selection with failed recheck refreshes retained work and explains the partial outcome', async () => {
-  const saved = { picker: globalThis.openCandidatePicker, workspace: globalThis.CloudTMSWeeklySourceImportWorkspaceV1 };
-  let choose, refreshed = 0;
-  try {
-    globalThis.openCandidatePicker = callback => { choose = callback; };
-    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = {
-      issueCommand: async () => { throw Object.assign(new Error('Internal failure'), { code: 'WEEKLY_SOURCE_RECHECK_INCOMPLETE' }); },
-      refresh: async () => { refreshed++; }
-    };
-    actions.handleAction({ label: 'Link candidate', payload: { recheck_payload: { request_id: 'same-request' } } });
-    await assert.rejects(choose({ id: 'active' }), /selection was saved.*recheck did not finish/i);
-    assert.equal(refreshed, 1);
-    assert.match(actions._plainMessage('WEEKLY_SOURCE_RECHECK_INCOMPLETE'), /retry the saved recheck/i);
-  } finally {
-    globalThis.openCandidatePicker = saved.picker;
-    globalThis.CloudTMSWeeklySourceImportWorkspaceV1 = saved.workspace;
-  }
+  const ui = sourceActionModal(() => { throw Object.assign(new Error('Internal failure'), { code: 'WEEKLY_SOURCE_RECHECK_INCOMPLETE' }); });
+  ui.handle({ label: 'Link candidate', payload: { recheck_payload: { request_id: 'same-request' } } });
+  await ui.choose({ id: 'active' }); ui.finishPicker(); await ui.confirm();
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls)), [['RECHECK_SOURCE', { request_id: 'same-request', candidate_id: 'active' }], ['refresh']]);
+  assert.match(ui.markup, /selection was saved.*recheck did not finish/i);
+  assert.match(ui.markup, /Retry exact request/);
+  assert.equal(ui.root.__modalStack.length, 2, 'unfinished confirmation remains above the original parent');
+  assert.match(actions._plainMessage('WEEKLY_SOURCE_RECHECK_INCOMPLETE'), /retry the saved recheck/i);
 });
 
 test('an unmatched contract provides a create path without pretending it is a tie', () => {
@@ -345,7 +345,7 @@ test('contract chooser tick boxes switch exclusively, untick, and gate creation 
     querySelectorAll: selector => selector.startsWith('input') ? inputs : [] };
   const timers = [], creates = [], commands = [];
   let rerenders = 0, rejectCommand;
-  const root = { module: { exports: {} }, document: { querySelector: () => host },
+  const root = { module: { exports: {} }, SESSION: { user: { id: 'office-actor' } }, document: { querySelector: () => host },
     setTimeout: callback => timers.push(callback), __modalStack: [],
     openContract: (seed, options) => creates.push({ seed, options }),
     CloudTMSWeeklySourceImportWorkspaceV1: { issueCommand: (command, data) => {
