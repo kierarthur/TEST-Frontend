@@ -5073,6 +5073,43 @@ function bankingNextOwnerClient() {
   }
   return bpayNextOwnerClient;
 }
+// SP-03: these two labels require the current actor's positive F-15 NEXT status.
+// They explain an actual authorisation refusal; they never choose its owner or retry it.
+function weeklySourceAuthoriseRefusalCode(value) {
+  const body = value?.json || value?.response || value || {};
+  if (body.success === true || body.ok === true) return '';
+  const codes = [body.error_code, body.code, body.error, body.message, value?.message];
+  return codes.map(code => String(code || '').trim()).find(code =>
+    code === 'WEEKLY_SOURCE_CANDIDATE_BUSY' || code === 'BPAY_NEXT_SOURCE_FIRST_ADDITIONAL_UNMAPPED') || '';
+}
+function weeklySourceAuthoriseRefusalPresentation(value, actor) {
+  const code = weeklySourceAuthoriseRefusalCode(value);
+  if (!code || !actor || SESSION?.user?.id !== actor || bankingNextOwnerClient()?.peek()?.active_owner !== 'NEXT') return null;
+  return code === 'WEEKLY_SOURCE_CANDIDATE_BUSY'
+    ? {code, retryable: true, message: 'A payment step for this Candidate is running. Try again in a moment.'}
+    : {code, retryable: false, message: 'An Additional item cannot be authorised because its approved units are missing or do not match. Review the Additional item before trying again.'};
+}
+async function weeklySourceQualifyAuthoriseRefusal(values, actor) {
+  if (!values.some(value => weeklySourceAuthoriseRefusalCode(value))) return null;
+  if (!actor || SESSION?.user?.id !== actor) return null;
+  const client = bankingNextOwnerClient();
+  if (!actor || !client) return null;
+  try { await client.qualify('source:authorise-refusal:' + actor); } catch {}
+  return SESSION?.user?.id === actor ? actor : null;
+}
+async function weeklySourceMapAuthoriseError(error, requestActor) {
+  const actor = await weeklySourceQualifyAuthoriseRefusal([error], requestActor);
+  const copy = weeklySourceAuthoriseRefusalPresentation(error, actor);
+  if (!copy) return error;
+  const mapped = Object.assign(new Error(copy.message, {cause: error}), error);
+  mapped.message = copy.message;
+  mapped.retryable = copy.retryable;
+  return mapped;
+}
+function weeklySourcePresentAuthoriseResult(value, actor) {
+  const copy = weeklySourceAuthoriseRefusalPresentation(value, actor);
+  return copy ? {...value, reason: copy.message, message: copy.message, retryable: copy.retryable} : value;
+}
 function bankingNextOwnerMessage(status, legacy=false) {
   return window.CloudTMSBpayNextOwner?.message(status,legacy) || 'Banking ownership is unavailable. Money controls are disabled.';
 }
@@ -196749,6 +196786,7 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
 
 
 async function authoriseSelectedTimesheets(payload) {
+  const requestActor = SESSION?.user?.id || null;
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][AUTHORISE-WRAPPER]')
     : { LOGM: null, L: () => {}, GC: () => {}, GE: () => {} };
@@ -196881,7 +196919,7 @@ async function authoriseSelectedTimesheets(payload) {
     try {
       json = await apiPostJson(urlPath, requestPayload);
     } catch (error) {
-      if (String(error?.json?.error_code || error?.json?.error || '').toUpperCase() !== 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') throw error;
+      if (String(error?.json?.error_code || error?.json?.error || '').toUpperCase() !== 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') throw await weeklySourceMapAuthoriseError(error, requestActor);
       const preview = error?.json?.pair_lifecycle || {};
       const pairCount = Number(preview.correction_pair_count || 0) || 0;
       const affectedCount = Number(preview.affected_timesheet_count || 0) || items.length;
@@ -196908,7 +196946,7 @@ async function authoriseSelectedTimesheets(payload) {
       err.body = text || '';
       err.json = json;
       GE();
-      throw err;
+      throw await weeklySourceMapAuthoriseError(err, requestActor);
     }
   }
 
@@ -196922,8 +196960,9 @@ async function authoriseSelectedTimesheets(payload) {
       });
       if (!json || typeof json !== 'object') json = {};
     }
-  const results = Array.isArray(json.results) ? json.results.map(normalizeResult) : [];
-  const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items) : results.filter((item) => item && item.success !== true);
+  const refusalActor = await weeklySourceQualifyAuthoriseRefusal([...(Array.isArray(json.results) ? json.results : []), ...(Array.isArray(json.failed_items) ? json.failed_items : [])], requestActor);
+  const results = Array.isArray(json.results) ? json.results.map(normalizeResult).map(value => weeklySourcePresentAuthoriseResult(value, refusalActor)) : [];
+  const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items).map(value => weeklySourcePresentAuthoriseResult(value, refusalActor)) : results.filter((item) => item && item.success !== true);
   const staleItems = Array.isArray(json.stale_items) ? clonePayload(json.stale_items) : failedItems.filter((item) => {
     const code = firstString(item?.error_code, item?.error).toUpperCase();
     return code === 'TIMESHEET_MOVED' || code === 'EXPECTED_TIMESHEET_MISMATCH' || code === 'ROW_SIGNATURE_MISMATCH' || item?.was_stale === true;
@@ -260915,6 +260954,7 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       .map((entry) => firstString(entry?.row_key, entry?.row_key_before, entry?.row_key_after, entry?.previous_row_key))
       .filter((key) => key && set.has(key));
   };
+  const refusalActor = SESSION?.user?.id || null;
   const mutationKey = `bulk-authorise-selected:${trimStr(opts.source || '')}:${Date.now()}`;
   if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
   if (st.batch_busy || st.__bulk_authorise_selected_in_flight) {
@@ -261129,9 +261169,15 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
 
     const summaryLines = [`${successCount} timesheets authorised`, `${failureCount} timesheets could not be authorised`];
-    if (failedRows.length) {
+    const waitingRows = failedRows.filter(row => weeklySourceAuthoriseRefusalPresentation(row, refusalActor)?.retryable === true);
+    const refusedRows = failedRows.filter(row => !waitingRows.includes(row));
+    if (waitingRows.length) {
+      summaryLines.push('', 'Waiting — try again in a moment:');
+      for (const row of waitingRows) summaryLines.push(`- ${firstString(row?.row_key, row?.row_key_before, row?.timesheet_id, 'row')}: ${weeklySourceAuthoriseRefusalPresentation(row, refusalActor).message}`);
+    }
+    if (refusedRows.length) {
       summaryLines.push('', 'Failures:');
-      for (const failed of failedRows) summaryLines.push(`- ${firstString(failed?.row_key, failed?.row_key_before, failed?.timesheet_id, 'row')}: ${firstString(failed?.reason, failed?.message, failed?.error_code, 'Failed')}`);
+      for (const failed of refusedRows) summaryLines.push(`- ${firstString(failed?.row_key, failed?.row_key_before, failed?.timesheet_id, 'row')}: ${firstString(failed?.reason, failed?.message, failed?.error_code, 'Failed')}`);
     }
     if (staleRows.length) summaryLines.push('', `${staleRows.length} stale row${staleRows.length === 1 ? '' : 's'} need rechecking.`);
     st.summary_message = summaryLines.join('\n');
@@ -314549,6 +314595,7 @@ function renderTimesheetLinesTab(ctx) {
 
 
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
+  const requestActor = SESSION?.user?.id || null;
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
 
@@ -315091,7 +315138,7 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       }
     }
     if (!json) {
-      const err = authoriseError;
+      const err = await weeklySourceMapAuthoriseError(authoriseError, requestActor);
       try {
         if (typeof tsHandleLifecycleReconcileModal === 'function') {
           const reconciled = await tsHandleLifecycleReconcileModal(err, {
@@ -315589,6 +315636,7 @@ function scheduleTimesheetPostMutationLazyRefresh(args = {}) {
 
 
 async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */) {
+  const requestActor = SESSION?.user?.id || null;
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const pickSignature = (...values) => {
     for (const value of values) {
@@ -315686,6 +315734,8 @@ async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */
     }
 
     return { ...json, affected_refresh: affectedRefresh };
+  } catch (error) {
+    throw await weeklySourceMapAuthoriseError(error, requestActor);
   } finally {
     window.__timesheetLifecycleMutationInFlight.delete(mutationKey);
   }
