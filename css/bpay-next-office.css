@@ -277,3 +277,18 @@
  #modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row .btn,#modal.ctms-kind-bpay-next-read:has(.bpay-next-workbench-shell) #btnCloseModal {min-height:44px;min-width:44px;}
  #modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row strong {flex-basis:100%;}
 }
+
+/* WB25 native Work and approved-line choices; never separate shift ticks. */
+#modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll > table > thead > tr > th:first-child {width:52px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-work-choice,
+#modal.ctms-kind-bpay-next-read .bpay-next-component-choice {display:inline-flex;align-items:center;justify-content:center;min-width:32px;min-height:32px;vertical-align:middle;cursor:pointer;}
+#modal.ctms-kind-bpay-next-read .bpay-next-component-choice {margin-right:8px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-work-choice input,
+#modal.ctms-kind-bpay-next-read .bpay-next-component-choice input {width:18px;height:18px;accent-color:var(--ctms-modal-accent);cursor:pointer;}
+@media (max-width:640px) {
+ #modal.ctms-kind-bpay-next-read .bpay-next-work-choice,
+ #modal.ctms-kind-bpay-next-read .bpay-next-component-choice {min-width:44px;min-height:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll td[data-label=Select] {display:flex;justify-content:flex-start;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll td[data-label=Select]::before {content:none;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-detail-single td.bpay-next-detail-empty-status {display:none;}
+}
