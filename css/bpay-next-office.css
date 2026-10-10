@@ -250,3 +250,8 @@
  #modal.bpay-next-timesheet-evidence #modalTabs{display:flex;flex-wrap:wrap;overflow:visible;white-space:normal;}
  #modal.ctms-modern-modal.bpay-next-timesheet-evidence #modalTabs button,#modal.bpay-next-timesheet-evidence #btnCloseModal{min-height:44px;min-width:44px;}
 }
+
+#modal.ctms-kind-bpay-next-read .bpay-next-export h2 {margin:0 0 16px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-export p[role=alert] {color:var(--ctms-modal-danger);}
+@media(max-width:720px){#modal.ctms-kind-bpay-next-read .bpay-next-header-actions button,#modal.ctms-kind-bpay-next-read .bpay-next-candidate-strip button{min-height:44px;}}
+@media(max-width:720px){#modal.ctms-kind-bpay-next-read:has(.bpay-next-export) #btnCloseModal{min-height:44px;min-width:44px;}}

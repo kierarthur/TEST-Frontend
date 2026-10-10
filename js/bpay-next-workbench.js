@@ -5,6 +5,8 @@
 const BPAY_NEXT_WORKBENCH_LIMITS=Object.freeze({requestBytes:32768,responseBytes:131072,timeoutMs:4000});
 const ENCODER=new TextEncoder(),UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const KINDS=['HEADER','CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS','GROUP_LINES','PICK_CANDIDATES','PICK_CLIENTS','EXPORT_ROWS'];
+const EXPORT_SORT_FIELDS={"C_NAME":["text","boolean","text","uuid","uuid"],"C_AMOUNT":["boolean","decimal","uuid","uuid"],"C_DEDUCTIONS":["boolean","text","boolean","text","uuid","uuid"],"C_STATUS":["boolean","boolean","text","text","uuid","uuid"],"G_PAYMENT":["boolean","date","text","uuid","uuid"],"G_CLIENT":["boolean","text","text","uuid","uuid"],"G_CHANNEL":["boolean","text","text","uuid","uuid"],"G_AMOUNT":["boolean","decimal","text","uuid","uuid"],"G_DEDUCTIONS":["boolean","text","uuid","uuid"],"G_REASON":["small","text","text","uuid","uuid"]};
+const EXPORT_SORTS=Object.keys(EXPORT_SORT_FIELDS).flatMap(k=>[k+'_ASC',k+'_DESC']);
 const COMMON={candidate_id:'uuid?',client_id:'uuid?',channel:'scopeChannel',section:'scopeSection',search:'search',sort:'sort',group_key:'groupKey?',item_id:'uuid?',reason_code:'code?',count_selection:'countSelection?',after:'cursor?',limit:'limit'};
 const BPAY_NEXT_WORKBENCH_PAGE_INPUTS=Object.freeze(Object.fromEntries(KINDS.map(k=>[k,Object.freeze({...COMMON})])));
 // Generated once from the explicit SQL projections; reviewed source is durable.
@@ -340,7 +342,8 @@ const ROWS=Object.freeze({
     "selectable": "boolean",
     "financial_view_revision": "integer",
     "projection_revision": "positive",
-    "metadata_version": "positive"
+    "metadata_version": "positive",
+    "export_key":"exportKey","approved_line_id":"uuid?","physical_timesheet_id":"uuid?","job_title":"text?","band_label":"text?","shift_start":"text?","shift_finish":"text?","detail_label":"text?","candidate_has_pay":"boolean","export_amount":"decimal?","export_label":"text","choice_eligible":"boolean"
   },
   "CANDIDATE_GROUPS": {
     "group_key": "text",
@@ -402,7 +405,7 @@ const FAILURE_CODES=['BPAY_NEXT_MODULE_NOT_ACTIVE','BPAY_NEXT_WORKBENCH_FORBIDDE
 const record=v=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&[Object.prototype,null].includes(Object.getPrototypeOf(v));
 function exact(v,keys){return record(v)&&Reflect.ownKeys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k)&&Object.getOwnPropertyDescriptor(v,k)?.enumerable===true&&Object.hasOwn(Object.getOwnPropertyDescriptor(v,k),'value'));}
 const same=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,n)=>same(v,b[n])))||(record(a)&&record(b)&&exact(a,Object.keys(b))&&Object.keys(a).every(k=>same(a[k],b[k])));
-const enums={kind:KINDS,scopeChannel:['ALL','PAYE','UMBRELLA'],channel:['PAYE','UMBRELLA'],scopeSection:['ALL','READY','ACTION','BLOCKED','WAITING'],section:['READY','ACTION','BLOCKED','WAITING'],sort:['NAME_ASC','NAME_DESC','AMOUNT_ASC','AMOUNT_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','PAYMENT_ASC','PAYMENT_DESC','STATUS_ASC','STATUS_DESC','REASON_ASC','REASON_DESC','CLIENT_ASC','CLIENT_DESC','CHANNEL_ASC','CHANNEL_DESC'],bank:['BANK_DETAILS_MISSING','BANK_DETAILS_CHANGED'],group:['WORK','CASE','ROW'],member:['WORK_COMPONENT','WORK_SEGMENT','CASE_COMPONENT','GROUP_EVIDENCE'],portion:['AVAILABLE','RESERVED','RECOVERY','ZERO','EVIDENCE','WITHDRAWN'],direction:['PAYMENT','DEDUCTION','INFORMATIONAL'],stage:['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'],query:['NOT_APPLICABLE','UNAVAILABLE','CLEAR','OPEN'],progress:['CURRENT','PROCESSING','UNAVAILABLE'],adoption:['UNSEEDED','SEEDING','CURRENT','ERROR']};
+const enums={kind:KINDS,scopeChannel:['ALL','PAYE','UMBRELLA'],channel:['PAYE','UMBRELLA'],scopeSection:['ALL','READY','ACTION','BLOCKED','WAITING'],section:['READY','ACTION','BLOCKED','WAITING'],sort:[...EXPORT_SORTS,'NAME_ASC','NAME_DESC','AMOUNT_ASC','AMOUNT_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','PAYMENT_ASC','PAYMENT_DESC','STATUS_ASC','STATUS_DESC','REASON_ASC','REASON_DESC','CLIENT_ASC','CLIENT_DESC','CHANNEL_ASC','CHANNEL_DESC'],bank:['BANK_DETAILS_MISSING','BANK_DETAILS_CHANGED'],group:['WORK','CASE','ROW'],member:['WORK_COMPONENT','WORK_SEGMENT','CASE_COMPONENT','GROUP_EVIDENCE'],portion:['AVAILABLE','RESERVED','RECOVERY','ZERO','EVIDENCE','WITHDRAWN'],direction:['PAYMENT','DEDUCTION','INFORMATIONAL'],stage:['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'],query:['NOT_APPLICABLE','UNAVAILABLE','CLEAR','OPEN'],progress:['CURRENT','PROCESSING','UNAVAILABLE'],adoption:['UNSEEDED','SEEDING','CURRENT','ERROR']};
 function field(v,type){
   if(type.endsWith('?'))return v===null||field(v,type.slice(0,-1));
   if(Object.hasOwn(enums,type))return enums[type].includes(v);
@@ -417,6 +420,7 @@ function field(v,type){
   if(type==='groupKey')return typeof v==='string'&&/^(?:WORK|CASE|ROW):[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v);
   if(type==='date'){if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(v)||v.startsWith('0000'))return false;const d=new Date(`${v}T00:00:00Z`);return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===v;}
   if(type==='countSelection')return exact(v,['mode','candidate_ids'])&&['ALL','NONE'].includes(v.mode)&&Array.isArray(v.candidate_ids)&&v.candidate_ids.every(id=>field(id,'uuid'))&&new Set(v.candidate_ids).size===v.candidate_ids.length&&ENCODER.encode(JSON.stringify(v)).byteLength<=32768;
+  if(type==='exportKey')return Array.isArray(v)&&v.length>=4&&v.length<=6&&v.every(x=>typeof x==='string'||typeof x==='boolean'||Number.isInteger(x));
   if(type==='scope')return shape(v,SCOPE);
   if(type==='sourceKind')return ['ORDINARY','SOURCE','PROTECTED','EXPENSE','ADJUSTMENT'].includes(v);
   if(type==='cursor')return exact(v,['context','key'])&&shape(v.context,CONTEXT)&&validKey(v.key,v.context.kind,v.context.scope.sort);
@@ -426,6 +430,7 @@ function field(v,type){
 const shape=(v,schema)=>exact(v,Object.keys(schema))&&Object.entries(schema).every(([k,type])=>field(v[k],type));
 function validKey(key,kind,sort){
   if(!Array.isArray(key))return false;
+  if(kind==='EXPORT_ROWS'){const types=EXPORT_SORT_FIELDS[sort.replace(/_(?:ASC|DESC)$/,'')];return Boolean(types&&key.length===types.length&&types.every((t,n)=>field(key[n],t)));}
   if(['CANDIDATES','PICK_CANDIDATES'].includes(kind))return sort.startsWith('STATUS_')?key.length===5&&field(key[0],'boolean')&&field(key[1],'boolean')&&field(key[2],'text')&&field(key[3],'text')&&field(key[4],'uuid'):sort.startsWith('DEDUCTIONS_')?key.length===5&&field(key[0],'boolean')&&field(key[1],'text')&&field(key[2],'boolean')&&field(key[3],'text')&&field(key[4],'uuid'):sort.startsWith('AMOUNT_')?key.length===3&&field(key[0],'boolean')&&field(key[1],'decimal')&&field(key[2],'uuid'):key.length===4&&field(key[0],'text')&&field(key[1],'boolean')&&field(key[2],'text')&&field(key[3],'uuid');
   if(kind==='CANDIDATE_GROUPS'){
     if(sort.startsWith('DEDUCTIONS_'))return key.length===3&&field(key[0],'boolean')&&field(key[1],'group')&&field(key[2],'uuid');
@@ -442,6 +447,7 @@ function validKey(key,kind,sort){
 }
 function rowKey(kind,scope,row){
   if(['CANDIDATES','PICK_CANDIDATES'].includes(kind)){if(scope.sort.startsWith('STATUS_'))return [row.payable_count==='0',row.bank_warning_code===null,row.bank_warning_code??'',row.candidate_sort_name,row.candidate_id];if(scope.sort.startsWith('DEDUCTIONS_'))return [row.has_deduction,row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];if(scope.sort.startsWith('AMOUNT_'))return [row.unknown_amount_count!=='0',row.amount??'0',row.candidate_id];return [row.candidate_sort_name,row.tms_ref===null,row.tms_ref??'',row.candidate_id];}
+  if(kind==='EXPORT_ROWS')return row.export_key;
   if(kind==='HEADER')return null;
   if(kind==='CANDIDATE_GROUPS'){
     const suffix=[row.group_kind,row.presentation_id];
@@ -458,14 +464,14 @@ function rowKey(kind,scope,row){
 function textCompare(a,b){const x=ENCODER.encode(a),y=ENCODER.encode(b);for(let n=0;n<Math.min(x.length,y.length);n++)if(x[n]!==y[n])return x[n]<y[n]?-1:1;return Math.sign(x.length-y.length);}
 // Ordering validation only. Exact decimal strings never become browser money.
 function decimalCompare(a,b){const negA=a.startsWith('-'),negB=b.startsWith('-');const parts=v=>{const [whole,fraction='']=v.replace(/^-/,'').split('.');return [whole,fraction.replace(/0+$/,'')];};const [aw,af]=parts(a),[bw,bf]=parts(b);const az=aw==='0'&&af==='',bz=bw==='0'&&bf==='';if(az&&bz)return 0;const an=negA&&!az,bn=negB&&!bz;if(an!==bn)return an?-1:1;const sign=an?-1:1;return sign*(aw.length!==bw.length?Math.sign(aw.length-bw.length):aw!==bw?textCompare(aw,bw):textCompare(af.padEnd(Math.max(af.length,bf.length),'0'),bf.padEnd(Math.max(af.length,bf.length),'0')));}
-function keyCompare(a,b,kind,sort){for(let n=0;n<a.length;n++){const value=typeof a[n]==='number'?a[n]-b[n]:typeof a[n]==='boolean'?Number(a[n])-Number(b[n]):n===1&&sort.startsWith('AMOUNT_')?decimalCompare(a[n],b[n]):textCompare(a[n],b[n]);if(value)return sort.endsWith('_DESC')?-value:value;}return 0;}
+function keyCompare(a,b,kind,sort){for(let n=0;n<a.length;n++){const value=typeof a[n]==='number'?a[n]-b[n]:typeof a[n]==='boolean'?Number(a[n])-Number(b[n]):n===1&&(sort.startsWith('AMOUNT_')||kind==='EXPORT_ROWS'&&sort.includes('_AMOUNT_'))?decimalCompare(a[n],b[n]):textCompare(a[n],b[n]);if(value)return sort.endsWith('_DESC')?-value:value;}return 0;}
 function fail(code,status=503,retryable=false,reload=false){return Object.assign(new Error(code),{code,status,retryable,reload});}
 function normalizeWorkbenchInput(kind,input={}){
   if(!KINDS.includes(kind)||!record(input)||Reflect.ownKeys(input).some(k=>typeof k!=='string'||!Object.hasOwn(COMMON,k)))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
   const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,count_selection:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
   for(const k of ['candidate_id','client_id','item_id'])if(typeof args[k]==='string')args[k]=args[k].toLowerCase();
   if(args.count_selection!==null&&(kind!=='HEADER'||args.section!=='READY')||kind!=='CANDIDATES'&&String(args.sort).startsWith('STATUS_'))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
-  if(!shape(args,COMMON)||(kind==='CANDIDATE_GROUPS'&&args.limit>10)||(!['CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort!=='NAME_ASC')||(!['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort.startsWith('REASON_'))||(kind==='CANDIDATES'&&args.sort.startsWith('PAYMENT_'))||(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort.startsWith('DEDUCTIONS_'))
+  if(!shape(args,COMMON)||(kind==='CANDIDATE_GROUPS'&&args.limit>10)||(kind==='EXPORT_ROWS'?!EXPORT_SORTS.includes(args.sort):EXPORT_SORTS.includes(args.sort)||!['CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort!=='NAME_ASC')||(!['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort.startsWith('REASON_'))||(kind==='CANDIDATES'&&args.sort.startsWith('PAYMENT_'))||(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort.startsWith('DEDUCTIONS_'))
     ||(['CANDIDATE_GROUPS','GROUP_LINES'].includes(kind)&&args.candidate_id===null)||(['GROUP_LINES','ISSUE_DETAIL'].includes(kind)&&args.group_key===null)||(kind==='ISSUE_DETAIL'&&args.reason_code===null)
     ||(!['GROUP_LINES','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&[args.group_key,args.item_id,args.reason_code].some(v=>v!==null)||kind==='CANDIDATE_GROUPS'&&[args.item_id,args.reason_code].some(v=>v!==null))
     ||(!['CANDIDATES','PICK_CANDIDATES','PICK_CLIENTS','ACTION_REQUIRED','BLOCKED','EXPORT_ROWS'].includes(kind)&&args.search!=='')||(kind==='HEADER'&&args.after!==null))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
@@ -497,6 +503,7 @@ function validateWorkbenchResponse(payload,kind,args,actorId=null){
     if(Object.hasOwn(row,'amount_known')&&row.amount_known===false&&row.nominal_source_ex_vat!==null)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(Object.hasOwn(row,'amount_known')&&row.selectable===true&&(row.section!=='READY'||row.amount_known!==true||!['AVAILABLE','ZERO'].includes(row.portion_kind)))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(Object.hasOwn(row,'group_key')){if(!field(row.group_key,'groupKey')||(row.work_id!==null)===(row.case_id!==null)||row.group_key!==(row.work_id!==null?'WORK:'+row.work_id:row.group_key.startsWith('ROW:')?'ROW:'+row.case_component_id:'CASE:'+row.case_id))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
+    if(kind==='EXPORT_ROWS'&&(row.export_key.at(-1)!==row.item_id||row.work_id===null&&[row.approved_line_id,row.physical_timesheet_id,row.job_title,row.band_label,row.shift_start,row.shift_finish].some(v=>v!==null)||row.choice_eligible&&(!row.selectable||row.section!=='READY')))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
     if(kind==='GROUP_LINES'){
       const facts=['approved_line_no','job_title','band_label','original_work_ref','original_timesheet_id','is_adjustment','component_amount_known','component_ready_amount','component_waiting_amount','component_reserved_amount'];
       if(row.work_id===null&&facts.some(k=>row[k]!==null)||(row.shift_detail_id===null)!==(row.shift_detail_no===null)||row.approved_segment_id===null&&row.shift_detail_id!==null||row.original_timesheet_id===null&&row.original_work_ref!==null||row.component_amount_known!==true&&['component_ready_amount','component_waiting_amount','component_reserved_amount'].some(k=>row[k]!==null)||row.component_amount_known===true&&['component_ready_amount','component_waiting_amount','component_reserved_amount'].some(k=>row[k]===null))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
@@ -614,7 +621,7 @@ function mountWorkbenchShell(options){
  const root=el('section',undefined,'bpay-next-workbench-shell'),tabs=el('div',undefined,'bpay-next-main-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Payments');
  const strip=el('div',undefined,'bpay-next-header-strip'),facts=el('div',undefined,'bpay-next-header-facts'),chips=el('div',undefined,'ma-chips'),actions=el('div',undefined,'bpay-next-header-actions');
  const alert=el('p','', 'ws-notice');alert.setAttribute('role','alert');alert.setAttribute('data-next-live-copy','');const readyHost=el('div'),issueHost=el('div');
- const filters=button('Filters',()=>openFilters()),refresh=button('Refresh',()=>{options.onRefresh?.();void load();});actions.append(filters,refresh);strip.append(facts,chips,actions);root.append(tabs,strip,alert,readyHost,issueHost);host.append(root);
+ const filters=button('Filters',()=>openFilters()),refresh=button('Refresh',()=>{options.onRefresh?.();void load();}),exportCsv=button('Export CSV',()=>{if(!current()||busy||!bundle)return;try{options.onExport?.();}catch{error='The export could not be opened; refresh and try again.';render();}});actions.append(filters,exportCsv);const refreshFooter=el('div',undefined,'bpay-next-window-actions');refreshFooter.append(refresh);strip.append(facts,chips,actions);root.append(tabs,strip,alert,readyHost,issueHost,refreshFooter);host.append(root);
  const tabButtons={};for(const [key,label] of [['READY','Ready'],['ACTION','Action required'],['BLOCKED','Blocked']]){const b=button(label,()=>setTab(key));b.setAttribute('role','tab');b.id='bpay-next-main-tab-'+key;b.setAttribute('aria-controls','bpay-next-main-panel-'+key);tabButtons[key]=b;tabs.append(b);}
  readyHost.id='bpay-next-main-panel-READY';readyHost.setAttribute('role','tabpanel');readyHost.setAttribute('aria-labelledby',tabButtons.READY.id);
  function actorCurrent(){try{return options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}}
@@ -631,7 +638,7 @@ function mountWorkbenchShell(options){
   if(scope.channel!=='ALL'||scope.candidate_id!==null||scope.client_id!==null)chips.append(el('span',scopeLabel(),'ma-chip'));
   for(const [key,b] of Object.entries(tabButtons)){const count=available?(key==='READY'?bundle[key].rows[0].candidate_count:bundle[key].rows[0].item_count):null;b.textContent=key==='READY'?'Ready':key==='ACTION'?'Action required':'Blocked';if(count!==null)b.append(el('span',BigInt(count).toLocaleString('en-GB'),'bpay-next-tab-count'));b.setAttribute('aria-selected',String(tab===key));b.tabIndex=tab===key?0:-1;b.disabled=busy;}
   readyHost.hidden=tab!=='READY';issueHost.hidden=tab==='READY';issueHost.id='bpay-next-main-panel-'+(tab==='READY'?'ACTION':tab);issueHost.setAttribute('role','tabpanel');issueHost.setAttribute('aria-labelledby',tabButtons[tab==='READY'?'ACTION':tab].id);
-  filters.disabled=busy||!current();refresh.disabled=busy||!current();alert.hidden=!busy&&!error;alert.textContent=error||(busy?'Loading…':'');root.setAttribute('aria-busy',String(busy));joinIssues();notify();
+  filters.disabled=busy||!current();refresh.disabled=busy||!current();exportCsv.disabled=!available||typeof options.onExport!=='function';alert.hidden=!busy&&!error;alert.textContent=error||(busy?'Loading…':'');root.setAttribute('aria-busy',String(busy));joinIssues();notify();
  }
  function setTab(value){if(!current()||busy||!Object.hasOwn(tabButtons,value))return;tab=value;render();options.onTab?.(value);}
  async function load(){
@@ -1012,6 +1019,42 @@ function mountPaymentDetail(options,address){
 }
 
 
+
+// WB18 actual local choice snapshot; offer a file only after normal complete EOF.
+function openWorkbenchExport(options,{context,choiceStore,candidate_id=null,sort='C_NAME_ASC',parentCurrent=()=>true}){
+ if(!shape(context,CONTEXT)||!choiceStore||!field(candidate_id,'uuid?')||!EXPORT_SORTS.includes(sort)||typeof options.showReadWindow!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
+ const doc=options.document??options.host.ownerDocument,win=doc.defaultView,actor=options.actorId.toLowerCase(),environment=options.environment??'TEST';
+ const body=JSON.stringify({choice:choiceStore.freeze(context),context,candidate_id,sort});
+ if(ENCODER.encode(body).byteLength>32768||!['TEST','LIVE'].includes(environment))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
+ const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+ const root=el('section',undefined,'bpay-next-export'),question=el('h2',candidate_id===null?'Export this list to CSV?':'Export this Candidate to CSV?'),scope=el('strong',context.scope.channel==='ALL'?'PAYE + Umbrella':context.scope.channel==='UMBRELLA'?'Umbrella':'PAYE'),result=el('p'),footer=el('div',undefined,'bpay-next-window-actions');
+ root.append(question,el('p','The file lists every payment in this view, with an Included column for ticks.'),scope,result);result.setAttribute('role','status');result.setAttribute('data-next-live-copy','');
+ let frame,closed=false,busy=false,complete=false,controller=null,timer=null;
+ const current=()=>{try{return !closed&&frame?.alive()===true&&parentCurrent()===true&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===actor;}catch{return false;}};
+ const button=(label,fn)=>{const b=el('button',label,'btn');b.type='button';b.addEventListener('click',fn);return b;};
+ const cancel=button('Cancel',()=>{controller?.abort();void frame.close();}),download=button('Export CSV',()=>{if(current()&&frame.active()&&!busy&&!complete)void run();});download.classList.add('primary');footer.append(cancel,download);
+ function render(){cancel.hidden=complete;download.hidden=complete;if(complete&&frame.active())doc.getElementById('modal')?.classList.remove('bpay-next-confirmation');download.disabled=busy||!current();root.setAttribute('aria-busy',String(busy));}
+ async function run(){
+  if(!current()||!frame.active()||busy)return;busy=true;result.setAttribute('role','status');result.textContent='Preparing CSV…';render();const attemptController=new AbortController();controller=attemptController;
+  const chunks=[];let length=0,reader=null,attemptTimer;
+  const cancelRead=()=>{try{void reader?.cancel().catch(()=>{});}catch{}};attemptController.signal.addEventListener('abort',cancelRead,{once:true});
+  const timeout=new Promise((_,reject)=>{attemptTimer=win.setTimeout(()=>{attemptController.abort();cancelRead();reject(new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true));},120000);});
+  timer=attemptTimer;const interrupted=new Promise((_,reject)=>{attemptController.signal.addEventListener('abort',()=>reject(new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED')),{once:true});});
+  const fetchComplete=async()=>{
+   const response=await options.authFetch(options.api('/api/banking/pay/next/workbench-export'),{method:'POST',body,redirect:'error',auth401Mode:'return',signal:attemptController.signal,headers:{'content-type':'application/json',accept:'text/csv','X-CloudTMS-Banking-Environment':environment}});
+   if(!(response instanceof Response)||!response.ok||!/^text\/csv(?:;|$)/i.test(response.headers.get('content-type')??'')||!response.body||attemptController.signal.aborted){try{void response?.body?.cancel().catch(()=>{});}catch{}throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true);}
+   reader=response.body.getReader();if(attemptController.signal.aborted)cancelRead();
+   while(true){if(!current()||attemptController.signal.aborted)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');const {done,value}=await reader.read();if(!current()||attemptController.signal.aborted)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');if(done)break;length+=value.byteLength;if(length>33554432)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_RESPONSE_TOO_LARGE');chunks.push(value);}
+   if(length===0)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+  };
+  try{await Promise.race([fetchComplete(),timeout,interrupted]);if(!current()||attemptController.signal.aborted)return;const blob=new win.Blob(chunks,{type:'text/csv;charset=utf-8'}),url=win.URL.createObjectURL(blob),anchor=el('a');try{anchor.href=url;anchor.download=candidate_id===null?'banking_pay_workbench.csv':'banking_pay_candidate.csv';doc.body.append(anchor);anchor.click();}finally{anchor.remove();win.setTimeout(()=>win.URL.revokeObjectURL(url),0);}complete=true;result.textContent='CSV downloaded.';}
+  catch{if(current()){result.setAttribute('role','alert');result.textContent='The export could not be completed; no file was produced.';download.textContent='Try again';}}
+  finally{attemptController.abort();win.clearTimeout(attemptTimer);attemptController.signal.removeEventListener('abort',cancelRead);if(reader){cancelRead();try{reader.releaseLock();}catch{}}chunks.length=0;busy=false;if(current())render();}
+ }
+ const ownerChanged=()=>{if(!current()){controller?.abort();void frame?.close();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
+ frame=options.showReadWindow({title:'Export CSV',content:root,footer,small:true,confirmation:true,canFocus:()=>current(),onDismiss:()=>{closed=true;controller?.abort();win.clearTimeout(timer);win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);}});render();return frame;
+}
+
 function openCandidateWindow(options,address){
  if(!record(options)||typeof options.showReadWindow!=='function'||!record(address)||!field(address.candidate_id,'uuid')||!shape(address.context,CONTEXT)||!field(address.candidate_name,'text?')||!field(address.candidate_reference,'text?')||!options.choiceStore||!exact(address.scope,['candidate_id','client_id','channel']))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
  const doc=options.document??options.host.ownerDocument,win=doc.defaultView,client=options.client??createWorkbenchClient(options),ui=win.CloudTMSBpayNextUi,previous=doc.activeElement,store=options.choiceStore;
@@ -1030,7 +1073,8 @@ function openCandidateWindow(options,address){
  const usable=()=>current()&&!busy&&!error&&!newerInformation&&context&&headers;
  const interactive=()=>usable()&&frame.active();
  const refresh=button('Refresh',()=>{if(current()&&frame.active()&&!busy)void read('refresh',null,captureAnchor());}),include=button('Include all eligible payments',()=>{if(!interactive()||headers.READY.payable_count==='0')return;try{store.includeCandidatePayments(address.candidate_id);options.onSelection?.();notice='All eligible payments are included.';render();}catch{error='Too many choices; clear some choices and try again.';render();}}),retry=button('Try again',()=>{if(current()&&frame.active()&&!busy)void read(pending.direction,pending.after,pending.anchor);});
- refresh.setAttribute('data-next-focus-key','candidate-refresh');include.setAttribute('data-next-focus-key','candidate-include');include.classList.add('primary');strip.append(facts,refresh);footer.append(include);mobile.append(select);scroller.tabIndex=0;scroller.setAttribute('role','region');scroller.setAttribute('aria-label','Candidate payments');status.setAttribute('role','status');status.setAttribute('data-next-live-copy','');foot.setAttribute('data-next-live-copy','');root.append(strip,tabs,mobile,scroller,status,retry,foot);
+ const exportCsv=button('Export CSV',()=>{if(!interactive())return;try{if(!sameWorkbenchRevision(address.context,context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);openWorkbenchExport({...options,document:doc},{context:address.context,choiceStore:store,candidate_id:address.candidate_id,sort:'G_'+sort,parentCurrent:()=>Boolean(usable())});}catch{error='The export could not be opened; refresh and try again.';render();}});exportCsv.setAttribute('data-next-focus-key','candidate-export');
+ refresh.setAttribute('data-next-focus-key','candidate-refresh');include.setAttribute('data-next-focus-key','candidate-include');include.classList.add('primary');strip.append(facts,refresh,exportCsv);footer.append(include);mobile.append(select);scroller.tabIndex=0;scroller.setAttribute('role','region');scroller.setAttribute('aria-label','Candidate payments');status.setAttribute('role','status');status.setAttribute('data-next-live-copy','');foot.setAttribute('data-next-live-copy','');root.append(strip,tabs,mobile,scroller,status,retry,foot);
  const sectionLabels={READY:'Ready',WAITING:'Waiting',ACTION:'Action required',BLOCKED:'Blocked'},tabButtons=new Map();tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Candidate payments');
  for(const [key,label] of Object.entries(sectionLabels)){const b=button(label,()=>{if(!current()||!frame.active()||busy||section===key)return;section=key;sort='PAYMENT_DESC';anchorKey=null;highlight=null;void read('reset',null,null);});b.setAttribute('role','tab');b.setAttribute('data-next-focus-key','candidate-tab:'+key);tabs.append(b);tabButtons.set(key,b);}
  function columns(){return section==='READY'?[['PAYMENT','Payment'],['CLIENT','Client'],['CHANNEL','Pay channel'],['DEDUCTIONS','Deductions'],['AMOUNT','Amount ex VAT']]:[['PAYMENT','Payment'],['CLIENT','Client'],['REASON',section==='WAITING'?'Why it is waiting':section==='BLOCKED'?'Why it is blocked':'What needs attention'],['AMOUNT','Amount ex VAT']];}
@@ -1051,7 +1095,7 @@ function openCandidateWindow(options,address){
   const saved=ui.capture(root,doc),available=usable(),active=interactive();facts.replaceChildren(el('small','Ready to pay'));
   if(headers){const n=el('strong',displayPounds(headers.READY.amount));n.setAttribute('data-next-formatted-money','');facts.append(n);if(headers.READY.ready_net_add_amount!==null&&decimalCompare(headers.READY.ready_net_add_amount,'0')!==0){const net=el('small','Payment addition '+displayPounds(headers.READY.ready_net_add_amount));net.setAttribute('data-next-formatted-money','');facts.append(net);}}
   for(const [key,b] of tabButtons){b.disabled=busy||!current();b.setAttribute('aria-selected',String(key===section));b.classList.toggle('is-active',key===section);}
-  refresh.disabled=busy||!current();include.hidden=section!=='READY';include.disabled=!active||headers?.READY.payable_count==='0';
+  refresh.disabled=busy||!current();exportCsv.disabled=!active;include.hidden=section!=='READY';include.disabled=!active||headers?.READY.payable_count==='0';
   select.replaceChildren();for(const [key,label] of columns())for(const dir of ['ASC','DESC']){const o=el('option',label+(dir==='ASC'?' ▲':' ▼'));o.value=key+'_'+dir;select.append(o);}select.value=sort;select.disabled=busy||!current();
   if(busy&&scroller.firstChild){for(const control of scroller.querySelectorAll('button,input,select'))control.disabled=true;scroller.classList.add('bpay-next-stale');status.setAttribute('role','status');status.textContent=pending.direction==='forward'||pending.direction==='back'?'Loading more…':'Loading…';retry.hidden=true;root.setAttribute('aria-busy','true');return;}
   const table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),thead=el('thead'),heading=el('tr'),tbody=el('tbody');
@@ -1107,6 +1151,6 @@ function openIssueWindow(options,issue){
 }
 
 
-return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,openCandidateWindow,mountPaymentDetail,issueReason,issueAmounts,createChoiceStore});
+return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,openCandidateWindow,mountPaymentDetail,issueReason,issueAmounts,createChoiceStore,openWorkbenchExport});
 
 });
