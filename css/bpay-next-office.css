@@ -41,6 +41,7 @@
 #modal.ctms-kind-banking-pay-history #bpayNextPaymentHistory {color:var(--next-text);overflow-wrap:anywhere;}
 #modal.ctms-kind-banking-pay-history #bpayNextPaymentHistory dd {margin-inline-start:12px;}
 @media(max-width:600px) {
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-job-update) #btnCloseModal,#modal.ctms-kind-bpay-next-read:has(.bpay-next-job-update) [data-next-window-footer] .btn {min-height:44px;min-width:44px;}
   .bpay-next-office {--next-gap:6px;}
   .bpay-next-office header {padding:9px;gap:6px;}
   .bpay-next-office .bpay-next-body {padding:9px;}
@@ -255,3 +256,17 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-export p[role=alert] {color:var(--ctms-modal-danger);}
 @media(max-width:720px){#modal.ctms-kind-bpay-next-read .bpay-next-header-actions button,#modal.ctms-kind-bpay-next-read .bpay-next-candidate-strip button{min-height:44px;}}
 @media(max-width:720px){#modal.ctms-kind-bpay-next-read:has(.bpay-next-export) #btnCloseModal{min-height:44px;min-width:44px;}}
+
+/* WB19 uses the native dark modal and factual status rows. */
+#modal.ctms-kind-bpay-next-read .bpay-next-updated {color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-work-progress {max-height:40vh;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row {display:flex;align-items:center;gap:12px;padding:12px 8px;border-bottom:1px solid var(--ctms-modal-border);flex-wrap:wrap;}
+#modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row strong {flex:1;min-width:120px;overflow-wrap:anywhere;}
+#modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row[aria-selected=true] {background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-workbench-skeleton {display:grid;gap:10px;margin:12px 0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-workbench-skeleton[hidden] {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-workbench-skeleton span {display:block;height:32px;border-radius:4px;background:var(--ctms-modal-panel-raised);}
+@media(max-width:720px){
+ #modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row .btn,#modal.ctms-kind-bpay-next-read:has(.bpay-next-workbench-shell) #btnCloseModal {min-height:44px;min-width:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-work-progress-row strong {flex-basis:100%;}
+}

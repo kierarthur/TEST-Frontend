@@ -7,7 +7,7 @@ const ENCODER=new TextEncoder(),UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{1
 const KINDS=['HEADER','CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS','GROUP_LINES','PICK_CANDIDATES','PICK_CLIENTS','EXPORT_ROWS'];
 const EXPORT_SORT_FIELDS={"C_NAME":["text","boolean","text","uuid","uuid"],"C_AMOUNT":["boolean","decimal","uuid","uuid"],"C_DEDUCTIONS":["boolean","text","boolean","text","uuid","uuid"],"C_STATUS":["boolean","boolean","text","text","uuid","uuid"],"G_PAYMENT":["boolean","date","text","uuid","uuid"],"G_CLIENT":["boolean","text","text","uuid","uuid"],"G_CHANNEL":["boolean","text","text","uuid","uuid"],"G_AMOUNT":["boolean","decimal","text","uuid","uuid"],"G_DEDUCTIONS":["boolean","text","uuid","uuid"],"G_REASON":["small","text","text","uuid","uuid"]};
 const EXPORT_SORTS=Object.keys(EXPORT_SORT_FIELDS).flatMap(k=>[k+'_ASC',k+'_DESC']);
-const COMMON={candidate_id:'uuid?',client_id:'uuid?',channel:'scopeChannel',section:'scopeSection',search:'search',sort:'sort',group_key:'groupKey?',item_id:'uuid?',reason_code:'code?',count_selection:'countSelection?',after:'cursor?',limit:'limit'};
+const COMMON={candidate_id:'uuid?',client_id:'uuid?',channel:'scopeChannel',section:'scopeSection',search:'search',sort:'sort',group_key:'groupKey?',item_id:'uuid?',reason_code:'code?',count_selection:'countSelection?',progress_after:'progressCursor?',after:'cursor?',limit:'limit'};
 const BPAY_NEXT_WORKBENCH_PAGE_INPUTS=Object.freeze(Object.fromEntries(KINDS.map(k=>[k,Object.freeze({...COMMON})])));
 // Generated once from the explicit SQL projections; reviewed source is durable.
 const ROWS=Object.freeze({
@@ -398,7 +398,7 @@ const ROWS=Object.freeze({
     "reason_priority": "small"
   ,"physical_revision_id":"uuid?","physical_timesheet_version":"positive?","source_kind":"sourceKind?","source_head_id":"uuid?","source_root_timesheet_id":"uuid?","source_root_timesheet_version":"positive?","source_week_ending_date":"date?"}
 });
-const SCOPE=Object.freeze(Object.fromEntries(Object.entries(COMMON).filter(([k])=>!['after','limit'].includes(k))));
+const SCOPE=Object.freeze(Object.fromEntries(Object.entries(COMMON).filter(([k])=>!['after','limit','progress_after'].includes(k))));
 const CONTEXT={kind:'kind',agency_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',official_pay_date:'date',workbench_revision:'integer',adoption_revision:'integer',scope:'scope'};
 const REFUSAL={ok:'false',error_code:'refusal',retryable:'boolean',reload_required:'boolean',workbench_revision:'integer?',complete:'false',projection_state:'adoption?',dirty_candidate_count:'integer?',dirty_group_count:'integer?',pending_task_count:'integer?'};
 const FAILURE_CODES=['BPAY_NEXT_MODULE_NOT_ACTIVE','BPAY_NEXT_WORKBENCH_FORBIDDEN','BPAY_NEXT_WORKBENCH_UNAUTHORIZED','BPAY_NEXT_WORKBENCH_METHOD_NOT_ALLOWED','BPAY_NEXT_WORKBENCH_REQUEST_INVALID','BPAY_NEXT_WORKBENCH_RESPONSE_INVALID','BPAY_NEXT_WORKBENCH_RESPONSE_TOO_LARGE','BPAY_NEXT_WORKBENCH_CURSOR_STALE','BPAY_NEXT_WORKBENCH_PROJECTION_NOT_CURRENT','BPAY_NEXT_WORKBENCH_DATE_UNAVAILABLE','BPAY_NEXT_WORKBENCH_UNAVAILABLE'];
@@ -407,6 +407,14 @@ function exact(v,keys){return record(v)&&Reflect.ownKeys(v).length===keys.length
 const same=(a,b)=>a===b||(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,n)=>same(v,b[n])))||(record(a)&&record(b)&&exact(a,Object.keys(b))&&Object.keys(a).every(k=>same(a[k],b[k])));
 const enums={kind:KINDS,scopeChannel:['ALL','PAYE','UMBRELLA'],channel:['PAYE','UMBRELLA'],scopeSection:['ALL','READY','ACTION','BLOCKED','WAITING'],section:['READY','ACTION','BLOCKED','WAITING'],sort:[...EXPORT_SORTS,'NAME_ASC','NAME_DESC','AMOUNT_ASC','AMOUNT_DESC','DEDUCTIONS_ASC','DEDUCTIONS_DESC','PAYMENT_ASC','PAYMENT_DESC','STATUS_ASC','STATUS_DESC','REASON_ASC','REASON_DESC','CLIENT_ASC','CLIENT_DESC','CHANNEL_ASC','CHANNEL_DESC'],bank:['BANK_DETAILS_MISSING','BANK_DETAILS_CHANGED'],group:['WORK','CASE','ROW'],member:['WORK_COMPONENT','WORK_SEGMENT','CASE_COMPONENT','GROUP_EVIDENCE'],portion:['AVAILABLE','RESERVED','RECOVERY','ZERO','EVIDENCE','WITHDRAWN'],direction:['PAYMENT','DEDUCTION','INFORMATIONAL'],stage:['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'],query:['NOT_APPLICABLE','UNAVAILABLE','CLEAR','OPEN'],progress:['CURRENT','PROCESSING','UNAVAILABLE'],adoption:['UNSEEDED','SEEDING','CURRENT','ERROR']};
 function field(v,type){
+  if(type==='workJobProgressKind')return v==='WORK_JOB_PROGRESS';
+  if(type==='workJobStatus')return ['READY','LEASED','BLOCKED','FAILED'].includes(v);
+  if(type==='jobPhase')return typeof v==='string'&&ENCODER.encode(v).byteLength>=1&&ENCODER.encode(v).byteLength<=64;
+  if(type==='jobCheckpoint')return typeof v==='string'&&ENCODER.encode(v).byteLength<=512;
+  if(type==='jobError')return typeof v==='string'&&/^BPAY_NEXT_[A-Z0-9_]{1,240}$/.test(v);
+  if(type==='jobTime')return typeof v==='string'&&v.length<=40&&Number.isFinite(Date.parse(v));
+  if(type==='progressScope')return shape(v,{candidate_id:'uuid?',client_id:'uuid?',channel:'scopeChannel'});
+  if(type==='progressCursor')return progressCursor(v);
   if(type.endsWith('?'))return v===null||field(v,type.slice(0,-1));
   if(Object.hasOwn(enums,type))return enums[type].includes(v);
   if(type==='uuid')return typeof v==='string'&&UUID.test(v);
@@ -468,9 +476,10 @@ function keyCompare(a,b,kind,sort){for(let n=0;n<a.length;n++){const value=typeo
 function fail(code,status=503,retryable=false,reload=false){return Object.assign(new Error(code),{code,status,retryable,reload});}
 function normalizeWorkbenchInput(kind,input={}){
   if(!KINDS.includes(kind)||!record(input)||Reflect.ownKeys(input).some(k=>typeof k!=='string'||!Object.hasOwn(COMMON,k)))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
-  const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,count_selection:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
+  const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,count_selection:null,progress_after:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
   for(const k of ['candidate_id','client_id','item_id'])if(typeof args[k]==='string')args[k]=args[k].toLowerCase();
   if(args.count_selection!==null&&(kind!=='HEADER'||args.section!=='READY')||kind!=='CANDIDATES'&&String(args.sort).startsWith('STATUS_'))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
+  if(args.progress_after!==null&&kind!=='HEADER')throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
   if(!shape(args,COMMON)||(kind==='CANDIDATE_GROUPS'&&args.limit>10)||(kind==='EXPORT_ROWS'?!EXPORT_SORTS.includes(args.sort):EXPORT_SORTS.includes(args.sort)||!['CANDIDATES','ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort!=='NAME_ASC')||(!['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&args.sort.startsWith('REASON_'))||(kind==='CANDIDATES'&&args.sort.startsWith('PAYMENT_'))||(['ACTION_REQUIRED','BLOCKED','ISSUE_DETAIL'].includes(kind)&&args.sort.startsWith('DEDUCTIONS_'))
     ||(['CANDIDATE_GROUPS','GROUP_LINES'].includes(kind)&&args.candidate_id===null)||(['GROUP_LINES','ISSUE_DETAIL'].includes(kind)&&args.group_key===null)||(kind==='ISSUE_DETAIL'&&args.reason_code===null)
     ||(!['GROUP_LINES','ISSUE_DETAIL','CANDIDATE_GROUPS'].includes(kind)&&[args.group_key,args.item_id,args.reason_code].some(v=>v!==null)||kind==='CANDIDATE_GROUPS'&&[args.item_id,args.reason_code].some(v=>v!==null))
@@ -483,15 +492,49 @@ function normalizeWorkbenchInput(kind,input={}){
   return args;
 }
 function parseUniqueJson(text){const stack=[];for(let n=0;n<text.length;n++){const c=text[n];if(c==='{'||c==='['){stack.push(c==='{'?new Set():null);if(stack.length>8)throw new Error();}else if(c==='}'||c===']')stack.pop();else if(c==='"'){const start=n;n++;for(;n<text.length;n++){if(text[n]==='\\')n++;else if(text[n]==='"')break;}const token=JSON.parse(text.slice(start,n+1));let after=n+1;while(after<text.length&&/\s/.test(text[after]))after++;if(text[after]===':'){const keys=stack.at(-1);if(!(keys instanceof Set)||keys.has(token))throw new Error();keys.add(token);}}}return JSON.parse(text);}
-async function readWorkbenchJson(response,signal,onBytes){
+async function readWorkbenchJson(response,signal,onBytes,maximum=BPAY_NEXT_WORKBENCH_LIMITS.responseBytes){
   const reader=response.body?.getReader();if(!reader)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
   const cancel=()=>{void reader.cancel().catch(()=>{});};signal?.addEventListener('abort',cancel,{once:true});
-  const chunks=[];let length=0;try{while(true){if(signal?.aborted)throw fail('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true);const {done,value}=await reader.read();if(signal?.aborted)throw fail('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true);if(done)break;length+=value.byteLength;try{onBytes?.(length);}catch{}if(length>BPAY_NEXT_WORKBENCH_LIMITS.responseBytes)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_TOO_LARGE');chunks.push(value);}
+  const chunks=[];let length=0;try{while(true){if(signal?.aborted)throw fail('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true);const {done,value}=await reader.read();if(signal?.aborted)throw fail('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true);if(done)break;length+=value.byteLength;try{onBytes?.(length);}catch{}if(length>maximum)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_TOO_LARGE');chunks.push(value);}
     const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}return parseUniqueJson(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
   }catch(e){void reader.cancel().catch(()=>{});throw e?.code?e:fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}finally{try{onBytes?.(length);}catch{}signal?.removeEventListener('abort',cancel);reader.releaseLock();}
 }
+
+const JOB_PROGRESS_CONTEXT={kind:'workJobProgressKind',agency_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',official_pay_date:'date',workbench_revision:'integer',adoption_revision:'integer',scope:'progressScope'};
+const JOB_PROGRESS_ROW={job_id:'uuid',work_id:'uuid',candidate_id:'uuid',revision_id:'uuid',command_id:'uuid',command_sequence:'positive',module_epoch:'positive',owner_epoch:'positive',status:'workJobStatus',phase:'jobPhase',cursor:'jobCheckpoint?',attempt_count:'integer',processing:'boolean',failed_job_code:'jobError?',first_error_code:'jobError?',last_error_code:'jobError?',first_error_at_utc:'jobTime?',last_error_at_utc:'jobTime?',created_at_utc:'jobTime?',started_at_utc:'jobTime?',finished_at_utc:'jobTime?',candidate_display_name:'text?',timesheet_reference:'text?',client_display_name:'text?',physical_timesheet_id:'uuid?',evidence_available:'boolean'};
+function progressKey(v){return Array.isArray(v)&&v.length===2&&field(v[0],'positive')&&field(v[1],'uuid');}
+function progressCursor(v){return exact(v,['context','key'])&&shape(v.context,JOB_PROGRESS_CONTEXT)&&progressKey(v.key);}
+function validateJobProgress(progress,args,actorId,revision){
+ const invalid=()=>{throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');};
+ if(!exact(progress,['context','rows','complete','next_cursor','oldest_pending_age_seconds'])||!shape(progress.context,JOB_PROGRESS_CONTEXT)
+  ||!Array.isArray(progress.rows)||progress.rows.length>args.limit||typeof progress.complete!=='boolean'||!field(progress.oldest_pending_age_seconds,'integer?')
+  ||progress.context.workbench_revision!==revision||actorId!==null&&progress.context.actor_user_id!==actorId
+  ||!same(progress.context.scope,{candidate_id:args.candidate_id,client_id:args.client_id,channel:args.channel})
+  ||args.progress_after!==null&&!same(args.progress_after.context,progress.context))invalid();
+ let prior=args.progress_after?.key??null,last=null;
+ for(const row of progress.rows){const key=[row.command_sequence,row.job_id];
+  if(!shape(row,JOB_PROGRESS_ROW)||row.module_epoch!==progress.context.owner_epoch||args.candidate_id!==null&&row.candidate_id!==args.candidate_id
+   ||row.processing!==(row.status!=='FAILED')||row.status==='FAILED'&&row.failed_job_code!==row.last_error_code||row.status!=='FAILED'&&row.failed_job_code!==null
+   ||prior!==null&&(BigInt(prior[0])>BigInt(key[0])||prior[0]===key[0]&&prior[1]>=key[1]))invalid();
+  prior=key;last=key;
+ }
+ if(!progress.complete&&last===null||!same(progress.next_cursor,progress.complete?null:{context:progress.context,key:last}))invalid();
+ return progress;
+}
+
 function validateWorkbenchResponse(payload,kind,args,actorId=null){
-  if(payload?.ok===false){if(!shape(payload,REFUSAL)||payload.reload_required!==(payload.error_code==='BPAY_NEXT_WORKBENCH_CURSOR_STALE'))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');return payload;}
+  const original=payload;
+  if(Object.hasOwn(payload??{},'job_progress')){
+    if(kind!=='HEADER')throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+    validateJobProgress(payload.job_progress,args,actorId,payload.workbench_revision);
+    payload={...payload};delete payload.job_progress;
+    if(payload.ok===true){if(!Array.isArray(payload.rows)||payload.rows.length!==1||!Object.hasOwn(payload.rows[0],'oldest_pending_age_seconds')
+      ||payload.rows[0].oldest_pending_age_seconds!==original.job_progress.oldest_pending_age_seconds)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+      if(!['agency_id','owner_epoch','official_pay_date','adoption_revision'].every(k=>payload.context?.[k]===original.job_progress.context[k]))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+      const row={...payload.rows[0]};delete row.oldest_pending_age_seconds;payload.rows=[row];}
+  }
+
+  if(payload?.ok===false){if(!shape(payload,REFUSAL)||payload.reload_required!==(payload.error_code==='BPAY_NEXT_WORKBENCH_CURSOR_STALE'))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');return original;}
   if(!exact(payload,['ok','kind','workbench_revision','complete','context','rows','next_cursor','page_receipt','affected_candidate_count'])||payload.ok!==true||payload.kind!==kind||!field(payload.workbench_revision,'integer')||typeof payload.complete!=='boolean'||!shape(payload.context,CONTEXT)||payload.context.kind!==kind||payload.context.workbench_revision!==payload.workbench_revision||!Array.isArray(payload.rows)||payload.rows.length>args.limit||(kind==='HEADER'&&payload.rows.length!==1)||(!payload.complete&&payload.rows.length===0)||(kind==='ISSUE_DETAIL'?!field(payload.affected_candidate_count,'integer'):payload.affected_candidate_count!==null))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
   const scope=Object.fromEntries(Object.keys(SCOPE).map(k=>[k,args[k]])),context=payload.context;
   if(!same(context.scope,scope)||(actorId!==null&&context.actor_user_id!==actorId)||args.after!==null&&!same(args.after.context,context))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
@@ -526,7 +569,7 @@ function validateWorkbenchResponse(payload,kind,args,actorId=null){
     if(['HEADER','CANDIDATES'].includes(kind)){const unknown=row.unknown_amount_count!=='0';for(const k of ['amount','waiting_amount','ready_net_add_amount','waiting_net_add_amount','gross_deduction_balance','net_deduction_balance','approved_amount','paid_credit_amount','reserved_amount','excluded_amount','recovery_amount'])if((row[k]===null)!==unknown)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');if((row.selected_amount===null)!==(row.unknown_selected_amount_count!=='0')||row.has_deduction!==(row.deduction_item_count!=='0'))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
   }
   const expected=payload.complete?null:{context,key:last};if(!same(payload.next_cursor,expected)||!exact(payload.page_receipt,['context','start_key','end_key','row_count'])||!same(payload.page_receipt.context,context)||!same(payload.page_receipt.start_key,args.after?.key??null)||!same(payload.page_receipt.end_key,last)||payload.page_receipt.row_count!==String(payload.rows.length))throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
-  return payload;
+  return original;
 }
 
 
@@ -549,7 +592,7 @@ function createWorkbenchClient(options){
     try{
       assertActor();const args=normalizeWorkbenchInput(kind,params);
       if(args.after!==null&&args.after.context.actor_user_id!==actor)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
-      const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection'].includes(key)?JSON.stringify(value):String(value));
+      const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection','progress_after'].includes(key)?JSON.stringify(value):String(value));
       if(ENCODER.encode(query.toString()).byteLength>32768)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
       controller=new AbortController();const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{timedOut=true;controller.abort();reject(new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true));},BPAY_NEXT_WORKBENCH_LIMITS.timeoutMs);});
       const read=async()=>{
@@ -558,7 +601,7 @@ function createWorkbenchClient(options){
         if(controller.signal.aborted){void response.body?.cancel().catch(()=>{});throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true);}
         const body=await readWorkbenchJson(response,controller.signal,n=>{bytes=n;});assertActor();
         if(body?.ok===false){
-          if(shape(body,REFUSAL)){validateWorkbenchResponse(body,kind,args,actor);throw new WorkbenchReadError(body.error_code,body.retryable,body.reload_required);}
+          if(shape(body,REFUSAL)||Object.hasOwn(body,'job_progress')){validateWorkbenchResponse(body,kind,args,actor);const failure=new WorkbenchReadError(body.error_code,body.retryable,body.reload_required);failure.jobProgress=body.job_progress??null;throw failure;}
           if(exact(body,['ok','error_code','retryable'])&&body.ok===false&&body.retryable===false&&['BPAY_NEXT_ENVIRONMENT_MISMATCH','BPAY_NEXT_OFFICE_FORBIDDEN'].includes(body.error_code))throw new WorkbenchReadError(body.error_code,false);
           throw new WorkbenchReadError(response.status===401?'BPAY_NEXT_WORKBENCH_UNAUTHORIZED':response.status===403?'BPAY_NEXT_WORKBENCH_FORBIDDEN':'BPAY_NEXT_WORKBENCH_UNAVAILABLE',response.status>=500);
         }
@@ -610,6 +653,90 @@ function displayPounds(value){
  const pence=BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0').slice(0,2))+(fraction[2]>='5'?1n:0n);
  return (negative&&pence!==0n?'−':'')+'£'+(pence/100n).toLocaleString('en-GB')+'.'+String(pence%100n).padStart(2,'0');
 }
+const WORK_RETRY_ARGS={request_id:'uuid',candidate_id:'uuid',work_id:'uuid',job_id:'uuid',
+ module_epoch:'positive',expected_owner_epoch:'positive',expected_phase:'phase',expected_cursor:'checkpoint?'};
+const RETRY_REFUSALS=['BPAY_NEXT_WORKBENCH_COMMAND_INPUT_INVALID','BPAY_NEXT_WORKBENCH_COMMAND_REPLAY_CONFLICT',
+ 'BPAY_NEXT_WORKBENCH_COMMAND_EPOCH_STALE','BPAY_NEXT_WORK_JOB_REPAIR_REQUIRED',
+ 'BPAY_NEXT_WORK_JOB_STATE_CHANGED','BPAY_NEXT_WORK_JOB_NOT_DEFINITELY_FAILED',
+ 'BPAY_NEXT_COMMAND_FORBIDDEN','BPAY_NEXT_MODULE_NOT_ACTIVE'];
+function retryField(v,type){return type==='phase'?typeof v==='string'&&ENCODER.encode(v).byteLength>=1&&ENCODER.encode(v).byteLength<=64
+ :type==='checkpoint?'?v===null||typeof v==='string'&&ENCODER.encode(v).byteLength<=512
+ :type==='jobStatus'?['READY','DONE'].includes(v):type==='error?'?v===null||typeof v==='string'&&/^BPAY_NEXT_[A-Z0-9_]{1,240}$/.test(v)
+ :type==='timestamp'?typeof v==='string'&&v.length<=40&&Number.isFinite(Date.parse(v)):field(v,type);}
+function validateWorkbenchCommandReceipt(r,args){
+ const absent={request_id:'uuid',candidate_id:'uuid',work_id:'uuid',job_id:'uuid',received:'boolean',replay:'boolean'};
+ const schema=r?.received===false?absent:{...absent,command_id:'uuid',command_sequence:'positive',module_epoch:'positive',
+  owner_epoch:'positive',status:'jobStatus',phase:'phase',cursor:'checkpoint?',first_recorded_error_code:'error?',
+  last_error_code:'error?',workbench_revision:'integer',adoption_revision:'integer',repaired:'boolean',captured_at_utc:'timestamp'};
+ if(!exact(r,Object.keys(schema))||Object.entries(schema).some(([k,t])=>!retryField(r[k],t))
+  ||['request_id','candidate_id','work_id','job_id'].some(k=>r[k]!==args[k])
+  ||r.received&&(r.module_epoch!==args.module_epoch||r.owner_epoch!==args.expected_owner_epoch
+    ||r.status==='DONE'&&(r.phase!=='DONE'||r.cursor!==null)
+    ||r.status==='READY'&&(!['NEW','REMOVED'].includes(r.phase)||!r.repaired&&(r.phase!==args.expected_phase||r.cursor!==args.expected_cursor)))
+  ||!r.received&&r.replay)throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+ return r;
+}
+
+function createWorkbenchRetryController(options,context,row){
+ const namespace={agency_id:context.agency_id,actor_user_id:context.actor_user_id,owner_epoch:context.owner_epoch};
+ const key='cloudtms.bpay-next.workbench-command.v1.'+JSON.stringify(namespace)+'.'+row.job_id;
+ let storage;try{storage=options.storage??options.window?.localStorage;}catch{}
+ if(!storage)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE');
+ let retained=null,busy=false;
+ const stored=storage.getItem(key);
+ if(stored!==null){try{if(ENCODER.encode(stored).byteLength>4096)throw Error();const saved=JSON.parse(stored);
+  if(!exact(saved,['version','namespace','body'])||saved.version!==1||!same(saved.namespace,namespace))throw Error();
+  const body=JSON.parse(saved.body);if(!exact(body,['action','readback',...Object.keys(WORK_RETRY_ARGS)])||body.action!=='RETRY_WORK_JOB'||body.readback!==false
+   ||Object.entries(WORK_RETRY_ARGS).some(([k,t])=>!retryField(body[k],t))||body.job_id!==row.job_id||body.candidate_id!==row.candidate_id
+   ||body.module_epoch!==context.owner_epoch)throw Error();retained=saved.body;
+ }catch{throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');}}
+ function authority(){if(!options.current()||String(options.currentActorId()||'').toLowerCase()!==namespace.actor_user_id)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');}
+ async function send(body,readback){
+  authority();const original=JSON.parse(body),args=Object.fromEntries(Object.keys(WORK_RETRY_ARGS).map(k=>[k,original[k]]));
+  const controller=new AbortController();let timer;
+  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true));},12000);});
+  try{return await Promise.race([(async()=>{
+   const response=await options.authFetch(options.api('/api/banking/pay/next/workbench-command'),{method:'POST',redirect:'error',auth401Mode:'return',signal:controller.signal,
+    headers:{'content-type':'application/json',accept:'application/json','X-CloudTMS-Banking-Environment':options.environment??'TEST'},
+    body:readback?JSON.stringify({...original,readback:true}):body});
+   if(!(response instanceof Response))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+   const value=await readWorkbenchJson(response,controller.signal,null,16384);authority();
+   if(!response.ok||value?.ok!==true){
+    if(exact(value,['ok','error_code','retryable','outcome_unknown'])&&value.ok===false&&typeof value.retryable==='boolean'&&typeof value.outcome_unknown==='boolean'
+      &&RETRY_REFUSALS.includes(value.error_code)){
+     const e=new WorkbenchReadError(value.error_code,value.retryable);e.definite=!value.outcome_unknown;throw e;}
+    throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true);
+   }
+   if(!exact(value,['ok','action','receipt'])||value.action!=='RETRY_WORK_JOB')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+   return validateWorkbenchCommandReceipt(value.receipt,args);
+  })(),timeout]);}finally{clearTimeout(timer);controller.abort();}
+ }
+ return Object.freeze({pending:()=>retained!==null,busy:()=>busy,async execute(){
+  if(busy)return null;busy=true;let mutationSent=false;
+  try{
+   authority();const hadPending=retained!==null;
+   if(!retained){const request_id=(options.uuid??(()=>options.window.crypto.randomUUID()))();
+    const exactBody=JSON.stringify({action:'RETRY_WORK_JOB',readback:false,request_id,candidate_id:row.candidate_id,work_id:row.work_id,job_id:row.job_id,
+      module_epoch:context.owner_epoch,expected_owner_epoch:row.owner_epoch,expected_phase:row.phase,expected_cursor:row.cursor});
+    storage.setItem(key,JSON.stringify({version:1,namespace,body:exactBody}));retained=exactBody;
+   }
+   let receipt=hadPending?await send(retained,true):null;
+   if(!receipt?.received){mutationSent=true;receipt=await send(retained,false);}
+   if(!receipt.received)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+   storage.removeItem(key);retained=null;return receipt;
+  }catch(e){if(mutationSent&&e?.definite){storage.removeItem(key);retained=null;}throw e;}
+  finally{busy=false;}
+ }});
+}
+function jobErrorCopy(code){
+ if(code===null)return 'Not recorded';
+ if(code==='BPAY_NEXT_POSITION_APPROVED_LINE_COUNT_MISMATCH')return 'The approved payments do not match.';
+ if(code.includes('SOURCE'))return 'This Source payment needs a finance decision.';
+ if(code.includes('BALANCE'))return 'The payment balance needs checking.';
+ return 'The payment details need checking.';
+}
+function displayUpdated(value){return value===null?'':new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/London',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(value)).replace(',','');}
+
 function mountWorkbenchShell(options){
  if(!record(options)||!options.host?.ownerDocument||!field(options.actorId?.toLowerCase(),'uuid')||typeof options.showReadWindow!=='function'||typeof options.ownerReady!=='function'||typeof options.currentActorId!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
  const host=options.host,doc=host.ownerDocument,win=doc.defaultView,client=options.client??createWorkbenchClient(options);
@@ -617,38 +744,84 @@ function mountWorkbenchShell(options){
  const ui=typeof module==='object'&&module.exports?require('./bpay-next-ui.js'):win.CloudTMSBpayNextUi;
  const el=(tag,text,cls)=>{const node=doc.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
  const button=(label,fn)=>{const node=el('button',label,'btn');node.type='button';node.addEventListener('click',fn);return node;};
- let scope={candidate_id:null,client_id:null,channel:'ALL'},labels={candidate:null,client:null},tab='READY',bundle=null,busy=false,error='',closed=false,generation=0,dialog=null,issueAvailability={available:false,context:null};
+ let scope={candidate_id:null,client_id:null,channel:'ALL'},labels={candidate:null,client:null},tab='READY',bundle=null,financialCurrent=false,busy=false,error='',closed=false,generation=0,dialog=null,jobProgress=null,progressBusy=false,updatedAt=null,issueAvailability={available:false,context:null};
  const root=el('section',undefined,'bpay-next-workbench-shell'),tabs=el('div',undefined,'bpay-next-main-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Payments');
  const strip=el('div',undefined,'bpay-next-header-strip'),facts=el('div',undefined,'bpay-next-header-facts'),chips=el('div',undefined,'ma-chips'),actions=el('div',undefined,'bpay-next-header-actions');
  const alert=el('p','', 'ws-notice');alert.setAttribute('role','alert');alert.setAttribute('data-next-live-copy','');const readyHost=el('div'),issueHost=el('div');
- const filters=button('Filters',()=>openFilters()),refresh=button('Refresh',()=>{options.onRefresh?.();void load();}),exportCsv=button('Export CSV',()=>{if(!current()||busy||!bundle)return;try{options.onExport?.();}catch{error='The export could not be opened; refresh and try again.';render();}});actions.append(filters,exportCsv);const refreshFooter=el('div',undefined,'bpay-next-window-actions');refreshFooter.append(refresh);strip.append(facts,chips,actions);root.append(tabs,strip,alert,readyHost,issueHost,refreshFooter);host.append(root);
+ const filters=button('Filters',()=>openFilters()),refresh=button('Refresh',()=>{options.onRefresh?.();void load();}),exportCsv=button('Export CSV',()=>{if(!current()||busy||!bundle)return;try{options.onExport?.();}catch{error='The export could not be opened; refresh and try again.';render();}});actions.append(filters,exportCsv);const refreshFooter=el('div',undefined,'bpay-next-window-actions');refreshFooter.append(refresh);strip.append(facts,chips,actions);const updated=el('p','','bpay-next-updated'),progressHost=el('div',undefined,'bpay-next-work-progress');progressHost.tabIndex=0;progressHost.setAttribute('role','region');progressHost.setAttribute('aria-label','Payments being updated');const skeleton=el('div',undefined,'bpay-next-workbench-skeleton');skeleton.setAttribute('aria-hidden','true');updated.setAttribute('data-next-live-copy','');for(let n=0;n<7;n++){const row=el('span');row.setAttribute('data-next-live-copy','');skeleton.append(row);}const readRetry=button('Try again',()=>{options.onRefresh?.();void load();});
+ root.append(tabs,strip,updated,alert,readRetry,skeleton,progressHost,readyHost,issueHost,refreshFooter);host.append(root);
  const tabButtons={};for(const [key,label] of [['READY','Ready'],['ACTION','Action required'],['BLOCKED','Blocked']]){const b=button(label,()=>setTab(key));b.setAttribute('role','tab');b.id='bpay-next-main-tab-'+key;b.setAttribute('aria-controls','bpay-next-main-panel-'+key);tabButtons[key]=b;tabs.append(b);}
  readyHost.id='bpay-next-main-panel-READY';readyHost.setAttribute('role','tabpanel');readyHost.setAttribute('aria-labelledby',tabButtons.READY.id);
  function actorCurrent(){try{return options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}}
  function current(){return !closed&&(root.isConnected||options.windowAlive?.()===true)&&actorCurrent();}
  function scopeLabel(value=scope,names=labels){return [value.channel==='ALL'?'PAYE + Umbrella':value.channel==='PAYE'?'PAYE only':'Umbrella',names.candidate,names.client].filter(Boolean).join(' · ');}
- function notify(){try{options.onAvailability?.({available:Boolean(bundle&&!busy&&!error&&current()),context:bundle?.READY.context??null});}catch{}}
- function joinIssues(){issueHost.hidden=tab==='READY';}
+ function notify(){try{options.onAvailability?.({available:Boolean(bundle&&financialCurrent&&!busy&&!error&&current()),context:bundle?.READY.context??null,readError:Boolean(error)});}catch{}}
+ function joinIssues(){issueHost.hidden=tab==='READY'||!bundle&&(busy||Boolean(jobProgress?.rows.length));}
  function render(){
-  const available=Boolean(bundle&&!busy&&!error&&current());
+  const available=Boolean(bundle&&financialCurrent&&!busy&&!error&&current());
   facts.classList.toggle('bpay-next-stale',!available);facts.replaceChildren();for(const [name,value] of [['Ready to pay',bundle?displayPounds(bundle.READY.rows[0].amount):'—'],['Candidates',bundle?BigInt(bundle.READY.rows[0].candidate_count).toLocaleString('en-GB'):'—']]){const fact=el('div');const amount=el('strong',value);amount.setAttribute('data-next-formatted-money','');fact.append(el('span',name),amount);facts.append(fact);}
   // The local-exclusion label is supplied by WB12; no selected count is invented.
   if(typeof options.selectionLabel==='function'){const fact=el('div');fact.append(el('span','Selected'),el('strong',options.selectionLabel()));facts.append(fact);}
   chips.replaceChildren(el('span',scope.channel==='ALL'?'PAYE + Umbrella':scope.channel==='PAYE'?'PAYE':'Umbrella','ma-chip'));
   if(scope.channel!=='ALL'||scope.candidate_id!==null||scope.client_id!==null)chips.append(el('span',scopeLabel(),'ma-chip'));
   for(const [key,b] of Object.entries(tabButtons)){const count=available?(key==='READY'?bundle[key].rows[0].candidate_count:bundle[key].rows[0].item_count):null;b.textContent=key==='READY'?'Ready':key==='ACTION'?'Action required':'Blocked';if(count!==null)b.append(el('span',BigInt(count).toLocaleString('en-GB'),'bpay-next-tab-count'));b.setAttribute('aria-selected',String(tab===key));b.tabIndex=tab===key?0:-1;b.disabled=busy;}
-  readyHost.hidden=tab!=='READY';issueHost.hidden=tab==='READY';issueHost.id='bpay-next-main-panel-'+(tab==='READY'?'ACTION':tab);issueHost.setAttribute('role','tabpanel');issueHost.setAttribute('aria-labelledby',tabButtons[tab==='READY'?'ACTION':tab].id);
-  filters.disabled=busy||!current();refresh.disabled=busy||!current();exportCsv.disabled=!available||typeof options.onExport!=='function';alert.hidden=!busy&&!error;alert.textContent=error||(busy?'Loading…':'');root.setAttribute('aria-busy',String(busy));joinIssues();notify();
+  readyHost.hidden=tab!=='READY'||!bundle&&(busy||Boolean(jobProgress?.rows.length));issueHost.hidden=tab==='READY'||!bundle&&(busy||Boolean(jobProgress?.rows.length));issueHost.id='bpay-next-main-panel-'+(tab==='READY'?'ACTION':tab);issueHost.setAttribute('role','tabpanel');issueHost.setAttribute('aria-labelledby',tabButtons[tab==='READY'?'ACTION':tab].id);
+  filters.disabled=busy||!current();refresh.disabled=busy||!current();exportCsv.disabled=!available||typeof options.onExport!=='function';readRetry.hidden=!error;readRetry.disabled=busy;alert.classList.toggle('ws-notice--danger',Boolean(error));alert.hidden=!busy&&!error;alert.textContent=error||(busy&&!bundle?'Loading Banking Pay…':busy?'Refreshing…':'');skeleton.hidden=Boolean(bundle)||!busy;updated.textContent=updatedAt?'Updated '+displayUpdated(updatedAt):'';root.setAttribute('aria-busy',String(busy));renderProgress();joinIssues();notify();
  }
  function setTab(value){if(!current()||busy||!Object.hasOwn(tabButtons,value))return;tab=value;render();options.onTab?.(value);}
+ function renderProgress(){
+  const focus=ui.capture(progressHost,doc),scroll=progressHost.scrollTop;progressHost.replaceChildren();progressHost.hidden=!jobProgress?.rows.length;
+  for(const row of jobProgress?.rows??[]){
+   const card=el('article',undefined,'bpay-next-work-progress-row');card.tabIndex=0;card.dataset.jobId=row.job_id;card.setAttribute('data-next-focus-key','job:'+row.job_id);
+   const name=el('strong',row.candidate_display_name??'Candidate'),label=el('span',row.timesheet_reference??'Timesheet'),state=el('span',row.status==='FAILED'?'Failed':'Processing','candidate-office-badge candidate-office-badge--'+(row.status==='FAILED'?'danger':'neutral'));
+   const open=()=>openJob(row),phone=button('Open',open);phone.className='btn bpay-next-phone-open';phone.setAttribute('data-next-focus-key','job-open:'+row.job_id);
+   card.append(name,label,state,phone);card.addEventListener('click',()=>{for(const n of progressHost.children)n.setAttribute('aria-selected',String(n===card));});
+   card.addEventListener('dblclick',event=>{if(!event.target.closest('button'))open();});card.addEventListener('keydown',event=>{if(event.target===card&&event.key==='Enter'){event.preventDefault();open();}});
+   if(row.status==='FAILED'){const retry=button('Retry',()=>openJob(row,true));retry.disabled=busy||!current()||!row.evidence_available;retry.setAttribute('data-next-focus-key','job-retry:'+row.job_id);card.append(retry);}
+   progressHost.append(card);
+  }
+  if(progressBusy)progressHost.append(el('p','Loading…'));
+  progressHost.scrollTop=scroll;if(focus&&current())ui.restore(progressHost,focus,progressHost);
+ }
+ async function loadProgress(){
+  if(progressBusy||!current()||!jobProgress?.next_cursor)return;const captured=jobProgress,readScope={...scope},ticket=generation;progressBusy=true;renderProgress();
+  try{let result;try{const page=await readPage('HEADER',{...readScope,section:'READY',progress_after:captured.next_cursor,limit:50});result=page.job_progress;}catch(e){if(!e.jobProgress)throw e;result=e.jobProgress;}
+   if(ticket!==generation||!current()||captured!==jobProgress)return;
+   if(!same(captured.context,result.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+   // Bounded retained window; continuous scrolling never builds an agency array.
+   jobProgress={...result,rows:[...captured.rows,...result.rows].slice(-150)};
+  }catch{if(ticket===generation&&current())error='Could not refresh.';}
+  finally{progressBusy=false;if(current())render();}
+ }
+ progressHost.addEventListener('scroll',()=>{if(progressHost.scrollHeight-progressHost.scrollTop-progressHost.clientHeight<100)void loadProgress();});
+ function openJob(row,run=false){
+  if(dialog||!current()||busy)return;const captured=jobProgress.context,entry=child('Payment update'),result=el('p');result.setAttribute('role','status');result.setAttribute('data-next-live-copy','');entry.body.classList.add('bpay-next-job-update');
+  entry.body.append(el('strong',row.candidate_display_name??'Candidate'),el('p',row.timesheet_reference??'Timesheet'),el('p',row.status==='FAILED'?'Failed':'Processing'));
+  if(row.status==='FAILED'){entry.body.append(el('p','First issue: '+jobErrorCopy(row.first_error_code)),el('p','Latest issue: '+jobErrorCopy(row.last_error_code)));
+   if(row.last_error_at_utc)entry.body.append(el('p',displayUpdated(row.last_error_at_utc)));}
+  entry.body.append(result);if(row.status!=='FAILED')return;
+  let controller;try{controller=createWorkbenchRetryController({...options,window:win,current:()=>entry.alive()&&current()},captured,row);}catch{result.textContent='Could not retain the request; try again.';return;}
+  const retry=button(controller.pending()?'Try again':'Retry',async()=>{
+   if(!entry.active()||!current()||controller.busy())return;retry.disabled=true;result.textContent='Retrying…';
+   try{const receipt=await controller.execute();if(!receipt||!current()||!entry.alive())return;
+    result.textContent=receipt.status==='DONE'?'Updated.':'Retry accepted.';retry.hidden=true;
+    // Receipt acceptance remains final even if an affected read is unavailable.
+    try{
+     try{await readPage('CANDIDATE_GROUPS',{...scope,candidate_id:receipt.candidate_id,section:'ALL',limit:10});}catch(e){if(e?.code!=='BPAY_NEXT_WORKBENCH_PROJECTION_NOT_CURRENT')throw e;}
+     await options.onWorkJobAccepted?.(receipt);await load();
+    }catch{if(entry.alive()&&current())result.textContent='Retry accepted; could not refresh.';}
+   }catch{if(entry.alive()&&current()){result.textContent=controller.pending()?'Could not confirm the result; try again.':'Could not retry this payment; refresh and try again.';retry.textContent='Try again';}}
+   finally{if(entry.alive()&&current())retry.disabled=false;}
+  });retry.disabled=!row.evidence_available;entry.footer.append(retry);if(run&&row.evidence_available)win.setTimeout(()=>{if(entry.active())retry.click();},0);
+ }
  async function load(){
   if(!current())return;const ticket=++generation,readScope={...scope};busy=true;error='';render();
   try{
    const channels=readScope.channel==='ALL'?['PAYE','UMBRELLA']:[],sections=['READY','ACTION','BLOCKED'];
    const pages=await Promise.all([...sections.map(section=>readPage('HEADER',{...readScope,section})),...channels.map(channel=>readPage('HEADER',{...readScope,channel,section:'READY'}))]);
    if(ticket!==generation||!current())return;if(pages.some(p=>!sameWorkbenchRevision(pages[0].context,p.context)))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
-   bundle=Object.freeze({READY:pages[0],ACTION:pages[1],BLOCKED:pages[2],channels:Object.freeze(Object.fromEntries(channels.map((k,i)=>[k,pages[i+3]])))});
-  }catch{if(ticket===generation&&current())error='Could not refresh payments; try again.';}
+   bundle=Object.freeze({READY:pages[0],ACTION:pages[1],BLOCKED:pages[2],channels:Object.freeze(Object.fromEntries(channels.map((k,i)=>[k,pages[i+3]])))});financialCurrent=true;jobProgress=pages[0].job_progress??null;updatedAt=new Date().toISOString();
+  }catch(e){if(ticket===generation&&current()){financialCurrent=false;if(e.jobProgress){jobProgress=e.jobProgress;updatedAt=new Date().toISOString();error='';}else error='Could not refresh.';}}
   finally{if(ticket===generation&&current()){busy=false;render();}}
  }
  function child(title,parent){
@@ -724,7 +897,7 @@ function mountWorkbenchShell(options){
  tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const keys=Object.keys(tabButtons),i=keys.indexOf(tab),next=event.key==='Home'?keys[0]:event.key==='End'?keys.at(-1):keys[(i+(event.key==='ArrowRight'?1:2))%3];setTab(next);tabButtons[next].focus();});
  const ownerChanged=()=>{if(!actorCurrent()){generation++;bundle=null;busy=false;dialog?.close();dialog?.close();closed=true;root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
  render();void load();
- return Object.freeze({readyHost,issueHost,client,load,setTab,openFilters,refreshSelectionLabel(){if(current())render();},setIssueAvailability(value){if(!current())return;issueAvailability=value;render();},snapshot:()=>Object.freeze({scope:{...scope},labels:{...labels},tab,available:Boolean(bundle&&!busy&&!error&&current()),context:bundle?.READY.context??null,headers:bundle}),invalidate(){if(!current())return;generation++;bundle=null;busy=false;error='Payments changed; refresh to continue.';render();},close(){closed=true;generation++;dialog?.close();dialog?.close();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}});
+ return Object.freeze({readyHost,issueHost,client,load,setTab,openFilters,refreshSelectionLabel(){if(current())render();},setIssueAvailability(value){if(!current())return;issueAvailability=value;render();},snapshot:()=>Object.freeze({scope:{...scope},labels:{...labels},tab,available:Boolean(bundle&&financialCurrent&&!busy&&!error&&current()),context:bundle?.READY.context??null,readError:Boolean(error),headers:bundle}),invalidate(){if(!current())return;generation++;bundle=null;busy=false;error='Payments changed; refresh to continue.';render();},close(){closed=true;generation++;dialog?.close();dialog?.close();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}});
 }
 
 // WB21: one bounded native choice store per authenticated business namespace.
@@ -782,7 +955,7 @@ function mountReadyCandidates(options){
  function intent(){return choiceStore?.countIntent()??{mode:'ALL',candidate_ids:[]};}
  function selectionLabel(){const v=intent();return v.mode==='ALL'?'All except '+v.candidate_ids.length:v.candidate_ids.length===0?'None':v.candidate_ids.length+' chosen';}
  function notify(){try{options.onAvailability?.({available:Boolean(coherent()),context});}catch{}}
- function choose(row,value){if(!coherent()||row.payable_count==='0')return;const v=intent(),next=new Set(v.candidate_ids);if(value===(v.mode==='ALL'))next.delete(row.candidate_id);else next.add(row.candidate_id);const proposed={mode:v.mode,candidate_ids:[...next]},args=normalizeWorkbenchInput('HEADER',{...scope,section:'READY',count_selection:proposed}),query=new URLSearchParams({kind:'HEADER'});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection'].includes(key)?JSON.stringify(value):String(value));if(!field(proposed,'countSelection')||ENCODER.encode(query.toString()).byteLength>32768){selectionError='Too many choices to count; clear some choices and try again.';render();return;}try{choiceStore.chooseCandidate(row.candidate_id,value);selectionError='';options.onSelection?.(Object.freeze(intent()));}catch{selectionError='Too many choices; clear some choices and try again.';}render();}
+ function choose(row,value){if(!coherent()||row.payable_count==='0')return;const v=intent(),next=new Set(v.candidate_ids);if(value===(v.mode==='ALL'))next.delete(row.candidate_id);else next.add(row.candidate_id);const proposed={mode:v.mode,candidate_ids:[...next]},args=normalizeWorkbenchInput('HEADER',{...scope,section:'READY',count_selection:proposed}),query=new URLSearchParams({kind:'HEADER'});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection','progress_after'].includes(key)?JSON.stringify(value):String(value));if(!field(proposed,'countSelection')||ENCODER.encode(query.toString()).byteLength>32768){selectionError='Too many choices to count; clear some choices and try again.';render();return;}try{choiceStore.chooseCandidate(row.candidate_id,value);selectionError='';options.onSelection?.(Object.freeze(intent()));}catch{selectionError='Too many choices; clear some choices and try again.';}render();}
  function open(row){if(!coherent())return;Promise.resolve(options.openCandidate(Object.freeze({candidate_id:row.candidate_id,candidate_name:row.candidate_sort_name,candidate_reference:row.tms_ref,context,scope:{...scope}}))).catch(()=>{if(current()){error='Could not open this Candidate; try again.';render();}});}
  function pageHeight(page){const ids=new Set(page.rows.map(row=>row.candidate_id));return Array.from(scroller.querySelectorAll('tr[data-candidate-id]')).filter(n=>ids.has(n.dataset.candidateId)).reduce((sum,n)=>sum+n.getBoundingClientRect().height,0);}
  function render(){
@@ -802,18 +975,19 @@ function mountReadyCandidates(options){
    const focusRow=()=>{if(!available)return;highlight=id;for(const n of tbody.children)n.setAttribute('aria-selected',String(n===tr));tr.focus({preventScroll:true});};tr.addEventListener('click',event=>{if(!event.target.closest('button,input'))focusRow();});tr.addEventListener('dblclick',event=>{if(!event.target.closest('button,input'))open(row);});
    tr.addEventListener('keydown',event=>{if(event.target!==tr||!available)return;if(event.key==='Enter'){event.preventDefault();open(row);}else if(event.key===' '){event.preventDefault();choose(row,!selected(id));}else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const nodes=Array.from(tbody.children),i=nodes.indexOf(tr),at=event.key==='Home'?0:event.key==='End'?nodes.length-1:Math.max(0,Math.min(nodes.length-1,i+(event.key==='ArrowDown'?1:-1)));nodes[at]?.focus();}});tbody.append(tr);
   }
-  table.append(thead,tbody);table.hidden=Boolean(context&&(!joined.available||!sameWorkbenchRevision(context,joined.context)));scroller.replaceChildren(table);scroller.classList.toggle('bpay-next-stale',!available);select.value=sort;select.disabled=busy||!current();
+  table.append(thead,tbody);table.hidden=false;scroller.replaceChildren(table);scroller.classList.toggle('bpay-next-stale',!available);select.value=sort;select.disabled=busy||!current();
   if(available&&!pages.some(p=>p.rows.length))scroller.append(el('p','No payments are ready.','bpay-next-ready-empty'));
-  status.setAttribute('role',error||selectionError?'alert':'status');status.textContent=error||selectionError||(busy?(pending.direction==='reset'?'Loading…':'Loading more…'):context&&!available?'Payments changed; refresh to continue.':'');retry.hidden=!error;retry.textContent=reloadRequired?'Refresh':'Try again';
+  status.setAttribute('role',error||selectionError?'alert':'status');status.textContent=error||selectionError||(busy?(pending.direction==='reset'?'Loading…':'Loading more…'):context&&!available?'Payments changed; refresh to continue.':'');status.hidden=Boolean(error&&joined.readError);retry.hidden=!error||Boolean(joined.readError);retry.textContent=reloadRequired?'Refresh':'Try again';
   foot.textContent=available?BigInt(header.candidate_count).toLocaleString('en-GB')+' Candidates · '+BigInt(header.selectable_member_count).toLocaleString('en-GB')+' payment items · Sorted by '+(sort.startsWith('NAME')?'Candidate':sort.startsWith('AMOUNT')?'amount':sort.startsWith('DEDUCTIONS')?'deductions':'status')+(sort.endsWith('ASC')?', ascending':', descending'):'';
   root.setAttribute('aria-busy',String(busy));if(focus&&current()&&root.isConnected)ui.restore(root,focus,scroller);notify();
  }
  async function read(direction,after){
+  let refreshRestarted=false;
   if(busy||!current())return;const ticket=++generation,readScope={...scope},readSort=sort,scroll=scroller.scrollTop;let adjustment=0;busy=true;error='';reloadRequired=false;pending={direction,after};render();
-  try{const page=await client.loadWorkbenchPage('CANDIDATES',{...readScope,sort:readSort,after,limit:100});if(ticket!==generation||!current())return;validateWorkbenchResponse(page,'CANDIDATES',normalizeWorkbenchInput('CANDIDATES',{...readScope,sort:readSort,after,limit:100}),options.actorId.toLowerCase());
+  try{let page;try{page=await client.loadWorkbenchPage('CANDIDATES',{...readScope,sort:readSort,after,limit:100});}catch(e){if(direction!=='refresh'||after===null||e?.code!=='BPAY_NEXT_WORKBENCH_CURSOR_STALE')throw e;refreshRestarted=true;after=null;page=await client.loadWorkbenchPage('CANDIDATES',{...readScope,sort:readSort,after,limit:100});}if(ticket!==generation||!current())return;validateWorkbenchResponse(page,'CANDIDATES',normalizeWorkbenchInput('CANDIDATES',{...readScope,sort:readSort,after,limit:100}),options.actorId.toLowerCase());
    const summary=await client.loadWorkbenchPage('HEADER',{...readScope,section:'READY'});if(ticket!==generation||!current())return;validateWorkbenchResponse(summary,'HEADER',normalizeWorkbenchInput('HEADER',{...readScope,section:'READY'}),options.actorId.toLowerCase());
-   if(!sameWorkbenchRevision(page.context,summary.context)||context&&!sameWorkbenchRevision(context,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
-   context=page.context;header=summary.rows[0];const restored=createChoiceStore({context,window:win,storage:options.choiceStorage});if(choiceStore?.key!==restored.key){choiceStore=restored;options.onChoiceStore?.(choiceStore);options.onSelection?.(Object.freeze(intent()));}const block={after,next:page.next_cursor,rows:page.rows};if(direction==='reset'){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();adjustment=page.rows.length;}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
+   const revisionChanged=context&&!sameWorkbenchRevision(context,page.context);if(!sameWorkbenchRevision(page.context,summary.context)||direction!=='refresh'&&revisionChanged)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+   context=page.context;header=summary.rows[0];const restored=createChoiceStore({context,window:win,storage:options.choiceStorage});if(choiceStore?.key!==restored.key){choiceStore=restored;options.onChoiceStore?.(choiceStore);options.onSelection?.(Object.freeze(intent()));}const block={after,next:page.next_cursor,rows:page.rows};if(direction==='refresh'){if(revisionChanged||refreshRestarted){pages=[block];history=[];}else if(pages.length)pages[0]=block;else pages=[block];}else if(direction==='reset'){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();adjustment=page.rows.length;}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
   }catch(e){if(ticket===generation&&current()){reloadRequired=e?.reloadRequired===true||e?.reload===true;error=reloadRequired?'Payments changed; refresh to continue.':'Could not load payments; try again.';}}
   finally{if(ticket===generation&&current()){busy=false;render();if(!error){if(direction==='back')adjustment=pageHeight(pages[0]);scroller.scrollTop=direction==='reset'?0:Math.max(0,scroll+adjustment);}}}
  }
@@ -822,7 +996,7 @@ function mountReadyCandidates(options){
  select.addEventListener('change',()=>setSort(select.value));scroller.addEventListener('scroll',()=>{if(busy||error||!coherent())return;if(scroller.scrollTop<40&&history.length){const key=history.at(-1);void read('back',key===null?null:{context,key});}else if(pages.at(-1)?.next&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<120)void read('forward',pages.at(-1).next);});
  const ownerChanged=()=>{if(!actorCurrent()){closed=true;generation++;pages=[];root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
  render();void read('reset',null);
- return Object.freeze({selectionLabel,snapshot:()=>Object.freeze({scope:{...scope},sort,context,available:Boolean(coherent()),intent:Object.freeze(intent())}),joinHeader(value){if(!current())return;joined=value;render();},reload(){if(current())reset();},setScope(value){if(!current()||!exact(value,['candidate_id','client_id','channel'])||!field(value.candidate_id,'uuid?')||!field(value.client_id,'uuid?')||!field(value.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');scope={...value};choiceStore=null;reset();},
+ return Object.freeze({selectionLabel,snapshot:()=>Object.freeze({scope:{...scope},sort,context,available:Boolean(coherent()),intent:Object.freeze(intent())}),joinHeader(value){if(!current())return;joined=value;render();},refresh(){if(current()&&!busy)return read('refresh',pages[0]?.after??null);},reload(){if(current())reset();},setScope(value){if(!current()||!exact(value,['candidate_id','client_id','channel'])||!field(value.candidate_id,'uuid?')||!field(value.client_id,'uuid?')||!field(value.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');scope={...value};choiceStore=null;reset();},
   async countSelection(){if(!coherent())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);const store=choiceStore,revision=store.snapshot().revision,captured=context,args={...scope,section:'READY',count_selection:intent()};const page=await client.loadWorkbenchPage('HEADER',args);if(!current()||store!==choiceStore||revision!==store.snapshot().revision||!sameWorkbenchRevision(captured,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);validateWorkbenchResponse(page,'HEADER',normalizeWorkbenchInput('HEADER',args),options.actorId.toLowerCase());return Object.freeze({context:page.context,candidate_count:page.rows[0].selected_candidate_count,member_count:page.rows[0].selected_member_count});},
   choiceStore:()=>choiceStore,close(){closed=true;generation++;pages=[];win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}
  });
@@ -868,19 +1042,20 @@ function mountIssueView(options){
   }
   table.append(thead,tbody);table.hidden=pages.length===0&&!usable;scroller.classList.toggle('bpay-next-stale',!usable);scroller.replaceChildren(table);
   if(usable&&!pages.some(p=>p.rows.length))scroller.append(el('p',detail?'No payments need attention here.':kind==='BLOCKED'?'No payments are blocked.':'No payments need a decision.'));
-  select.value=sort;select.disabled=input.disabled=submit.disabled=busy||!current();status.setAttribute('role',error?'alert':'status');status.textContent=error||(busy?(pending.direction==='reset'?'Loading…':'Loading more…'):context&&!usable?'Payments changed; refresh to continue.':'');retry.hidden=!error;retry.textContent=reloadRequired?'Refresh':'Try again';
+  select.value=sort;select.disabled=input.disabled=submit.disabled=busy||!current();status.setAttribute('role',error?'alert':'status');status.textContent=error||(busy?(pending.direction==='reset'?'Loading…':'Loading more…'):context&&!usable?'Payments changed; refresh to continue.':'');status.hidden=Boolean(error&&options.parentReadError?.());retry.hidden=!error||options.parentReadError?.()===true;retry.textContent=reloadRequired?'Refresh':'Try again';
   count.textContent=affected!==null&&detail?BigInt(affected).toLocaleString('en-GB')+(affected==='1'?' Candidate affected':' Candidates affected'):'';
   const sortLabel=columns().find(([key])=>sort.startsWith(key+'_'))?.[1]??'Candidate';foot.textContent=(pages.length>0||context)&&(detail||headers)?(detail?count.textContent:BigInt(headers[kind].item_count).toLocaleString('en-GB')+(headers[kind].item_count==='1'?' payment':' payments')+(search?' before search':''))+' · Sorted by '+sortLabel+(sort.endsWith('ASC')?', ascending':', descending'):'';
   root.setAttribute('aria-busy',String(busy));if(focus&&current()&&root.isConnected)ui.restore(root,focus,scroller);notify();
  }
  async function read(direction,after){
+  let refreshRestarted=false;
   if(busy||!current())return;const ticket=++generation,readKind=kind,request=args(after),scroll=scroller.scrollTop;let adjustment=0;busy=true;error='';reloadRequired=false;pending={direction,after};render();
   try{
-   const page=await client.loadWorkbenchPage(readKind,request);if(ticket!==generation||!current())return;validateWorkbenchResponse(page,readKind,normalizeWorkbenchInput(readKind,request),options.actorId.toLowerCase());
+   let page;try{page=await client.loadWorkbenchPage(readKind,request);}catch(e){if(direction!=='refresh'||request.after===null||e?.code!=='BPAY_NEXT_WORKBENCH_CURSOR_STALE')throw e;refreshRestarted=true;after=null;request.after=null;page=await client.loadWorkbenchPage(readKind,request);}if(ticket!==generation||!current())return;validateWorkbenchResponse(page,readKind,normalizeWorkbenchInput(readKind,request),options.actorId.toLowerCase());
    let readHeaders=null;if(!detail){const responses=await Promise.all(['ACTION','BLOCKED'].map(section=>client.loadWorkbenchPage('HEADER',{...scope,section})));if(ticket!==generation||!current())return;for(let i=0;i<responses.length;i++)validateWorkbenchResponse(responses[i],'HEADER',normalizeWorkbenchInput('HEADER',{...scope,section:i===0?'ACTION':'BLOCKED'}),options.actorId.toLowerCase());if(responses.some(p=>!sameWorkbenchRevision(page.context,p.context)))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);readHeaders={ACTION_REQUIRED:responses[0].rows[0],BLOCKED:responses[1].rows[0]};}
-   if(context&&!sameWorkbenchRevision(context,page.context)||options.parentContext?.()&&!sameWorkbenchRevision(page.context,options.parentContext())||options.expectedRevision!==undefined&&page.workbench_revision!==options.expectedRevision)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+   const revisionChanged=context&&!sameWorkbenchRevision(context,page.context);if(direction!=='refresh'&&revisionChanged||options.parentContext?.()&&!sameWorkbenchRevision(page.context,options.parentContext())||options.expectedRevision!==undefined&&page.workbench_revision!==options.expectedRevision)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
    context=page.context;headers=readHeaders;affected=page.affected_candidate_count;
-   const block={after,next:page.next_cursor,rows:page.rows};if(direction==='reset'){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
+   const block={after,next:page.next_cursor,rows:page.rows};if(direction==='refresh'){if(revisionChanged||refreshRestarted){pages=[block];history=[];}else if(pages.length)pages[0]=block;else pages=[block];}else if(direction==='reset'){pages=[block];history=[];}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();}else{if(pages.length===3){adjustment=-pageHeight(pages[0]);history.push(pages[0].after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
   }catch(e){if(ticket===generation&&current()){reloadRequired=e?.reloadRequired===true||e?.reload===true;error=reloadRequired?'Payments changed; refresh to continue.':'Could not load payments; try again.';}}
   finally{if(ticket===generation&&current()){busy=false;render();if(!error){if(direction==='back')adjustment=pageHeight(pages[0]);scroller.scrollTop=direction==='reset'?0:Math.max(0,scroll+adjustment);}}}
  }
@@ -889,7 +1064,7 @@ function mountIssueView(options){
  form.addEventListener('submit',event=>{event.preventDefault();if(!busy&&current()){search=input.value.trim();reset(true);}});select.addEventListener('change',()=>setSort(select.value));
  scroller.addEventListener('scroll',()=>{if(busy||error||!available())return;if(scroller.scrollTop<40&&history.length){const key=history.at(-1);void read('back',key===null?null:{context,key});}else if(pages.at(-1)?.next&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<120)void read('forward',pages.at(-1).next);});
  const ownerChanged=()=>{if(!current()){closed=true;generation++;root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);render();void read('reset',null);
- return Object.freeze({reload(){if(current())reset();},setKind(value){if(!current()||detail||!['ACTION_REQUIRED','BLOCKED'].includes(value))return;if(value===kind)return;kind=value;section=value==='BLOCKED'?'BLOCKED':'ACTION';sorts();reset(true);},setScope(value){if(!current()||!exact(value,['candidate_id','client_id','channel'])||!field(value.candidate_id,'uuid?')||!field(value.client_id,'uuid?')||!field(value.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');scope={...value};reset(true);},adoptAffected(receipt){if(!field(receipt?.workbench_revision,'integer'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');options.expectedRevision=receipt.workbench_revision;if(current())reset();},invalidate(){if(current()){generation++;busy=false;error='Payments changed; refresh to continue.';render();}},close(){closed=true;generation++;pages=[];win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();},snapshot:()=>Object.freeze({kind,search,sort,scope:{...scope},context,available:available()})});
+ return Object.freeze({refresh(){if(current()&&!busy)return read('refresh',pages[0]?.after??null);},reload(){if(current())reset();},setKind(value){if(!current()||detail||!['ACTION_REQUIRED','BLOCKED'].includes(value))return;if(value===kind)return;kind=value;section=value==='BLOCKED'?'BLOCKED':'ACTION';sorts();reset(true);},setScope(value){if(!current()||!exact(value,['candidate_id','client_id','channel'])||!field(value.candidate_id,'uuid?')||!field(value.client_id,'uuid?')||!field(value.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');scope={...value};reset(true);},adoptAffected(receipt){if(!field(receipt?.workbench_revision,'integer'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');options.expectedRevision=receipt.workbench_revision;if(current())reset();},invalidate(){if(current()){generation++;busy=false;error='Payments changed; refresh to continue.';render();}},close(){closed=true;generation++;pages=[];win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();},snapshot:()=>Object.freeze({kind,search,sort,scope:{...scope},context,available:available()})});
 }
 function issuePayment(row){
  if(row.case_id)return row.direction==='DEDUCTION'?'Deduction':'Payment addition';
@@ -1137,7 +1312,7 @@ scroller.classList.toggle('bpay-next-stale',!available);if(available&&!pages.som
  scroller.addEventListener('scroll',()=>{const top=scroller.scrollTop,up=top<lastScroll;lastScroll=top;if(!interactive()||error)return;if(top<40&&history.length){const key=history.at(-1);void read('back',key===null?null:{context,key},null);}else if(up&&restartEarlier())return;else if(pages.at(-1)?.next&&scroller.scrollHeight-top-scroller.clientHeight<120)void read('forward',pages.at(-1).next,null);});
  const ownerChanged=()=>{if(!current()){generation++;busy=false;error='Sign in again to continue.';render();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
  frame=options.showReadWindow({title:'Candidate Banking',content:root,footer,canFocus:()=>current(),onMount:()=>{if(current())doc.getElementById('modalTitle')?.append(identity);},onDismiss:()=>{closed=true;generation++;clearDetails();pages=[];win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);win.setTimeout(()=>{if(options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase()&&previous?.isConnected)previous.focus({preventScroll:true});},0);}});render();void read('reset',null,null);
- return Object.freeze({close:()=>frame.close(),alive:()=>frame.alive(),refresh:()=>current()&&!busy&&read('refresh',null,captureAnchor()),snapshot:()=>Object.freeze({context,section,sort,available:Boolean(usable()),choiceKey:store.key}),setOpenGroup:fn=>{if(typeof fn!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');options.openGroup=fn;if(current())render();}});
+ return Object.freeze({close:()=>frame.close(),alive:()=>frame.alive(),refresh:()=>current()&&!busy&&read('refresh',null,captureAnchor()),snapshot:()=>Object.freeze({candidate_id:address.candidate_id,context,section,sort,available:Boolean(usable()),choiceKey:store.key}),setOpenGroup:fn=>{if(typeof fn!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');options.openGroup=fn;if(current())render();}});
 }
 
 function openIssueWindow(options,issue){
@@ -1151,6 +1326,6 @@ function openIssueWindow(options,issue){
 }
 
 
-return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,openCandidateWindow,mountPaymentDetail,issueReason,issueAmounts,createChoiceStore,openWorkbenchExport});
+return Object.freeze({createWorkbenchRetryController,validateWorkbenchCommandReceipt,createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountReadyCandidates,mountIssueLists,openIssueWindow,openCandidateWindow,mountPaymentDetail,issueReason,issueAmounts,createChoiceStore,openWorkbenchExport});
 
 });
