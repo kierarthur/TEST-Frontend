@@ -421,6 +421,7 @@ function field(v,type){
   function createController(options) {
     if (!field(options?.actorId, 'uuid') || typeof options.uuid !== 'function' || !options.storage || !options.transport) fail('DEPENDENCY_UNAVAILABLE');
     const key = 'cloudtms.bpay-next.v1.' + options.actorId.toLowerCase();
+    const debug = {workbenchReads:[]};
     const caseDefaults = { case_pages: '0', case_items: '0', case_selected_count: '0', case_excluded_count: '0', case_sealed: false, case_cursor: null, case_id: null, component_cursor: null, accepted_page_component_ids: [], accepted_page_component_selected: [] };
     const ids = rows => Array.isArray(rows) && rows.length <= 100 && rows.every(x => field(x,'uuid')) && new Set(rows.map(x=>x.toLowerCase())).size === rows.length;
     const validCases = value => ['case_pages','case_items','case_selected_count','case_excluded_count'].every(k=>integer(value[k])) && BigInt(value.case_items) === BigInt(value.case_selected_count) + BigInt(value.case_excluded_count) && (value.case_pages==='0') === (value.case_items==='0') && typeof value.case_sealed === 'boolean' && (!value.case_sealed || positive(value.case_pages)) && (value.case_cursor === null || shape(value.case_cursor,{after_case_id:'uuid'})) && (value.case_id === null || field(value.case_id,'uuid')) && (value.component_cursor === null || shape(value.component_cursor,{after_component_ordinal:'positive'})) && ids(value.accepted_page_component_ids) && Array.isArray(value.accepted_page_component_selected) && value.accepted_page_component_selected.length === value.accepted_page_component_ids.length && value.accepted_page_component_selected.every(v=>typeof v==='boolean') && (value.case_id !== null || (value.component_cursor === null && value.accepted_page_component_ids.length === 0));
@@ -483,7 +484,7 @@ function field(v,type){
         throw e;
       } finally { busy = false; notify(); }
     }
-    return Object.freeze({ snapshot,
+    return Object.freeze({ snapshot, debug,
       async mutate(action, args) { if (busy || state.pending !== null) fail('OUTCOME_UNKNOWN'); const bytes = requestBody(action, args);
         if(action==='CANCEL_REQUEST'&&Object.hasOwn(args,'run_id')&&(!same(args.run_id,state.run_id)||args.pay_channel!==state.pay_channel||!same(args.run_worker_id,state.worker_id)))fail('REQUEST_INVALID');
         if(['CASE_PAGE','CASE_SEAL'].includes(action)&&(!same(args.run_id,state.run_id)||!same(args.candidate_id,state.candidate_id)||args.selection_revision!=='1'||state.case_sealed))fail('REQUEST_INVALID');
@@ -557,7 +558,7 @@ function field(v,type){
     async function loadCapabilities(){capabilities=null;capabilityError='';try{capabilities=await transport.capabilities();
       if(capabilities.environment_ready&&!issueLists){
         if(!win.CloudTMSBpayNextWorkbench||typeof options.openWorkbenchIssue!=='function')throw new Failure('SCHEMA_UNAVAILABLE');
-        issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:issueHost,
+        issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:issueHost,debug:controller.debug,
           openIssue:options.openWorkbenchIssue,onAvailability:value=>{issueReadAvailable=value.available;if(host.isConnected)render();}});
       }
     }catch{capabilityError='Banking capabilities are unavailable. Re-check before continuing.';issueReadAvailable=false;}}
