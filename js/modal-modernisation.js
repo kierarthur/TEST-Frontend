@@ -347,6 +347,7 @@
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     textNodes.forEach((node) => {
       const parent = node.parentElement;
+      if (parent?.closest('[data-next-formatted-money]')) return;
       if (!parent || parent.closest('input,textarea,select,option,script,style,code,pre,[contenteditable="true"]')) return;
       const original = node.nodeValue || '';
       let value = original.replace(/£\s*(-?\d[\d,]*(?:\.\d+)?)/g, (_match, amount) => `£${formatNumber(amount)}`);
@@ -1263,6 +1264,7 @@
     }
 
     copyRoot.querySelectorAll('.mini:empty,.hint:empty,p:empty,span:empty').forEach((node) => {
+      if (node.hasAttribute('data-next-live-copy')) return;
       if (!node.querySelector('input,select,textarea,button,a')) node.remove();
     });
     hideUserFacingInternalIds(copyRoot);
@@ -1367,6 +1369,7 @@
     if (!backdrop.classList.contains('ctms-modern-backdrop')) backdrop.classList.add('ctms-modern-backdrop');
     enhanceUniversalModal(modal, body, kind, title, universalFamily);
     const hasSpecialisedLayout = !!utilityFamily || !!workflowFamily ||
+      kind === 'bpay-next-read' ||
       ['candidates', 'clients', 'contracts', 'umbrellas', 'settings'].includes(entity) ||
       kind === 'advanced-search' || kind === 'contracts' || !!body.querySelector('.irv1-shell');
     modal.classList.toggle('ctms-generic-modal', !hasSpecialisedLayout);

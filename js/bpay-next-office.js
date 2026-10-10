@@ -540,26 +540,31 @@ function field(v,type){
   function open(options) {
     if (typeof options.ownerReady !== 'function' || options.ownerReady() !== true) fail('OWNER_UNAVAILABLE');
     requireActor(options);
+    if(typeof options.showReadWindow!=='function')fail('DEPENDENCY_UNAVAILABLE');
     if (sheet) { sheet.focus(); return sheet; }
     const doc = options.document || document; const win = options.window || window;
     const transport = createTransport(options); let controller, drafts = null, current = null, cases = null, components = null, workers = null, status = null, returnedCash = null, lines = null, comparisons = null, frozenLine = null, shifts = null, breaks = null, usedRates = null, frozenWork = null, rateSchedule = null;
     let selection = new Map(), caseSelection = new Map(), renderEpoch = 0, readBusy = false, capabilities = null, capabilityError = '', error = '', progressTimer, workersCursor=null, statusCursor=null, statusScope=null, reviewObserved=false, preparationPending=false;
-    const host = doc.createElement('section'); host.className = 'bpay-next-office'; host.setAttribute('role','dialog'); host.setAttribute('aria-modal','true'); host.setAttribute('aria-label','Banking Pay NEXT'); host.tabIndex = -1;
+    const host = doc.createElement('section'); host.className = 'bpay-next-office-content'; host.tabIndex = -1;
     const previousFocus = doc.activeElement;
     const el = (tag, text, className) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; };
     const button = (text, action, disabled = false, direct = false, focusKey = text) => { const b = el('button',text); b.setAttribute('data-next-focus-key','action:'+focusKey); b.type='button'; b.disabled=disabled; b.addEventListener('click', () => { if(direct)action();else void act(action); }); return b; };
     const input = (label, type, value) => { const wrap = el('label', label); const n = el('input'); n.type=type; n.setAttribute('data-next-focus-key','input:'+label); n.value=value || ''; wrap.append(n); return [wrap,n]; };
-    let dateInput, netInput, resumeInput,issueLists=null,issueReadAvailable=false;
+    let netInput, resumeInput,workbenchShell=null,issueLists=null,issueReadAvailable=false,readWindow=null,closed=false,started=false;
     const issueHost=el('div');
-    const close = () => { if(!host.isConnected)return;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);issueLists?.close();host.remove();sheet=null;if(previousFocus?.isConnected)previousFocus.focus(); };
-    const focus=ui.continuity(host,doc,()=>host.querySelector('header button'));
-    host.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();}else ui.trap(event,host,doc);});
+    const dismiss = () => { if(closed)return;closed=true;renderEpoch += 1;win.clearTimeout(progressTimer);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);doc.removeEventListener('visibilitychange',render);issueLists?.close();workbenchShell?.close();host.remove();sheet=null;if(previousFocus?.isConnected&&same(options.currentActorId(),options.actorId))previousFocus.focus(); };
+    const close = () => {workbenchShell?.close();readWindow?.close();dismiss();};
+    const focus=ui.continuity(host,doc,()=>host.querySelector('button'));
     async function act(action) { if (readBusy) return; error=''; readBusy=true; render(); try { await action(); } catch(e) { if(e?.serverCode==='BPAY_NEXT_ENVIRONMENT_MISMATCH'){capabilities=null;capabilityError='Banking environment is unavailable or mismatched. Re-check before continuing.';} error=controller?.snapshot().pending ? 'The result is not known. Payment controls are paused. Retry this exact request; do not start a replacement.' : refusalCopy(e) || 'This action could not be completed. Refresh or sign in again.'; } finally { readBusy=false; render(); } }
     async function loadCapabilities(){capabilities=null;capabilityError='';try{capabilities=await transport.capabilities();
       if(capabilities.environment_ready&&!issueLists){
         if(!win.CloudTMSBpayNextWorkbench||typeof options.openWorkbenchIssue!=='function')throw new Failure('SCHEMA_UNAVAILABLE');
-        issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:issueHost,debug:controller.debug,
-          openIssue:options.openWorkbenchIssue,onAvailability:value=>{issueReadAvailable=value.available;if(host.isConnected)render();}});
+        workbenchShell=win.CloudTMSBpayNextWorkbench.mountWorkbenchShell({...options,host:issueHost,debug:controller.debug,
+          windowAlive:()=>readWindow?.alive()===true,onRefresh:()=>issueLists?.reload(),
+          onAvailability:value=>{const issues=issueLists?.snapshot();issueReadAvailable=value.available&&Boolean(issues?.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,issues.context));},
+          onScope:scope=>issueLists?.setScope(scope),onTab:tab=>{if(tab!=='READY')issueLists?.setKind(tab==='ACTION'?'ACTION_REQUIRED':'BLOCKED');}});
+        issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:workbenchShell.issueHost,windowAlive:()=>readWindow?.alive()===true,client:workbenchShell.client,externalTabs:true,debug:controller.debug,
+          openIssue:options.openWorkbenchIssue,onAvailability:value=>{workbenchShell.setIssueAvailability(value);const header=workbenchShell.snapshot();issueReadAvailable=value.available&&header.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,header.context);if(host.isConnected)render();}});
       }
     }catch{capabilityError='Banking capabilities are unavailable. Re-check before continuing.';issueReadAvailable=false;}}
     function refusalCopy(e){
@@ -593,9 +598,14 @@ function field(v,type){
       const focusToken=focus.before();
       win.clearTimeout(progressTimer);
       const s=controller.snapshot(),locked=!capabilities?.environment_ready||readBusy||s.busy||s.pending!==null||(!s.selection_sealed&&!issueReadAvailable)||(typeof options.ownerReady==='function'&&options.ownerReady()!==true);
-      const header=el('header');header.append(el('h2','Banking Pay NEXT'),button('Close',close,false,true));
+      const header=el('header');header.append(el('h2','Banking Pay'),button('Close',close,false,true));
       const body=el('div',undefined,'bpay-next-body');
-      if(!s.selection_sealed)body.append(issueHost);
+      if(!s.selection_sealed){
+        body.append(issueHost);
+        if(!capabilities?.environment_ready){const notice=el('p','Payments are unavailable; try again.','bpay-next-alert');notice.setAttribute('role','alert');body.append(notice,button('Try again',loadCapabilities,readBusy||s.busy));}
+        if(typeof options.ownerReady==='function'&&options.ownerReady()!==true)body.append(el('p','Banking Pay is paused.','bpay-next-alert'));
+        host.replaceChildren(body);focus.after(focusToken);return;
+      }
       if(capabilities?.test_mode)body.append(el('p','TEST MODE — no bank, provider or email action.','bpay-next-alert'));
       if(capabilityError||!capabilities?.environment_ready){const banner=el('p',capabilityError||'Payments are blocked because the Banking environment is unavailable or does not match this screen.','bpay-next-alert');banner.setAttribute('role','alert');body.append(banner);}
       else body.append(el('p','Banking environment: '+capabilities.worker_environment+'.'));
@@ -608,9 +618,8 @@ function field(v,type){
       body.append(el('p',readBusy||s.busy?'Waiting for server…':'Server-owned amounts; no payment totals calculated here.'));
       if(!s.selection_sealed&&!s.worker_id){body.append(button('Choose Candidate',chooseCandidate,locked||(s.case_pages!=='0'&&!s.case_sealed),true));if(s.case_pages!=='0'&&!s.case_sealed)body.append(el('p','Seal this Candidate’s Case selection before choosing another Candidate.'));}
       if(!s.run_id){
-        const [d,n]=input('Pay date','date',dateInput?.value||new Date().toISOString().slice(0,10));dateInput=n;body.append(d);
         if(s.candidate_id)body.append(el('p','Candidate selected. Approval facts below do not guarantee payment eligibility.'));
-        body.append(button('Start selection',async()=>{const run=controller.newId();await controller.mutate('CREATE',{run_id:run,pay_date:dateInput.value});},locked||!s.candidate_id));
+        body.append(button('Start selection',async()=>{const run=controller.newId();await controller.mutate('CREATE',{run_id:run});},locked||!s.candidate_id));
         // Resume explicitly reviews the existing run; no new preparation identity.
         const [r,ri]=input('Resume run ID','text',resumeInput?.value||'');resumeInput=ri;body.append(r,el('p','Resume asks the server to Review this same sealed preparation; it does not create or prepare a replacement.'),button('Resume',async()=>{await applyReview(await controller.mutate('REVIEW',{run_id:resumeInput.value}));},locked),button('Open confirmed channel Drafts',async()=>{controller.bind({run_id:resumeInput.value});await loadDrafts();workers=null;},locked));
       }else{body.append(el('p','Run '+s.run_id),button('Refresh progress',refresh,locked));}
@@ -681,8 +690,10 @@ function field(v,type){
     controller=createController({actorId:options.actorId,storage:options.storage||win.sessionStorage,uuid:options.uuid||(()=>win.crypto.randomUUID()),transport,onChange:render});
     win.addEventListener('cloudtms:bpay-next-owner-changed',render);
     doc.addEventListener('visibilitychange',render);
-    doc.body.append(host);sheet=Object.freeze({focus:()=>host.focus(),close,controller});render();host.focus();
-    void act(async()=>{await loadCapabilities();if(capabilities?.environment_ready&&controller.snapshot().run_id)await refresh();});
+    sheet=Object.freeze({focus:()=>readWindow?.focus(),close,controller});
+    readWindow=options.showReadWindow({title:'Banking Pay',content:host,canFocus:()=>same(options.currentActorId(),options.actorId)&&options.ownerReady()===true,onDismiss:dismiss,onMount:()=>{
+      render();if(!started){started=true;void act(async()=>{await loadCapabilities();if(capabilities?.environment_ready&&controller.snapshot().run_id)await refresh();});}
+    }});
     return sheet;
   }
   async function printAdvice(options,instructionId,win) {

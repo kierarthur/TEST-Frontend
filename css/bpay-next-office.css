@@ -5,14 +5,6 @@
   --next-focus:#f7cf53;--next-alert:#382c17;--next-alert-text:#ffecbe;--next-alert-line:#efb44e;
   --next-scheme:dark;color-scheme:var(--next-scheme);
 }
-@media (prefers-color-scheme:light) {
-  .bpay-next-office,#modal.ctms-kind-banking-pay-history {
-    --next-bg:#fff;--next-text:#172033;--next-line:#64748b;--next-raised:#eef1f8;
-    --next-input:#fff;--next-button:#5137a1;--next-button-text:#fff;--next-button-line:#5137a1;
-    --next-focus:#8a4300;--next-alert:#fff3d3;--next-alert-text:#513400;--next-alert-line:#956200;
-    --next-scheme:light;color-scheme:var(--next-scheme);
-  }
-}
 .bpay-next-office {
   --next-gap:12px;position:fixed;inset:max(var(--next-gap),env(safe-area-inset-top)) max(var(--next-gap),env(safe-area-inset-right)) max(var(--next-gap),env(safe-area-inset-bottom)) max(var(--next-gap),env(safe-area-inset-left));
   z-index:100100;color:var(--next-text);background:var(--next-bg);border:1px solid var(--next-line);border-radius:10px;display:flex;flex-direction:column;max-width:1250px;margin:auto;
@@ -74,3 +66,47 @@
 .bpay-next-issue-table tr:focus-visible {outline:3px solid var(--next-focus);outline-offset:-3px;}
 .bpay-next-issue-lists form {display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
 .bpay-next-issue-lists [hidden] {display:none!important;}
+
+/* WB11 components inside the existing Office modal and its shared tokens. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window {width:min(1320px,calc(100vw - 48px));}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-small-window {width:min(600px,calc(100vw - 48px));}
+#modal.ctms-modern-modal .bpay-next-office-content {--next-line:var(--ctms-modal-line);--next-focus:var(--ctms-modal-accent-bright);color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal .bpay-next-workbench-shell>.ws-notice[hidden] {display:none;}
+#modal.ctms-modern-modal .bpay-next-main-tabs {display:flex;gap:6px;padding:8px 0;border-bottom:1px solid var(--ctms-modal-line);}
+#modal.ctms-modern-modal .bpay-next-main-tabs [aria-selected=true] {border-color:var(--ctms-modal-accent);box-shadow:0 2px 0 var(--ctms-modal-cyan);}
+#modal.ctms-modern-modal .bpay-next-tab-count {display:inline-block;border-radius:999px;background:var(--ctms-modal-panel-raised);padding:2px 7px;margin-left:6px;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-header-strip {display:flex;align-items:center;flex-wrap:wrap;gap:16px;padding:20px 0;}
+#modal.ctms-modern-modal .bpay-next-header-facts {display:flex;flex-wrap:wrap;}
+#modal.ctms-modern-modal .bpay-next-header-facts>div {border-right:1px solid var(--ctms-modal-line);padding:0 12px;}
+#modal.ctms-modern-modal .bpay-next-header-facts>div:first-child {padding-left:0;}
+#modal.ctms-modern-modal .bpay-next-header-facts>div:last-child {border-right:0;}
+#modal.ctms-modern-modal .bpay-next-header-facts span {display:block;color:var(--ctms-modal-sub);font-size:11px;text-transform:uppercase;font-weight:760;letter-spacing:.055em;}
+#modal.ctms-modern-modal .bpay-next-header-facts strong {display:block;margin-top:4px;font-size:18px;font-weight:740;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-stale {opacity:.55;}
+#modal.ctms-modern-modal .bpay-next-header-actions {margin-left:auto;display:flex;gap:6px;}
+#modal.ctms-modern-modal .bpay-next-workbench-shell .ma-chips {display:flex;gap:8px;flex-wrap:wrap;}
+#modal.ctms-modern-modal .bpay-next-workbench-shell .ma-chip {border-radius:999px;border:1px solid var(--ctms-modal-line);padding:6px 10px;color:var(--ctms-modal-sub);background:var(--ctms-modal-panel-soft);font-size:12px;font-weight:680;}
+#modal.ctms-modern-modal .bpay-next-filter-content fieldset {border:0;margin:0 0 16px;padding:0;}
+#modal.ctms-modern-modal .bpay-next-filter-content legend,#modal.ctms-modern-modal .bpay-next-filter-content label {font-size:12px;font-weight:680;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-filter-content label {display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
+#modal.ctms-modern-modal .bpay-next-filter-content fieldset label {flex-direction:row;align-items:center;min-height:44px;margin:0;}
+#modal.ctms-modern-modal .bpay-next-filter-content input[type=radio] {width:18px;height:18px;accent-color:var(--ctms-modal-accent);margin:4px 0;}
+#modal.ctms-modern-modal .bpay-next-filter-content input[type=search],#modal.ctms-modern-modal .bpay-next-filter-content label>.btn {box-sizing:border-box;width:100%;min-height:44px;text-align:left;}
+#modal.ctms-modern-modal .bpay-next-filter-count {padding:14px;border:1px solid var(--ctms-modal-line);border-radius:13px;background:var(--ctms-modal-panel-soft);}
+#modal.ctms-modern-modal .bpay-next-filter-count p {margin:4px 0 0;font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-window-actions {display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;}
+#modal.ctms-modern-modal .bpay-next-picker-list {max-height:380px;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-modern-modal .bpay-next-picker-list table {min-width:0;}
+#modal.ctms-modern-modal .bpay-next-picker-list tr[aria-selected=true] {box-shadow:inset 3px 0 var(--ctms-modal-accent-bright);background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-picker-list small {display:block;color:var(--ctms-modal-sub);font-size:12px;margin-top:4px;}
+#modal.ctms-modern-modal .bpay-next-phone-open {display:none;}
+@media(max-width:700px) {
+ #modal.ctms-modern-modal .bpay-next-main-tabs {gap:2px;}
+ #modal.ctms-modern-modal .bpay-next-main-tabs button {padding:8px 6px;font-size:12px;margin:0;}
+ #modal.ctms-modern-modal .bpay-next-header-strip {padding:12px 0;gap:12px;}
+ #modal.ctms-modern-modal .bpay-next-header-actions {margin-left:0;width:100%;}
+ #modal.ctms-modern-modal .bpay-next-header-facts strong {font-size:16px;}
+ #modal.ctms-modern-modal .bpay-next-picker-list td {display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+ #modal.ctms-modern-modal .bpay-next-picker-list small {width:100%;order:2;}
+ #modal.ctms-modern-modal .bpay-next-phone-open {display:inline-flex;margin-left:auto;align-items:center;min-height:44px;}
+}

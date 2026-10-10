@@ -538,6 +538,132 @@ function issueAmounts(row){
  if(row.recovery_source_ex_vat!==null&&!/^0(?:\.0+)?$/.test(row.recovery_source_ex_vat))add('Recovery difference',row.recovery_source_ex_vat);
  return values;
 }
+// WB11 reads maintained totals and scoped identities; never creates a Draft.
+function sameWorkbenchRevision(a,b){return Boolean(a&&b&&['agency_id','actor_user_id','owner_epoch','official_pay_date','workbench_revision','adoption_revision'].every(k=>a[k]===b[k]));}
+function displayPounds(value){
+ if(value===null)return '—';
+ // Presentation rounding only. Original decimal text remains the authority.
+ const negative=value.startsWith('-'),[whole,fraction='']=value.replace(/^-/,'').split('.');
+ const pence=BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0').slice(0,2))+(fraction[2]>='5'?1n:0n);
+ return (negative&&pence!==0n?'−':'')+'£'+(pence/100n).toLocaleString('en-GB')+'.'+String(pence%100n).padStart(2,'0');
+}
+function mountWorkbenchShell(options){
+ if(!record(options)||!options.host?.ownerDocument||!field(options.actorId?.toLowerCase(),'uuid')||typeof options.showReadWindow!=='function'||typeof options.ownerReady!=='function'||typeof options.currentActorId!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
+ const host=options.host,doc=host.ownerDocument,win=doc.defaultView,client=options.client??createWorkbenchClient(options);
+ async function readPage(kind,args){if(!current())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');const page=await client.loadWorkbenchPage(kind,args);if(!current())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');return validateWorkbenchResponse(page,kind,normalizeWorkbenchInput(kind,args),options.actorId.toLowerCase());}
+ const ui=typeof module==='object'&&module.exports?require('./bpay-next-ui.js'):win.CloudTMSBpayNextUi;
+ const el=(tag,text,cls)=>{const node=doc.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
+ const button=(label,fn)=>{const node=el('button',label,'btn');node.type='button';node.addEventListener('click',fn);return node;};
+ let scope={candidate_id:null,client_id:null,channel:'ALL'},labels={candidate:null,client:null},tab='READY',bundle=null,busy=false,error='',closed=false,generation=0,dialog=null,issueAvailability={available:false,context:null};
+ const root=el('section',undefined,'bpay-next-workbench-shell'),tabs=el('div',undefined,'bpay-next-main-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Payments');
+ const strip=el('div',undefined,'bpay-next-header-strip'),facts=el('div',undefined,'bpay-next-header-facts'),chips=el('div',undefined,'ma-chips'),actions=el('div',undefined,'bpay-next-header-actions');
+ const alert=el('p','', 'ws-notice');alert.setAttribute('role','alert');alert.setAttribute('data-next-live-copy','');const readyHost=el('div'),issueHost=el('div');
+ const filters=button('Filters',()=>openFilters()),refresh=button('Refresh',()=>{options.onRefresh?.();void load();});actions.append(filters,refresh);strip.append(facts,chips,actions);root.append(tabs,strip,alert,readyHost,issueHost);host.append(root);
+ const tabButtons={};for(const [key,label] of [['READY','Ready'],['ACTION','Action required'],['BLOCKED','Blocked']]){const b=button(label,()=>setTab(key));b.setAttribute('role','tab');b.id='bpay-next-main-tab-'+key;b.setAttribute('aria-controls','bpay-next-main-panel-'+key);tabButtons[key]=b;tabs.append(b);}
+ readyHost.id='bpay-next-main-panel-READY';readyHost.setAttribute('role','tabpanel');readyHost.setAttribute('aria-labelledby',tabButtons.READY.id);
+ function actorCurrent(){try{return options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}}
+ function current(){return !closed&&(root.isConnected||options.windowAlive?.()===true)&&actorCurrent();}
+ function scopeLabel(value=scope,names=labels){return [value.channel==='ALL'?'PAYE + Umbrella':value.channel==='PAYE'?'PAYE only':'Umbrella',names.candidate,names.client].filter(Boolean).join(' · ');}
+ function notify(){try{options.onAvailability?.({available:Boolean(bundle&&!busy&&!error&&current()),context:bundle?.READY.context??null});}catch{}}
+ function joinIssues(){const coherent=issueAvailability.available&&bundle&&!busy&&!error&&sameWorkbenchRevision(bundle.READY.context,issueAvailability.context);issueHost.hidden=tab==='READY'||!coherent;if(tab!=='READY'&&!coherent&&!busy&&!error){alert.hidden=false;alert.textContent='Payments changed; refresh to continue.';}}
+ function render(){
+  const available=Boolean(bundle&&!busy&&!error&&current());
+  facts.classList.toggle('bpay-next-stale',!available);facts.replaceChildren();for(const [name,value] of [['Ready to pay',bundle?displayPounds(bundle.READY.rows[0].amount):'—'],['Candidates',bundle?BigInt(bundle.READY.rows[0].candidate_count).toLocaleString('en-GB'):'—']]){const fact=el('div');const amount=el('strong',value);amount.setAttribute('data-next-formatted-money','');fact.append(el('span',name),amount);facts.append(fact);}
+  // The local-exclusion label is supplied by WB12; no selected count is invented.
+  if(typeof options.selectionLabel==='function'){const fact=el('div');fact.append(el('span','Selected'),el('strong',options.selectionLabel()));facts.append(fact);}
+  chips.replaceChildren(el('span',scope.channel==='ALL'?'PAYE + Umbrella':scope.channel==='PAYE'?'PAYE':'Umbrella','ma-chip'));
+  if(scope.channel!=='ALL'||scope.candidate_id!==null||scope.client_id!==null)chips.append(el('span',scopeLabel(),'ma-chip'));
+  for(const [key,b] of Object.entries(tabButtons)){const count=available?(key==='READY'?bundle[key].rows[0].candidate_count:bundle[key].rows[0].item_count):null;b.textContent=key==='READY'?'Ready':key==='ACTION'?'Action required':'Blocked';if(count!==null)b.append(el('span',BigInt(count).toLocaleString('en-GB'),'bpay-next-tab-count'));b.setAttribute('aria-selected',String(tab===key));b.tabIndex=tab===key?0:-1;b.disabled=busy;}
+  readyHost.hidden=tab!=='READY';issueHost.hidden=tab==='READY';issueHost.id='bpay-next-main-panel-'+(tab==='READY'?'ACTION':tab);issueHost.setAttribute('role','tabpanel');issueHost.setAttribute('aria-labelledby',tabButtons[tab==='READY'?'ACTION':tab].id);
+  filters.disabled=busy||!current();refresh.disabled=busy||!current();alert.hidden=!busy&&!error;alert.textContent=error||(busy?'Loading…':'');root.setAttribute('aria-busy',String(busy));joinIssues();notify();
+ }
+ function setTab(value){if(!current()||busy||!Object.hasOwn(tabButtons,value))return;tab=value;render();options.onTab?.(value);}
+ async function load(){
+  if(!current())return;const ticket=++generation,readScope={...scope};busy=true;error='';render();
+  try{
+   const channels=readScope.channel==='ALL'?['PAYE','UMBRELLA']:[],sections=['READY','ACTION','BLOCKED'];
+   const pages=await Promise.all([...sections.map(section=>readPage('HEADER',{...readScope,section})),...channels.map(channel=>readPage('HEADER',{...readScope,channel,section:'READY'}))]);
+   if(ticket!==generation||!current())return;if(pages.some(p=>!sameWorkbenchRevision(pages[0].context,p.context)))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+   bundle=Object.freeze({READY:pages[0],ACTION:pages[1],BLOCKED:pages[2],channels:Object.freeze(Object.fromEntries(channels.map((k,i)=>[k,pages[i+3]])))});
+  }catch{if(ticket===generation&&current())error='Could not refresh payments; try again.';}
+  finally{if(ticket===generation&&current()){busy=false;render();}}
+ }
+ function child(title,parent){
+  if(!current())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');
+  const previous=doc.activeElement,body=el('div',undefined,'bpay-next-filter-content'),footer=el('div',undefined,'bpay-next-window-actions');let frame,focused=false;
+  const entry={body,footer,active:()=>frame?.active()===true,alive:()=>frame?.alive()===true,close:()=>frame?.close()};dialog=entry;
+  frame=options.showReadWindow({title,content:body,footer,small:true,canFocus:current,onDismiss:()=>{
+    if(dialog===entry)dialog=parent??null;
+    win.setTimeout(()=>{if(current()&&previous?.isConnected)previous.focus();},0);
+  },onMount:()=>{if(focused)return;focused=true;win.setTimeout(()=>{if(entry.active()&&current())body.querySelector('input,button')?.focus();},0);}});
+  return entry;
+ }
+ function openFilters(){
+  if(dialog||busy||!current())return;const entry=child('Filters'),draft={...scope},draftLabels={...labels};let countTicket=0,valid=false,closedFilter=false;
+  const group=el('fieldset'),legend=el('legend','Pay channel');group.append(legend);
+  for(const [key,text] of [['ALL','PAYE and Umbrella'],['PAYE','PAYE only'],['UMBRELLA','Umbrella only']]){const wrap=el('label'),radio=el('input');radio.type='radio';radio.name='bpay-next-filter-channel';radio.value=key;radio.checked=draft.channel===key;radio.addEventListener('change',()=>{if(radio.checked&&current()){draft.channel=key;void count();}});wrap.append(radio,el('span',text));group.append(wrap);}
+  const candidateLabel=el('label','Candidate'),candidate=button(draftLabels.candidate??'All Candidates · type to search',()=>openPicker('PICK_CANDIDATES',entry,draft,draftLabels,()=>{updateLabels();void count();}));candidate.setAttribute('aria-label','All Candidates · type to search');candidateLabel.append(candidate);
+  const clientLabel=el('label','Client'),clientButton=button(draftLabels.client??'All Clients · type to search',()=>openPicker('PICK_CLIENTS',entry,draft,draftLabels,()=>{updateLabels();void count();}));clientButton.setAttribute('aria-label','All Clients · type to search');clientLabel.append(clientButton);
+  const card=el('div',undefined,'bpay-next-filter-count'),message=el('p');message.setAttribute('role','alert');message.setAttribute('data-next-live-copy','');const apply=button('Apply',()=>{if(!valid||!current())return;bundle=null;scope={...draft};labels={...draftLabels};closedFilter=true;entry.close();options.onScope?.({...scope});void load();});apply.classList.add('btn-primary');
+  const clear=button('Clear filters',()=>{if(!current())return;bundle=null;scope={candidate_id:null,client_id:null,channel:'ALL'};labels={candidate:null,client:null};closedFilter=true;entry.close();options.onScope?.({...scope});void load();});
+  const retry=button('Try again',()=>void count());retry.hidden=true;entry.body.append(group,candidateLabel,clientLabel,card,message,retry);entry.footer.append(clear,apply);
+  function updateLabels(){candidate.textContent=draftLabels.candidate??'All Candidates · type to search';clientButton.textContent=draftLabels.client??'All Clients · type to search';}
+  async function count(){const ticket=++countTicket,readScope={...draft};valid=false;apply.disabled=true;card.textContent='Loading…';message.textContent='';retry.hidden=true;
+   try{const page=await readPage('HEADER',{...readScope,section:'READY'});if(ticket!==countTicket||closedFilter||!entry.alive()||!current())return;const total=el('strong',BigInt(page.rows[0].candidate_count).toLocaleString('en-GB')+(page.rows[0].candidate_count==='1'?' Candidate · ':' Candidates · ')+displayPounds(page.rows[0].amount)+' ready');total.setAttribute('data-next-formatted-money','');card.replaceChildren(total,el('p',scopeLabel(readScope,{...draftLabels})));valid=true;apply.disabled=false;
+   }catch{if(ticket===countTicket&&entry.alive()&&current()){card.textContent='—';message.textContent='Could not load payments; try again.';retry.hidden=false;}}
+  }
+  void count();
+ }
+ function openPicker(kind,parent,draft,names,chosen){
+  if(!current()||dialog!==parent)return;
+  const candidateKind=kind==='PICK_CANDIDATES',id=candidateKind?'candidate_id':'client_id',name=candidateKind?'candidate_sort_name':'client_display_name';
+  const entry=child(candidateKind?'Choose Candidate':'Choose Client',parent),readScope={...draft,[id]:null};
+  let pages=[],history=[],context=null,loading=false,error='',pick=null,ticket=0,search='',reloadRequired=false,pending={direction:'reset',after:null};
+  const subtitle=el('p',scopeLabel(readScope,{candidate:candidateKind?null:names.candidate,client:candidateKind?names.client:null})),form=el('form'),label=el('label',candidateKind?'Search name or TMS ref':'Search Client'),input=el('input');
+  input.type='search';input.maxLength=200;input.setAttribute('data-next-focus-key','picker-search');label.append(input);const find=button('Search',()=>{});find.type='submit';form.append(label,find);
+  const scroller=el('div',undefined,'ctms-universal-table-host bpay-next-picker-list'),status=el('p');status.setAttribute('role','status');status.setAttribute('data-next-live-copy','');
+  const choose=button('Choose',()=>{if(!pick||loading||error||!entry.active()||!current())return;draft[id]=pick[id];names[candidateKind?'candidate':'client']=pick[name]??(candidateKind?'Candidate':'Client');entry.close();chosen();});choose.classList.add('btn-primary');choose.disabled=true;
+  const retry=button('Try again',()=>{if(reloadRequired){context=null;pages=[];history=[];pick=null;reloadRequired=false;void read('reset',null);}else void read(pending.direction,pending.after);});retry.hidden=true;
+  const hint=el('span',candidateKind?'Choose a Candidate.':'Choose a Client.');hint.hidden=true;hint.setAttribute('data-next-live-copy','');
+  entry.body.append(subtitle,form,scroller,status,retry);entry.footer.append(hint,button(candidateKind?'All Candidates':'All Clients',()=>{if(!entry.active()||!current())return;draft[id]=null;names[candidateKind?'candidate':'client']=null;entry.close();chosen();}),choose);
+  function pageHeight(page){return Array.from(scroller.querySelectorAll('tr[data-picker-id]')).filter(node=>page.rows.some(row=>row[id]===node.dataset.pickerId)).reduce((sum,node)=>sum+node.getBoundingClientRect().height,0);}
+  function renderRows(){
+   const focus=ui.capture(entry.body,doc),table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),head=el('thead'),header=el('tr'),body=el('tbody');header.append(el('th',candidateKind?'Candidate':'Client'));head.append(header);
+   for(const row of pages.flatMap(page=>page.rows)){
+    const tr=el('tr');tr.tabIndex=0;tr.dataset.pickerId=row[id];tr.setAttribute('data-next-focus-key','picker:'+row[id]);tr.setAttribute('aria-selected',String(pick?.[id]===row[id]));
+    const cell=el('td'),title=el('strong',row[name]??(candidateKind?'Candidate':'Client'));cell.dataset.label=candidateKind?'Candidate':'Client';cell.append(title);if(candidateKind&&row.tms_ref)cell.append(el('small','TMS '+row.tms_ref));
+    const select=()=>{if(!entry.active()||!current()||loading||error)return;pick=row;hint.hidden=true;for(const node of body.children)node.setAttribute('aria-selected',String(node===tr));choose.disabled=false;};
+    const open=()=>{select();choose.click();};tr.addEventListener('click',select);tr.addEventListener('dblclick',event=>{if(!event.target.closest('button'))open();});
+    tr.addEventListener('keydown',event=>{if(event.target!==tr)return;if(event.key==='Enter'){event.preventDefault();open();}else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const nodes=Array.from(body.children),i=nodes.indexOf(tr),n=event.key==='Home'?0:event.key==='End'?nodes.length-1:Math.max(0,Math.min(nodes.length-1,i+(event.key==='ArrowDown'?1:-1)));nodes[n]?.focus();}});
+    const phone=button('Open',event=>{event.stopPropagation();open();});phone.setAttribute('data-next-focus-key','picker-open:'+row[id]);phone.className='btn bpay-next-phone-open';cell.append(phone);tr.append(cell);body.append(tr);
+   }
+   table.append(head,body);scroller.replaceChildren(table);if(!loading&&!pages.some(page=>page.rows.length)&&!error)scroller.append(el('p','No matches.'));
+   choose.disabled=loading||Boolean(error)||!pick;hint.hidden=loading||Boolean(error)||Boolean(pick)||!pages.some(page=>page.rows.length);retry.hidden=!error;retry.textContent=reloadRequired?'Refresh':'Try again';status.setAttribute('role',error?'alert':'status');status.textContent=error||(loading?(pending.direction==='reset'?'Loading…':'Loading more…'):'');
+   if(focus&&entry.active()&&current())ui.restore(entry.body,focus,input);
+  }
+  async function read(direction,after){
+   if(loading||!current()||!entry.active())return;
+   const mine=++ticket,scroll=scroller.scrollTop;let adjustment=0;loading=true;error='';pending={direction,after};choose.disabled=true;retry.hidden=true;status.setAttribute('role','status');status.textContent=direction==='reset'?'Loading…':'Loading more…';
+   try{
+    const page=await readPage(kind,{...readScope,section:'ALL',search,after,limit:100});if(mine!==ticket||!current()||!entry.active())return;
+    if(context&&!sameWorkbenchRevision(context,page.context))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);context=page.context;
+    const block={after,next:page.next_cursor,rows:page.rows};
+    if(direction==='reset'){pages=[block];history=[];pick=null;}
+    else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();}
+    else{if(pages.length===3){const first=pages[0];adjustment=-pageHeight(first);history.push(first.after?.key??null);while(ENCODER.encode(JSON.stringify(history)).byteLength>32768)history.shift();pages.shift();}pages.push(block);}
+   }catch(e){if(mine===ticket&&entry.active()&&current()){reloadRequired=e?.reloadRequired===true||e?.reload===true;error=reloadRequired?'Payments changed; refresh to continue.':'Could not load this list; try again.';}}
+   finally{if(mine===ticket&&entry.active()&&current()){loading=false;renderRows();if(!error){if(direction==='back')adjustment=pageHeight(pages[0]);scroller.scrollTop=direction==='reset'?0:Math.max(0,scroll+adjustment);}}}
+  }
+  form.addEventListener('submit',event=>{event.preventDefault();if(loading||!current()||!entry.active())return;search=input.value.trim();context=null;pages=[];history=[];pick=null;void read('reset',null);});
+  scroller.addEventListener('scroll',()=>{if(loading||error||!entry.active())return;const next=pages.at(-1)?.next;if(scroller.scrollTop<40&&history.length){const key=history.at(-1);void read('back',key===null?null:{context,key});}else if(next&&scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<100)void read('forward',next);});
+  void read('reset',null);
+ }
+ tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const keys=Object.keys(tabButtons),i=keys.indexOf(tab),next=event.key==='Home'?keys[0]:event.key==='End'?keys.at(-1):keys[(i+(event.key==='ArrowRight'?1:2))%3];setTab(next);tabButtons[next].focus();});
+ const ownerChanged=()=>{if(!actorCurrent()){generation++;bundle=null;busy=false;dialog?.close();dialog?.close();closed=true;root.remove();}};win.addEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);
+ render();void load();
+ return Object.freeze({readyHost,issueHost,client,load,setTab,openFilters,setIssueAvailability(value){if(!current())return;issueAvailability=value;render();},snapshot:()=>Object.freeze({scope:{...scope},labels:{...labels},tab,available:Boolean(bundle&&!busy&&!error&&current()),context:bundle?.READY.context??null,headers:bundle}),invalidate(){if(!current())return;generation++;bundle=null;busy=false;error='Payments changed; refresh to continue.';render();},close(){closed=true;generation++;dialog?.close();dialog?.close();win.removeEventListener('cloudtms:bpay-next-owner-changed',ownerChanged);root.remove();}});
+}
+
 function mountIssueLists(options){
  if(!record(options)||!options.host?.ownerDocument||typeof options.openIssue!=='function'||typeof options.ownerReady!=='function'||!field(options.actorId?.toLowerCase(),'uuid')||typeof options.currentActorId!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
  const client=options.client??createWorkbenchClient(options),doc=options.host.ownerDocument,host=options.host;
@@ -555,10 +681,10 @@ function mountIssueLists(options){
  const alert=el('p');alert.setAttribute('role','alert');alert.className='bpay-next-alert';const retry=el('button','Try again');retry.type='button';
  const reload=el('button','Reload changed list');reload.type='button';const content=el('div');content.className='bpay-next-issue-table';content.tabIndex=0;
  const footer=el('p');footer.setAttribute('aria-live','polite');const previous=el('button','Previous'),next=el('button','Next'),first=el('button','First page');previous.type=next.type=first.type='button';
- const status=el('p');status.setAttribute('aria-live','polite');root.append(tabs,panel);panel.append(form,alert,retry,reload,status,content,footer,first,previous,next);host.append(root);
+ const status=el('p');status.setAttribute('aria-live','polite');root.append(tabs,panel);if(options.externalTabs===true)tabs.hidden=true;panel.append(form,alert,retry,reload,status,content,footer,first,previous,next);host.append(root);
  const buttons={};for(const [value,label] of [['ACTION_REQUIRED','Action Required'],['BLOCKED','Blocked for Pay']]){const b=el('button',label);b.type='button';b.setAttribute('role','tab');b.id='bpay-next-issue-tab-'+value;b.setAttribute('aria-controls','bpay-next-issue-panel');b.addEventListener('click',()=>{if(value===kind||busy)return;kind=value;after=null;back=[];void load(null,{reset:true});});buttons[value]=b;tabs.append(b);}panel.id='bpay-next-issue-panel';
  function notify(available,context=null){try{options.onAvailability?.({available,context});}catch{}}
- function current(){return !closed&&root.isConnected&&options.ownerReady()===true&&String(options.currentActorId?.()??'').toLowerCase()===String(options.actorId??'').toLowerCase();}
+ function current(){return !closed&&(root.isConnected||options.windowAlive?.()===true)&&options.ownerReady()===true&&String(options.currentActorId?.()??'').toLowerCase()===String(options.actorId??'').toLowerCase();}
  function sameRevision(a,b){return ['agency_id','actor_user_id','owner_epoch','official_pay_date','workbench_revision','adoption_revision'].every(k=>a[k]===b[k]);}
  function render(){
   const available=Boolean(bundle&&!busy&&!error&&current());for(const [value,b] of Object.entries(buttons)){const count=available?bundle[value].rows[0].item_count:null;b.textContent=(value==='ACTION_REQUIRED'?'Action Required':'Blocked for Pay')+(count===null?' — unavailable':' ('+count+')');b.setAttribute('aria-selected',String(value===kind));b.tabIndex=value===kind?0:-1;b.disabled=busy;}
@@ -602,6 +728,8 @@ function mountIssueLists(options){
  tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const other=kind==='ACTION_REQUIRED'?'BLOCKED':'ACTION_REQUIRED';buttons[event.key==='Home'?'ACTION_REQUIRED':event.key==='End'?'BLOCKED':other].focus();});
  render();void load(null,{reset:true});
  return Object.freeze({
+  reload(){if(!current())return;generation++;busy=false;bundle=null;after=null;back=[];notify(false);void load(null,{reset:true});},
+  setKind(value){if(!current())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');if(!['ACTION_REQUIRED','BLOCKED'].includes(value))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');if(value===kind)return;kind=value;generation++;busy=false;bundle=null;after=null;back=[];notify(false);void load(null,{reset:true});},
   setScope(scope){if(!current())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');if(!exact(scope,['candidate_id','client_id','channel'])||!field(scope.candidate_id,'uuid?')||!field(scope.client_id,'uuid?')||!field(scope.channel,'scopeChannel'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');Object.assign(base,scope);generation++;busy=false;bundle=null;after=null;back=[];notify(false);void load(null,{reset:true});},
   adoptAffected(receipt){if(!current())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');if(!field(receipt?.workbench_revision,'integer'))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');generation++;busy=false;bundle=null;after=null;back=[];notify(false);void load(null,{reset:true,expectedRevision:receipt.workbench_revision});},
   invalidate(){if(!current())throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED');generation++;busy=false;bundle=null;error=new WorkbenchReadError('BPAY_NEXT_WORKBENCH_PROJECTION_NOT_CURRENT',true);notify(false);render();},
@@ -609,6 +737,6 @@ function mountIssueLists(options){
   snapshot(){return Object.freeze({kind,search,sort,scope:{...base},context:bundle?.page.context??null,available:Boolean(bundle&&!busy&&!error&&current())});}
  });
 }
-return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountIssueLists,issueReason,issueAmounts});
+return Object.freeze({createWorkbenchClient,loadWorkbenchPage,WorkbenchReadError,BPAY_NEXT_WORKBENCH_PAGE_INPUTS,ROWS,mountWorkbenchShell,sameWorkbenchRevision,displayPounds,mountIssueLists,issueReason,issueAmounts});
 
 });

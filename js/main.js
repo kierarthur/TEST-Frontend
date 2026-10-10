@@ -7158,6 +7158,7 @@ function renderTopNav(){
               }
               window.CloudTMSBpayNextOffice.open({
                 document, window, api: API, authFetch, actorId: SESSION.user.id,
+                showReadWindow: window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
                 currentActorId: () => SESSION?.user?.id || null,
                 pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
                 openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
@@ -327062,6 +327063,8 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
 
 function setFormReadOnly(root, ro) {
+  // Banking NEXT readers own their loading, refusal and selection locks.
+  if (typeof currentFrame === 'function' && currentFrame()?.kind === 'bpay-next-read') return;
   if (!root || !document.contains(root)) { L('setFormReadOnly(skip: invalid root)', { ro }); return; }
   const _allBefore = root.querySelectorAll('input, select, textarea, button');
   const beforeDisabled = Array.from(_allBefore).filter(el => el.disabled).length;
@@ -327918,6 +327921,7 @@ const frame = {
     opts.kind === 'invoice-reference-numbers' ||
     opts.kind === 'invoice-send-email-confirm' ||
     opts.kind === 'job-titles' ||
+    opts.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(opts.kind) ||
     (typeof opts.kind === 'string' && opts.kind.startsWith('invoice-batch-')) ||
     (typeof opts.kind === 'string' && opts.kind.startsWith('import-summary-invoice-batch-'));
@@ -332060,6 +332064,7 @@ if (this.entity === 'timesheets' && k === 'evidence') {
     this.kind === 'invoice-reference-numbers' ||
     this.kind === 'invoice-send-email-confirm' ||
     this.kind === 'banking-pay-batch-child' ||
+    this.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(this.kind) ||
     (typeof this.kind === 'string' && this.kind.startsWith('invoice-batch-')) ||
     (typeof this.kind === 'string' && this.kind.startsWith('import-summary-invoice-batch-'));
@@ -332550,6 +332555,7 @@ function setFrameMode(frameObj, mode) {
     frameObj.kind === 'timesheets-resolve' ||
     frameObj.kind === 'resolve-candidate'  ||
     frameObj.kind === 'resolve-client'     ||
+    frameObj.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(frameObj.kind) ||
     (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('invoice-batch-')) ||
     (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('import-summary-invoice-batch-'));
@@ -332568,7 +332574,8 @@ function setFrameMode(frameObj, mode) {
       frameObj.kind === 'resolve-candidate'  ||
       frameObj.kind === 'resolve-client'     ||
       frameObj.kind === 'banking-pay-batch-child' ||
-      isImportSummaryUtilityKind(frameObj.kind) ||
+      frameObj.kind === 'bpay-next-read' ||
+    isImportSummaryUtilityKind(frameObj.kind) ||
       (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('invoice-batch-')) ||
       (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('import-summary-invoice-batch-'));
 
@@ -333162,11 +333169,13 @@ _tabPromise.then(async () => {
   console.warn('[MODAL][renderTop] post-tab wiring failed', e);
   GE();
 });
- const afterTabRendered = async () => {
+  const afterTabRendered = async () => {
 
   if (modalNode) {
     const kindNow = String(top?.kind || '').trim();
-    const applied = applyModalGeometryForKind(modalNode, kindNow, { forceCenter: false });
+    const centerNextRead = kindNow === 'bpay-next-read' && !top._nextReadCentered;
+    const applied = applyModalGeometryForKind(modalNode, kindNow, { forceCenter: centerNextRead });
+    if (centerNextRead) top._nextReadCentered = true;
 
     L('renderTop: anchored modal (per-kind)', {
       kind: kindNow || '__default__',
@@ -333556,7 +333565,8 @@ const isUtilityKind =
   top.kind === 'resolve-client'     ||
   top.kind === 'invoice-reference-numbers' ||
   top.kind === 'invoice-send-email-confirm' ||
-  isImportSummaryUtilityKind(top.kind) ||
+  top.kind === 'bpay-next-read' ||
+    isImportSummaryUtilityKind(top.kind) ||
   (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
   (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
 
@@ -333822,6 +333832,7 @@ top._updateButtons = ()=> {
     top.kind === 'resolve-candidate'  ||
     top.kind === 'resolve-client'     ||
     top.kind === 'invoice-reference-numbers' ||
+    top.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(top.kind) ||
     (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
     (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'))
@@ -337891,13 +337902,14 @@ bindSave(btnSave, top);
     window.addEventListener('modal-frame-mode-changed', onModeChanged);
     window.addEventListener('contract-margins-updated', onMarginsEvt);
     const onModalKey = (e) => {
+      if (currentFrame() !== top) return;
       if (e.key === 'Escape') {
         if (top._confirmingDiscard || top._closing) return;
         e.preventDefault();
         byId('btnCloseModal').click();
         return;
       }
-      if (e.key !== 'Tab' || !isRecordOwnedFrame(top, parent)) return;
+      if (e.key !== 'Tab' || !(top.kind === 'bpay-next-read' || isRecordOwnedFrame(top, parent))) return;
       const modal = byId('modal');
       if (!modal) return;
       const focusable = Array.from(modal.querySelectorAll('button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])'))
@@ -337973,7 +337985,8 @@ bindSave(btnSave, top);
       top.kind === 'resolve-client'     ||
       top.kind === 'invoice-reference-numbers' ||
       top.kind === 'banking-pay-batch-child' ||
-      isImportSummaryUtilityKind(top.kind) ||
+      top.kind === 'bpay-next-read' ||
+    isImportSummaryUtilityKind(top.kind) ||
       (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
       (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
 
