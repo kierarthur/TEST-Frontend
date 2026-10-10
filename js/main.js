@@ -5166,7 +5166,7 @@ async function authFetch(input, init = {}) {
       const path = '/' + new URL(url, 'https://local.invalid').pathname.split('/').filter(Boolean).join('/');
       const method = String(init?.method || input?.method || 'GET').toUpperCase();
       return (method === 'POST' && ['/api/banking/pay/next/command','/api/banking/pay/next/preparation','/api/banking/pay/next/history-page','/api/banking/pay/next/frozen-detail'].includes(path))
-        || (method === 'GET' && ['/api/banking/pay/next/preparation-page','/api/banking/pay/next/owner-status'].includes(path))
+        || (method === 'GET' && ['/api/banking/pay/next/preparation-page','/api/banking/pay/next/workbench-page','/api/banking/pay/next/owner-status'].includes(path))
         || (method === 'GET' && /^\/api\/banking\/pay\/next\/advice\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(path));
     }
     catch { return false; }
