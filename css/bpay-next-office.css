@@ -450,6 +450,7 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-progress .ws-notice p {color:var(--ctms-modal-sub);font-size:12px;margin-top:4px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress .ws-notice--danger {border-left-color:var(--ctms-modal-danger);background:color-mix(in srgb,var(--ctms-modal-danger) 10%,var(--ctms-modal-panel));}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress .bpay-next-result-success {border-left-color:var(--ctms-modal-success);background:color-mix(in srgb,var(--ctms-modal-success) 12%,var(--ctms-modal-panel));}
+#modal.ctms-kind-bpay-next-read .bpay-next-office-content .bpay-next-result-success {border-left-color:var(--ctms-modal-success);background:color-mix(in srgb,var(--ctms-modal-success) 12%,var(--ctms-modal-panel));}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress .ws-notice .btn {margin-top:10px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress-subject,#modal.ctms-kind-bpay-next-read .bpay-next-progress-totals {border:1px solid var(--ctms-modal-line);border-radius:12px;padding:14px;background:var(--ctms-modal-panel-raised);}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress-subject h3 {margin:0 0 4px;font-size:14px;}
@@ -469,6 +470,8 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-progress-more summary::after {content:'▾';}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress-more summary::-webkit-details-marker {display:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress-more[open]>.btn {position:absolute;bottom:calc(100% + 8px);right:0;white-space:nowrap;z-index:2;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-more[open]>.bpay-next-progress-more-options {position:absolute;bottom:calc(100% + 8px);right:0;display:flex;flex-direction:column;gap:8px;white-space:nowrap;z-index:2;background:var(--ctms-modal-panel-raised);padding:8px;border:1px solid var(--ctms-modal-line);border-radius:10px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalActions button[data-next-secondary][data-next-destructive] {margin-right:auto;border-color:#b55c60;color:#f5c1bd;background:transparent;box-shadow:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-progress-more summary:focus-visible {outline:2px solid var(--ctms-modal-accent-bright);outline-offset:3px;}
 @media(max-width:700px){
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-progress) {width:calc(100vw - 12px);}
@@ -480,3 +483,7 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-progress-footer-hint {align-self:center;margin:0 auto 0 0;font-size:12px;color:var(--ctms-modal-sub);}
 
 @media(max-width:700px){#modal.ctms-kind-bpay-next-read .bpay-next-progress-more[open]>.btn {left:0;right:auto;}}
+@media(max-width:700px){#modal.ctms-kind-bpay-next-read .bpay-next-progress-more[open]>.bpay-next-progress-more-options {left:0;right:auto;}}
+@media(max-width:700px){#modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) #modalActions button {min-height:44px;}}
+
+@media(max-width:700px){#modal.ctms-kind-bpay-next-read .bpay-next-workbench-shell :is(.bpay-next-header-actions,.bpay-next-main-tabs) button {min-height:44px;box-sizing:border-box;}}
