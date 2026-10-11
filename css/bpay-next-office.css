@@ -473,6 +473,7 @@
 @media(max-width:700px){
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-progress) {width:calc(100vw - 12px);}
  #modal.ctms-kind-bpay-next-read:has(.bpay-next-progress) :is(.btn,summary) {min-height:44px;box-sizing:border-box;}
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-progress,.bpay-next-worker-review) #btnCloseModal {min-height:44px;min-width:44px;}
  #modal.ctms-kind-bpay-next-read .bpay-next-progress-totals {gap:18px;}
 }
 
