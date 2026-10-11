@@ -1488,6 +1488,11 @@ function field(v,type){
     frame=options.showReadWindow({title:'Draft detail',headerDetail:subtitle,content,footer,canFocus:current,onDismiss:()=>{closed=true;},onMount:()=>{render();if(!started){started=true;void act(async()=>{await readSummary();await readLines();if(lines?.rows.length)await chooseLine(lines.rows[0]);});}}});return frame;
   }
   const workerReviewWindows=new Map();
+  // SP15 owns these two entries; DR15 extends the same closed table.
+  const PREPARATION_ISSUE_COPY=Object.freeze({
+    SOURCE_PAY_QUERY_OPEN:'Pay Query open on this Timesheet — resolve it in Weekly Source Office Checks',
+    SOURCE_PAY_QUERY_EVIDENCE_UNAVAILABLE:"Pay Query evidence could not be confirmed — check the Timesheet's queries"
+  });
   function openWorkerReview(options,runId){
     requireActor(options);if(!field(runId,'uuid')||options.ownerReady()!==true)fail('REQUEST_INVALID');
     const reviewScope=options.progressNamespace?preparationScope(options.progressNamespace):null;
@@ -1518,6 +1523,28 @@ function field(v,type){
       }
       const review=await controller.mutate('REVIEW',{run_id:runId});
       if(controller.settleWorkerAction(h,review))result=h.worker_status==='CANCELLED'?(a.action==='RELEASE'?'Candidate removed from Draft.':'Candidate not in this Draft.'):h.worker_status==='READY'?'Candidate ready.':'Could not prepare this Candidate after several tries.';
+    }
+    async function openReviewTimesheet(row){
+      if(!current()||controller.snapshot().pending||controller.snapshot().worker_action||typeof options.issueOwners?.reviewTimesheet!=='function')fail('REQUEST_INVALID');
+      const args={run_id:runId,run_worker_id:row.run_worker_id,after_transfer_no:null,limit:1};
+      const first=(await transport.page('STATUS',args)).header;
+      if(!current()||!same(first.candidate_id,row.candidate_id)||first.worker_status!=='REVIEW'
+        ||!PREPARATION_ISSUE_COPY[first.review_issue_code]||first.review_issue_work_id===null)fail('REQUEST_INVALID');
+      let cursor=null,work=null;
+      do{
+        const next=await transport.page('CURRENT_WORK',{candidate_id:row.candidate_id,after_week:cursor?.after_week??null,after_work_id:cursor?.after_work_id??null,limit:100});
+        if(!current())fail('ACTOR_CHANGED');
+        work=next.rows.find(x=>same(x.work_id,first.review_issue_work_id)&&same(x.candidate_id,row.candidate_id))??null;
+        if(work||next.complete)break;cursor=next.next_cursor;
+      }while(cursor);
+      if(!work)fail('REQUEST_INVALID');
+      const latest=(await transport.page('STATUS',args)).header;
+      if(!current()||!same(latest.run_id,runId)||!same(latest.run_worker_id,row.run_worker_id)||!same(latest.candidate_id,row.candidate_id)
+        ||latest.worker_status!=='REVIEW'||latest.preparation_revision!==first.preparation_revision
+        ||latest.review_issue_code!==first.review_issue_code||!same(latest.review_issue_work_id,work.work_id))fail('REQUEST_INVALID');
+      await options.issueOwners.reviewTimesheet(Object.freeze({accepted_run_id:runId,run_worker_id:row.run_worker_id,work_id:work.work_id,
+        candidate_id:row.candidate_id,physical_timesheet_id:work.original_timesheet_id,physical_timesheet_version:null,
+        timesheet_reference:work.timesheet_reference,reason_code:latest.review_issue_code,context:Object.freeze({actor_user_id:options.actorId.toLowerCase()})}));
     }
     async function readDeadline(){
       const ticket=++progressTicket;const next=await transport.page('PROGRESS',{run_id:runId});
@@ -1572,12 +1599,14 @@ function field(v,type){
         for(let i=0;i<(hasActions?4:3);i++){const td=el('td',labels[i]);td.dataset.label=['Candidate','Gross ex VAT','State','Actions'][i];if(i===1){td.className='bpay-next-review-money';td.dataset.nextFormattedMoney='';}tr.append(td);}
         const state=el('span',({PREPARING:'Preparing',REVIEW:'To review',READY:'Ready',CANCELLING:'Removing',CANCELLED:'Not in this Draft'})[row.worker_status]||'Preparing','candidate-office-badge candidate-office-badge--'+({REVIEW:'warning',READY:'success',PREPARING:'info',CANCELLING:'info',CANCELLED:'neutral'})[row.worker_status]);tr.children[2].append(state);
         const stateValue=el('div');stateValue.append(state);tr.children[2].replaceChildren(stateValue);
-        if(row.worker_status==='REVIEW'){stateValue.append(el('small','Could not prepare this Candidate; try again or contact support.'));}
+        if(row.worker_status==='REVIEW'){stateValue.append(el('small',PREPARATION_ISSUE_COPY[row.review_issue_code]||'Could not prepare this Candidate; try again or contact support.'));}
         if(row.discard_outcome==='BLOCKED'){state.textContent='Could not remove';state.className='candidate-office-badge candidate-office-badge--danger';stateValue.replaceChildren(state,el('small','This payment cannot be removed; refresh or contact support.'));}
         const actions=el('div',undefined,'bpay-next-review-row-actions');
+        if(row.worker_status==='REVIEW'&&PREPARATION_ISSUE_COPY[row.review_issue_code])actions.append(button('Open Timesheet',()=>openReviewTimesheet(row),locked));
         if(row.worker_status==='READY')actions.append(button('Draft detail',()=>openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id),locked));
-        tr.addEventListener('dblclick',()=>{if(row.worker_status==='READY'&&!locked)openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id);});
-        tr.addEventListener('keydown',e=>{if(e.key==='Enter'&&row.worker_status==='READY'&&!locked&&!e.target.closest('button')){e.preventDefault();openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id);}});
+        const openRow=()=>{if(locked)return;if(row.worker_status==='READY')openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id);else if(row.worker_status==='REVIEW'&&PREPARATION_ISSUE_COPY[row.review_issue_code])void act(()=>openReviewTimesheet(row));};
+        tr.addEventListener('dblclick',e=>{if(!e.target.closest('button'))openRow();});
+        tr.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.target.closest('button')){e.preventDefault();openRow();}});
         if(progressFacts?.discard_phase===null&&row.worker_status==='REVIEW')actions.append(button('Try again',async()=>{
           if(row.review_issue_code==='PF08_NEEDS_ATTENTION'){
             let namespace=options.progressNamespace||options.progressCurrentNamespace?.();

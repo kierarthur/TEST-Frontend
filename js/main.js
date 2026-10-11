@@ -7176,17 +7176,13 @@ function renderTopNav(){
                 alert('Banking Pay NEXT is unavailable. Please sign in again.');
                 return;
               }
-              window.CloudTMSBpayNextOffice.open({
-                document, window, api: API, authFetch, actorId: SESSION.user.id,
-                showReadWindow: window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
-                currentActorId: () => SESSION?.user?.id || null,
-                pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
-                openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
-                issueOwners: {
-                  timesheet: async (issue) => {
+              const openNextIssueTimesheet = async (issue,review=false) => {
                     const actor = String(SESSION?.user?.id || '').toLowerCase();
                     if (actor !== issue.context.actor_user_id || ownerClient.peek()?.active_owner !== 'NEXT'
-                        || !issue.physical_timesheet_id || issue.accepted_run_id) throw new Error('Payment unavailable');
+                        || !issue.physical_timesheet_id || (review
+                          ? ![issue.accepted_run_id,issue.run_worker_id,issue.work_id,issue.candidate_id,issue.physical_timesheet_id].every(id=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||''))
+                            || !['SOURCE_PAY_QUERY_OPEN','SOURCE_PAY_QUERY_EVIDENCE_UNAVAILABLE'].includes(issue.reason_code)
+                          : issue.accepted_run_id)) throw new Error('Payment unavailable');
                     const parentFooter = document.querySelector('[data-next-window-footer]');
                     const parent = window.__modalStack?.at(-1);
                     if (!parent || parent.kind !== 'bpay-next-read') throw new Error('Payment unavailable');
@@ -7220,7 +7216,16 @@ function renderTopNav(){
                     if (String(SESSION?.user?.id || '').toLowerCase() !== actor
                         || ownerClient.peek()?.active_owner !== 'NEXT'
                         || !window.__modalStack?.includes(parent)) throw new Error('Payment unavailable');
-                  }
+              };
+              window.CloudTMSBpayNextOffice.open({
+                document, window, api: API, authFetch, actorId: SESSION.user.id,
+                showReadWindow: window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
+                currentActorId: () => SESSION?.user?.id || null,
+                pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
+                openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
+                issueOwners: {
+                  timesheet: issue => openNextIssueTimesheet(issue),
+                  reviewTimesheet: issue => openNextIssueTimesheet(issue,true)
                 },
                 ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT' && ownerClient.peek()?.owner_epoch === owner.owner_epoch,
                 onOwnerStale: (code) => ownerClient.invalidate(code)
