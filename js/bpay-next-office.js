@@ -603,6 +603,15 @@ function field(v,type){
         return body;
       },
       async page(kind, args) {
+        if(['CASE_AUDIT','CANDIDATE_CASE_REPORT'].includes(kind)){
+          const contract=globalThis.CloudTMSBpayNextCaseAuditContract;if(!contract?.caseFinanceInput(kind,args))fail('REQUEST_INVALID');
+          const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))query.set(key,['after','limit','active_only','include_count'].includes(key)?JSON.stringify(value):value);
+          if(encoder.encode(query.toString()).byteLength>32768)fail('REQUEST_INVALID');
+          const body=await call('/api/banking/pay/next/preparation-page?'+query.toString(),{method:'GET'},false,null,options.timeoutMs??LIMITS.timeout);
+          if(!record(body)||body.ok!==true||body.kind!==kind)fail();
+          const {ok,...payload}=body;try{contract.caseFinanceResult(payload,kind,args,options.actorId.toLowerCase());}catch{fail();}
+          return body;
+        }
         const pageSchema=kind==='CASE_PREVIEW'&&(Object.hasOwn(args,'case_id')||Object.hasOwn(args,'expected_case_revision'))?{input:'caseInput',case_id:'uuid',expected_case_revision:'positive'}:kind==='CASE_COMPONENTS'?{...PAGES.CASE_COMPONENTS,...(Object.hasOwn(args,'edit_command_id')?{edit_command_id:'uuid'}:{}),...(Object.hasOwn(args,'pause_command_id')?{pause_command_id:'uuid'}:{})}:kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
         if (!Object.hasOwn(PAGES, kind) || !shape(args, pageSchema) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
         const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, (k==='descriptor'||k==='input')?JSON.stringify(v):String(v));

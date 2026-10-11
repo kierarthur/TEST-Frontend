@@ -49706,7 +49706,39 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
 }
 
 
+
+// FC14: owner qualification precedes any native/legacy finance reader or cache.
+async function candidateFinanceOwner(candidateId) {
+ const actor=SESSION?.user?.id,parent=currentFrame(),boundContext=parent?._ctxRef,prefix=window.__modalStack?.slice()??[],client=bankingNextOwnerClient();
+ const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)&&(!parent||parent._ctxRef===boundContext);
+ const cache=(window.__candidateFinanceOwners ||= {}),cid=String(candidateId??'');cache[cid]={active_owner:'UNKNOWN',actor};
+ let owner;try{owner=await client.begin('candidate-finance:'+crypto.randomUUID());}catch{if(current())paintNextCandidateFinance(cid,'Could not load the finance report; try again.');throw Error('Could not load the finance report; try again.');}
+ if(!current()||currentFrame()!==parent)throw Error('Window changed');
+ cache[cid]={...owner,actor};if(owner.active_owner==='NEXT')paintNextCandidateFinance(cid);
+ return {owner,current,ready:()=>current()&&client.peek()?.active_owner===owner.active_owner&&client.peek()?.owner_epoch===owner.owner_epoch};
+}
+function paintNextCandidateFinance(candidateId,message='') {
+ const currentId=String(window.modalCtx?.data?.id??currentFrame()?._ctxRef?.data?.id??'');if(currentId!==String(candidateId))return;
+ const summary=document.getElementById('candidateAdvancesSummary');
+ if(summary){summary.replaceChildren();if(message){const line=document.createElement('p');line.textContent=message;line.setAttribute('role','alert');summary.append(line);}const button=document.createElement('button');button.className='btn';button.type='button';button.textContent=message?'Retry':'Open Candidate Finance Report';button.setAttribute('data-view-action','candidate-finance-report');button.onclick=()=>void(message?fetchCandidateAdvances(candidateId).catch(()=>{}):openCandidateLoansOverpaymentsModal(candidateId));summary.append(button);}
+ for(const id of ['candidateMissingShiftAdvances','candidateGeneralAdvances'])document.getElementById(id)?.replaceChildren();
+}
+async function openBankingNextCaseFinance(seed,kind) {
+ const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef,client=bankingNextOwnerClient();
+ const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)&&(!parent||parent._ctxRef===boundContext);
+ try {const owner=await client.begin('case-finance:'+crypto.randomUUID());if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return {handled:true};
+  if(owner.active_owner==='LEGACY')return {handled:false};
+  if(owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextCaseAudit)throw Error();
+  const result=await window.CloudTMSBpayNextCaseAudit.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+   ownerReady:()=>client.peek()?.active_owner==='NEXT'&&client.peek()?.owner_epoch===owner.owner_epoch,
+   showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
+   openAudit:binding=>openBankingNextCaseFinance(binding,'CASE_AUDIT'),openTimesheet:typeof openTimesheet==='function'?id=>openTimesheet({timesheet_id:id}):undefined},seed,kind);
+  return {handled:true,result};
+ }catch{if(current()&&currentFrame()===parent)await openUiConfirmModal({title:kind==='CASE_AUDIT'?'Case audit':'Candidate Finance Report',message:'Could not open the finance report; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-case-finance-notice'});return {handled:true};}
+}
+
 async function openBankingFinanceCaseAuditModal(seed = {}) {
+  const next=await openBankingNextCaseFinance(seed,'CASE_AUDIT');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -277531,6 +277563,8 @@ function renderCandidateTab(key, row = {}) {
 async function fetchCandidateAdvances(candidateId) {
   const cid = String(candidateId || '').trim();
   if (!cid) return;
+  const qualification=await candidateFinanceOwner(cid);if(qualification.owner.active_owner==='NEXT')return;
+  if(qualification.owner.active_owner!=='LEGACY'||!qualification.ready())return;
 
   window.appState = window.appState || {};
   const S = (window.appState.candidateAdvances ||= {});
@@ -277836,6 +277870,7 @@ async function fetchCandidateAdvances(candidateId) {
         throw err;
       }
       const json = await res.json().catch(() => ({}));
+      if(!qualification.ready())return;
       const report = buildCanonicalReport(json);
 
       S[cid] = {
@@ -277850,6 +277885,7 @@ async function fetchCandidateAdvances(candidateId) {
 
       return S[cid];
     } catch (e) {
+      if(!qualification.ready())return;
       console.warn('[CANDIDATE_FINANCE] fetchCandidateAdvances failed', e);
       const userMessage = 'Candidate finance data could not be loaded. Nothing has been treated as zero; retry when the service is available.';
       S[cid] = {
@@ -277880,6 +277916,7 @@ async function fetchCandidateAdvances(candidateId) {
 }
 
 async function openCandidateLoansOverpaymentsModal(candidateId) {
+  const next=await openBankingNextCaseFinance({candidate_id:candidateId},'CANDIDATE_CASE_REPORT');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -280039,6 +280076,8 @@ function renderAdvancesSummary(summary) {
 
 function updateCandidateAdvancesUI(candidateId) {
   const cid = String(candidateId || '').trim();
+  const qualified=window.__candidateFinanceOwners?.[cid];
+  if(qualified?.actor!==SESSION?.user?.id||qualified?.active_owner!=='LEGACY'||bankingNextOwnerClient().peek()?.active_owner!=='LEGACY'){paintNextCandidateFinance(cid,qualified?.active_owner==='UNKNOWN'?'Could not load the finance report; try again.':'');return;}
   const S = (window.appState && window.appState.candidateAdvances) || {};
   const entry = (S[cid] && typeof S[cid] === 'object') ? S[cid] : { report: null, summary: {} };
   const report = (entry.report && typeof entry.report === 'object') ? entry.report : null;
@@ -329619,7 +329658,8 @@ if (this.entity === 'imports' && this.kind === 'imports' && k === 'main') {
         // Repaint any last successful result immediately, then always refresh from
         // current server truth. A prior failure or old finance-case snapshot must
         // never remain authoritative merely because this candidate was cached.
-        if (cache[candId]) updateCandidateAdvancesUI(candId);
+        paintNextCandidateFinance(candId); // A fresh owner read precedes every finance figure.
+        // Genuine LEGACY is painted by fetchCandidateAdvances after qualification.
         fetchCandidateAdvances(candId).catch(err => {
           console.warn('[CAND][PAY][FINANCE_REPORT] fetch failed', err);
         });

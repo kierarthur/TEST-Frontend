@@ -731,3 +731,72 @@
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-edit-cards:not([hidden])) #modalActions:has(> [data-next-window-footer][hidden]) {display:none;}
 
 @media(max-width:480px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-edit-blocked button {min-height:44px;min-width:44px;}}
+
+/* FC14 named read-only lists: dark house frame and native cursor scrolling. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-finance) #modalActions {padding:0 20px 18px;min-height:0;border:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance {font-size:13px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-subtitle {margin:4px 0 0;font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-case-finance-subtitle) {display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:16px;row-gap:3px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-case-finance-subtitle) #modalTitle {grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h .bpay-next-case-finance-subtitle {grid-column:1;grid-row:2;margin:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-case-finance-subtitle) .spacer {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-case-finance-subtitle) #btnCloseModal {grid-column:2;grid-row:1/3;align-self:center;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary {display:flex;gap:0;margin:0 0 14px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary>div {padding:0 16px;border-right:1px solid var(--ctms-modal-line);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary>div:first-child {padding-left:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary>div:last-child {border:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary dt {text-transform:uppercase;font-size:11px;font-weight:750;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary dd {margin:4px 0 0;font-size:17px;font-weight:750;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-controls {display:flex;align-items:center;gap:14px;margin-bottom:8px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-controls>label {display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ctms-modal-sub);font-weight:650;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-controls input {accent-color:#7864f7;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-scroll {max-height:60vh;overflow:auto;border:1px solid #26394f;border-radius:13px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance table {width:100%;table-layout:fixed;border-collapse:collapse;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance th {position:sticky;top:0;z-index:1;background:var(--ctms-modal-panel-raised);text-align:left;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance th button {padding:0;background:none;border:0;box-shadow:none;min-height:24px;font-size:11px;letter-spacing:.02em;text-transform:uppercase;font-weight:750;color:#c4dbf4;text-align:inherit;width:100%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance th,#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance td {padding:10px 12px;border-bottom:1px solid var(--ctms-modal-line);vertical-align:middle;overflow-wrap:anywhere;white-space:pre-wrap;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance td small {display:block;margin-top:6px;color:var(--ctms-modal-sub);font-size:11px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance tr:last-child td {border-bottom:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance .is-money {text-align:right;font-variant-numeric:tabular-nums;font-weight:650;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance tr.is-highlighted {background:#223450;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-section td {background:var(--ctms-modal-panel-raised);font-size:11px;text-transform:uppercase;letter-spacing:.03em;font-weight:750;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-balances {font-size:11px;margin:8px 0 0;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-balances>div {display:flex;flex-wrap:wrap;gap:6px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-balances dd {margin:0;font-variant-numeric:tabular-nums;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-audit {display:block;margin-top:6px;padding:4px 0;background:none;border:0;box-shadow:none;color:#b9cdff;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-foot {font-size:11px;color:var(--ctms-modal-sub);width:100%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-notice {padding:0 0 12px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-notice[role=alert] {color:#ffc4b7;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-notice[role=alert] {display:flex;align-items:center;gap:14px;padding:22px;border:1px solid #78642d;border-radius:13px;background:linear-gradient(110deg,#25231c,#0b1421);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-notice[role=alert] p {margin:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-notice[hidden] {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-error-icon {display:flex;align-items:center;justify-content:center;min-width:34px;height:34px;border:1px solid #a27f22;border-radius:10px;color:#ffdf81;font-size:22px;font-weight:750;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-finance.is-initial-failure) {max-width:980px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-finance.is-initial-failure) .bpay-next-case-finance-foot {display:flex;justify-content:flex-end;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-sentinel {font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance :is(.bpay-next-case-finance-phone-sort,.bpay-next-case-finance-phone-open),#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance [hidden] {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance tbody>tr:not(.bpay-next-case-finance-section):nth-child(even) {background:#0a1726;}
+@media(max-width:640px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-finance) {width:calc(100vw - 12px);}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-finance) :is(button,select) {min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-finance) :is(#btnCloseModal,button,select) {min-height:44px;min-width:44px;height:auto;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-controls>label {min-height:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary {flex-direction:column;gap:10px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-summary>div {padding:0;border:0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-controls {align-items:flex-start;flex-direction:column;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance .bpay-next-case-finance-phone-sort {display:flex;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-phone-sort select {max-width:240px;background:var(--ctms-modal-panel-raised);color:var(--ctms-modal-text);border:1px solid var(--ctms-modal-line);border-radius:6px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-scroll {max-height:55vh;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance thead {display:none;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance tr {display:block;border-bottom:1px solid var(--ctms-modal-line);padding:8px 0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance td {display:grid;grid-template-columns:105px minmax(0,1fr);gap:8px;width:auto;border:0;box-sizing:border-box;padding:6px 12px;text-align:left;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance td:before {content:attr(data-label);font-size:11px;color:var(--ctms-modal-sub);font-weight:650;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance td>small,#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance td>dl {grid-column:2;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance td>button {grid-column:2;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance .bpay-next-case-finance-phone-open {display:block;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance .bpay-next-case-finance-audit {display:none;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-section td {display:block;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-section td:before {display:none;}
+}
+
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-scroll:focus-visible {outline:2px solid #86b9ed;outline-offset:2px;}
