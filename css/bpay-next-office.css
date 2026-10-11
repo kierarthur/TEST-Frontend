@@ -549,6 +549,36 @@
 }
 
 /* DY09: existing scoped Umbrella money, separate from line pages. */
+/* DR10: SCR39, in the existing dark Office window. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-guard) {width:min(600px,calc(100vw - 48px));}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-guard {display:flex;flex-direction:column;gap:16px;color:var(--ctms-modal-text);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-guard .ws-notice[hidden] {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-banner {padding:14px 16px;border:1px solid var(--ctms-modal-line);border-left:4px solid #ffb454;border-radius:16px;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-banner.is-blocked {border-left-color:#ff7383;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-banner strong {font-size:14px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-banner p {margin:6px 0 0;color:var(--ctms-modal-sub);font-size:13px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-subjects {display:flex;flex-direction:column;gap:8px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-subject {display:flex;justify-content:space-between;gap:14px;padding:14px 16px;border:1px solid var(--ctms-modal-line);border-radius:16px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-subject span {color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-choices {margin:0;padding:0;border:0;min-width:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-choices legend {font-weight:700;margin-bottom:10px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-choice {display:grid;grid-template-columns:20px minmax(0,1fr);gap:4px 10px;padding:10px 0;align-items:center;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-choice input {grid-row:span 2;margin:0;accent-color:var(--ctms-modal-accent);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-choice span {grid-column:2;font-size:13px;color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-reason:not([hidden]) {display:flex;flex-direction:column;gap:8px;font-weight:700;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-reason textarea {width:100%;box-sizing:border-box;min-height:76px;resize:vertical;background:var(--ctms-modal-panel);border:1px solid var(--ctms-modal-line);border-radius:10px;padding:10px 12px;color:inherit;font:inherit;font-weight:400;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-confirm:not([hidden]) {display:flex;gap:10px;align-items:center;font-size:13px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-confirm input {accent-color:var(--ctms-modal-accent);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-hint {margin-right:auto;color:var(--ctms-modal-sub);font-size:12px;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-guard) {width:calc(100vw - 12px);}
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-guard) .btn,#modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-guard) #btnCloseModal {min-height:44px;min-width:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-paye-choice {padding:12px 0;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-paye-confirm:not([hidden]) {min-height:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-paye-guard :is(input[type=radio],input[type=checkbox]) {width:20px;height:20px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-paye-hint {flex-basis:100%;}
+}
+
 #modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:0;padding:14px;border:1px solid var(--ctms-modal-line);border-radius:12px;background:var(--ctms-modal-panel-raised);}
 #modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals dt {font-size:11px;text-transform:uppercase;font-weight:700;color:var(--ctms-modal-sub);}
 #modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals dd {margin:5px 0 0;font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}

@@ -128,6 +128,7 @@
   MATCHING_PAGE:{run_id:'uuid',page_no:'positive',after_member_no:'positive?'},
 
     CREATE: { run_id: 'uuid', command_id: 'uuid', descriptor: 'descriptor' },
+    PAYE_GUARD_DECISION:{run_id:'uuid',command_id:'uuid',descriptor:'descriptor',decision:'guardDecision',reason:'guardReason?'},
     WORK_PAGE: { run_id: 'uuid', page_no: 'positive', choices: 'choices' },
     COMPONENT_PAGE: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',page_no:'positive',approved_line_ids:'ids'},
     COMPONENT_SEAL: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',expected_pages:'positive',expected_count:'positive'},
@@ -149,6 +150,7 @@
   MATCHING_PAGE:{run_id:'uuid',page_no:'positive',item_count:'integer',selection_count:'integer',selected_candidate_count:'integer',replay:'boolean',skipped:'skipped',complete:'boolean',next_after_member_no:'positive?'},
 
     CREATE: { run_id: 'uuid', status: 'run', selection_state: 'selection', selection_count: 'integer', selected_candidate_count: 'integer', official_pay_date: 'date', command_id:'uuid', agency_sequence:'positive?', choice_work_count:'integer', choice_case_count:'integer', empty:'boolean', replay:'boolean' },
+    PAYE_GUARD_DECISION:{run_id:'uuid',status:'run',selection_state:'selection',selection_count:'integer',selected_candidate_count:'integer',official_pay_date:'date',command_id:'uuid',agency_sequence:'positive?',choice_work_count:'integer',choice_case_count:'integer',empty:'boolean',replay:'boolean',decision:'guardDecision',channel_scope:'guardChannel'},
     WORK_PAGE: { run_id: 'uuid', page_no: 'positive', item_count: 'positive', selection_count: 'integer', selected_candidate_count: 'integer', replay: 'boolean', skipped: 'skipped' },
     COMPONENT_PAGE: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',page_no:'positive',item_count:'positive',component_count:'positive',replay:'boolean'},
     COMPONENT_SEAL: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',sealed:'true',component_count:'positive',replay:'boolean'},
@@ -193,6 +195,7 @@
   };
   const RETURN_HEADER = {run_id:'uuid',run_worker_id:'uuid',candidate_id:'uuid',financial_view_revision:'integer'};
   const PAGES = {
+    GUARD:{run_id:'uuid'},
     PROGRESS:{run_id:'uuid'},
     RATES:{work_id:'uuid',expected_revision_id:'uuid',approved_line_id:'uuid',after_bucket:'bucket?',limit:'limit'},
     BREAKS:{work_id:'uuid',expected_revision_id:'uuid',approved_line_id:'uuid',shift_detail_id:'uuid',after_break_no:'integer?',limit:'limit'},
@@ -287,6 +290,15 @@ function validDiscardProgress(p){
     &&(p.discard_phase==='DISCARDED'?p.status==='CANCELLED'&&blocked===0n:p.status==='REVIEW'&&blocked>0n);
 }
 function field(v,type){
+    if(type==='guardDecision')return ['UMBRELLA_ONLY','VERIFY_BOTH','VERIFY_PAYE'].includes(v);
+    if(type==='guardChannel')return ['ALL','PAYE','UMBRELLA'].includes(v);
+    if(type==='guardReason')return typeof v==='string'&&v.trim().length>0&&!v.includes('\0')&&encoder.encode(v).byteLength<=500;
+    if(type==='guardContext')return shape(v,{namespace:'choiceNamespace',workbench_revision:'integer',adoption_revision:'integer'});
+    if(type==='guardStatus')return ['Paid','Not paid yet'].includes(v);
+    if(type==='guardStoredDecision')return v==='NONE'||field(v,'guardDecision');
+    if(type==='guardFacts')return Array.isArray(v)&&v.length<=100&&v.every(x=>shape(x,{run_id:'uuid',reference:'label?',legacy:'boolean',unexecuted:'boolean',status:'guardStatus'})
+      &&(x.reference===null||x.reference.length<=80&&!UUID.test(x.reference))&&(x.status==='Paid')===!x.unexecuted)&&new Set(v.map(x=>x.run_id)).size===v.length;
+    if(type==='guardRows')return Array.isArray(v)&&v.length===1&&shape(v[0],{run_id:'uuid',guard_applies:'boolean',unexecuted:'boolean',existing:'guardFacts',paye_candidates:'integer',umbrella_candidates:'integer',context:'guardContext',decision:'guardStoredDecision',channel_scope:'guardChannel'});
     if(type==='reauthToken')return typeof v==='string' && v.length>0 && encoder.encode(v).byteLength<=1536 && /^[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$/.test(v);
     if(type==='discardReason')return typeof v==='string'&&v.trim().length>0&&!v.includes('\0')&&encoder.encode(v).byteLength<=500;
     if(type==='discardReceiptPhase')return ['EMPTY','CANCELLING','DISCARDED','PARTIAL'].includes(v);
@@ -395,7 +407,16 @@ function field(v,type){
     return Object.freeze({...value});
   }
   const financial = action => ['PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
-  const reauthAction = action => ['CANCEL_REQUEST','CSV_ISSUE'].includes(action);
+  const reauthAction = action => ['CANCEL_REQUEST','CSV_ISSUE','PAYE_SAME_WEEK_OVERRIDE'].includes(action);
+  function reauthIntentBody(action,args){
+    if(action!=='PAYE_SAME_WEEK_OVERRIDE')return requestBody(action,args);
+    const {reauth_token,...intent}=args||{};
+    if(!shape(intent,{run_id:'uuid',command_id:'uuid',decision:'guardDecision',reason:'guardReason',context:'guardContext'})
+      ||intent.decision==='UMBRELLA_ONLY'||(reauth_token!==undefined&&!field(reauth_token,'reauthToken')))fail('REQUEST_INVALID');
+    const bytes=JSON.stringify({action,...intent,...(reauth_token===undefined?{}:{reauth_token})});
+    // Token is not part of the auth intent; token shape retains its own bound.
+    if(encoder.encode(JSON.stringify({action,...intent})).byteLength>2048)fail('REQUEST_INVALID');return bytes;
+  }
   function requestBody(action, args) {
     let schema = INPUT[action];
     if(action==='PREPARATION_DISCARD'&&Object.hasOwn(args||{},'reason'))schema={...schema,reason:'discardReason'};
@@ -403,9 +424,12 @@ function field(v,type){
     if (action === 'CANCEL_REQUEST' && (Object.hasOwn(args || {}, 'run_id') || Object.hasOwn(args || {}, 'pay_channel'))) schema = {...schema,run_id:'uuid',pay_channel:'channel'};
     // Historical tokenless journals remain readable, byte-for-byte. A new
     // protected dispatch separately requires the completed helper below.
-    if(reauthAction(action) && Object.hasOwn(args || {},'reauth_token'))schema={...schema,reauth_token:'reauthToken'};
+    if((reauthAction(action)||action==='PAYE_GUARD_DECISION') && Object.hasOwn(args || {},'reauth_token'))schema={...schema,reauth_token:'reauthToken'};
     if (!schema || !shape(args, schema) || (action==='EXCLUSION_PAGE'&&args.excluded_work_ids.length+args.excluded_candidate_ids.length>100) || (action === 'CASE_PAGE' && args.component_ids.length !== args.selected.length)) fail('REQUEST_INVALID');
+    if(action==='PAYE_GUARD_DECISION'&&((args.decision==='UMBRELLA_ONLY'&&(args.reason!==null||Object.hasOwn(args,'reauth_token')))
+      ||(args.decision!=='UMBRELLA_ONLY'&&!field(args.reauth_token,'reauthToken'))))fail('REQUEST_INVALID');
     const bytes=JSON.stringify({ action, ...args });
+    if(action==='PAYE_GUARD_DECISION'&&encoder.encode(bytes).byteLength>32768)fail('REQUEST_INVALID');
     if(financial(action) && encoder.encode(bytes).byteLength>2048)fail('REQUEST_INVALID');
     return bytes;
   }
@@ -418,7 +442,9 @@ function field(v,type){
     if(action==='MATCHING_PAGE'&&(BigInt(payload.item_count)>100n||payload.skipped.length>Number(payload.item_count)
       ||(payload.complete!==(payload.next_after_member_no===null))||(!payload.complete&&(payload.item_count==='0'
       ||BigInt(payload.next_after_member_no)!==BigInt(args.after_member_no??'0')+BigInt(payload.item_count)))))fail();
-    if(action==='CREATE'&&(payload.empty!==(payload.selected_candidate_count==='0')||payload.empty!==(payload.agency_sequence===null)||BigInt(payload.selection_count)>BigInt(payload.choice_work_count)||payload.official_pay_date!==args.descriptor.namespace.official_pay_date))fail();
+    if(['CREATE','PAYE_GUARD_DECISION'].includes(action)&&(payload.empty!==(payload.selected_candidate_count==='0')||payload.empty!==(payload.agency_sequence===null)||BigInt(payload.selection_count)>BigInt(payload.choice_work_count)||payload.official_pay_date!==args.descriptor.namespace.official_pay_date))fail();
+    if(action==='PAYE_GUARD_DECISION'&&(payload.decision!==args.decision
+      ||payload.channel_scope!==({UMBRELLA_ONLY:'UMBRELLA',VERIFY_BOTH:'ALL',VERIFY_PAYE:'PAYE'})[args.decision]))fail();
     if(action==='WORK_PAGE'){
       const ids=args.choices.map(x=>x.work_id.toLowerCase()),positions=payload.skipped.map(x=>ids.indexOf(x.work_id.toLowerCase()));
       if(positions.some((n,i)=>n<0||(i>0&&n<=positions[i-1])))fail();
@@ -500,13 +526,13 @@ function field(v,type){
     return Object.freeze({
       async capabilities(){return capabilityReceipt(await call('/api/banking/capabilities?scope=NEXT',{method:'GET'},true),environment(options));},
       async reauthPreview(action,args){
-        const bytes=requestBody(action,args);
+        const bytes=reauthIntentBody(action,args);
         if(!reauthAction(action) || Object.hasOwn(args,'reauth_token'))fail('REQUEST_INVALID');
         const body=await call('/api/banking/pay/next/reauth-preview',{method:'POST',body:bytes},false,{action,args},8000);
         if(!record(body)||Object.keys(body).length!==2||body.ok!==true||!shape(body.preview,
-          {action_kind:'label',action_label:'label',candidate_count:'numberPositive',candidate_name:'label',total_amount:'cash',amount_basis:'label',scope_sha256:'sha?',accepted:'boolean',second_factor_required:'boolean'})
-          ||body.preview.action_kind!==action||body.preview.candidate_count!==1
-          ||!['CASH','DRAFT_GROSS'].includes(body.preview.amount_basis)
+          {action_kind:'label',action_label:'label',candidate_count:action==='PAYE_SAME_WEEK_OVERRIDE'?'null':'numberPositive',candidate_name:'label',total_amount:action==='PAYE_SAME_WEEK_OVERRIDE'?'null':'cash',amount_basis:'label',scope_sha256:'sha?',accepted:'boolean',second_factor_required:'boolean'})
+          ||body.preview.action_kind!==action||(action==='PAYE_SAME_WEEK_OVERRIDE'?body.preview.candidate_count!==null:body.preview.candidate_count!==1)
+          ||(action==='PAYE_SAME_WEEK_OVERRIDE'?body.preview.amount_basis!=='PAYE_POLICY':!['CASH','DRAFT_GROSS'].includes(body.preview.amount_basis))
           ||(body.preview.scope_sha256===null&&!(action==='CSV_ISSUE'&&body.preview.accepted)))fail();
         return Object.freeze({...body.preview});
       },
@@ -546,10 +572,21 @@ function field(v,type){
         return body;
       },
       async page(kind, args) {
-        const pageSchema=kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
+        const pageSchema=kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
         if (!Object.hasOwn(PAGES, kind) || !shape(args, pageSchema) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
-        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, String(v));
+        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, k==='descriptor'?JSON.stringify(v):String(v));
+        if(kind==='GUARD'&&encoder.encode(query.toString()).byteLength>128*1024)fail('REQUEST_INVALID');
         let body = await call('/api/banking/pay/next/preparation-page?' + query.toString(), { method: 'GET' },false,null,kind==='PROGRESS'?Math.min(options.timeoutMs??LIMITS.timeout,2000):options.timeoutMs??LIMITS.timeout);
+  if(kind==='GUARD'){
+    if(!shape(body,{ok:'true',kind:'label',rows:'guardRows',complete:'true',next_cursor:'null'})||body.kind!==kind)fail();
+    const g=body.rows[0];if(!same(g.run_id,args.run_id)||g.guard_applies!==(g.paye_candidates!=='0'&&g.existing.length>0)
+      ||g.unexecuted!==g.existing.some(x=>x.unexecuted)||g.channel_scope!==({NONE:'ALL',UMBRELLA_ONLY:'UMBRELLA',VERIFY_BOTH:'ALL',VERIFY_PAYE:'PAYE'})[g.decision])fail();
+    if(args.descriptor){const d=args.descriptor,c=g.context;
+      if(c.workbench_revision!==d.workbench_revision||c.adoption_revision!==d.adoption_revision
+        ||['agency_id','owner_epoch','actor_user_id','official_pay_date'].some(k=>c.namespace[k]!==d.namespace[k])
+        ||['candidate_id','client_id','channel'].some(k=>c.namespace.scope[k]!==d.namespace.scope[k]))fail();}
+    return body;
+  }
   if(kind==='PROGRESS'){
     if(!record(body)||Object.keys(body).sort().join()!=='complete,kind,next_cursor,ok,rows'||body.ok!==true||body.kind!==kind
       ||body.complete!==true||body.next_cursor!==null||!Array.isArray(body.rows)||body.rows.length!==1||!shape(body.rows[0],ROWS.PROGRESS))fail();
@@ -691,7 +728,7 @@ function field(v,type){
     const immutable=value=>{if(value&&typeof value==='object'){for(const child of Object.values(value))immutable(child);Object.freeze(value);}return value;};
     const hash=async bytes=>Array.from(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256',encoder.encode(bytes))),value=>value.toString(16).padStart(2,'0')).join('');
     const phases=['CREATE','SUBSETS','EXCLUSIONS','MATCHING','EXPLICIT','CASES','GUARD','SEAL','READBACK','COMPLETE','EMPTY'];
-    const allowed=new Set(['CREATE','WORK_PAGE','EXCLUSION_PAGE','MATCHING_PAGE','COMPONENT_PAGE','COMPONENT_SEAL','CASE_PAGE','CASE_SEAL','SEAL_ENQUEUE']);
+    const allowed=new Set(['CREATE','PAYE_GUARD_DECISION','WORK_PAGE','EXCLUSION_PAGE','MATCHING_PAGE','COMPONENT_PAGE','COMPONENT_SEAL','CASE_PAGE','CASE_SEAL','SEAL_ENQUEUE']);
     const upload=()=>({member_no:null,subset_cursor:'0',subset:null,component_page:'0',component_count:'0',component_scan_after:null,component_scan_count:'0',component_ready:false,remaining_ids:[],exclusion_page:'0'});
     const inputRow={member_no:'positive',candidate_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',selection_mode:'mode',skip_code:'skipCode?',choice_state:'selection?',component_page_count:'integer?',component_count:'integer?'};
     const readback=()=>({work_cursor:null,work_page:[],work_complete:false,index:0,component_cursor:null,component_count:'0',seen_works:'0'});
@@ -713,9 +750,9 @@ function field(v,type){
             ||Object.keys(saved).sort().join()!==(saved===value.pending?['action','bytes','body_sha256']:['action','bytes','body_sha256','result']).sort().join())return false;
           const {action,...args}=JSON.parse(saved.bytes);
           if(action!==saved.action||requestBody(action,args)!==saved.bytes||!same(args.run_id,value.run_id))return false;
-          if(action==='CREATE'&&(!same(args.command_id,value.command_id)||JSON.stringify(args.descriptor)!==JSON.stringify(value.descriptor)
+          if(['CREATE','PAYE_GUARD_DECISION'].includes(action)&&(!same(args.command_id,value.command_id)||JSON.stringify(args.descriptor)!==JSON.stringify(value.descriptor)
             ||(saved===value.pending&&value.phase!=='CREATE')))return false;
-          if(action!=='CREATE'&&(value.create_receipt===null||value.create_receipt.empty))return false;
+          if(!['CREATE','PAYE_GUARD_DECISION'].includes(action)&&(value.create_receipt===null||value.create_receipt.empty))return false;
           if(action==='SEAL_ENQUEUE'&&(!same(args.command_id,value.command_id)||args.expected_pages!==value.selection_pages||args.expected_count!==value.selection_count))return false;
           if(['WORK_PAGE','MATCHING_PAGE'].includes(action)&&saved===value.pending&&args.page_no!==String(BigInt(value.selection_pages)+1n))return false;
           if(saved===value.last_receipt){
@@ -769,7 +806,7 @@ function field(v,type){
           if(result.complete!==(BigInt(args.page_no)===BigInt(Math.max(1,Math.ceil(exclusions/100)))))fail('RESPONSE_INVALID');
         }
         const next={...state,pending:null,last_receipt:{...pending,result}};
-        if(action==='CREATE'){next.create_receipt=result;next.selection_count=result.selection_count;next.phase=result.empty?'EMPTY':'SUBSETS';}
+        if(['CREATE','PAYE_GUARD_DECISION'].includes(action)){const {decision,channel_scope,...original}=result;next.create_receipt=original;next.selection_count=result.selection_count;next.phase=result.empty?'EMPTY':'SUBSETS';}
         if(action==='WORK_PAGE'){next.selection_pages=result.page_no;next.selection_count=result.selection_count;
           if(state.upload.member_no!==null||state.selection_pages==='0')next.upload={...state.upload,member_no:String(BigInt(state.upload.member_no??'0')+BigInt(result.item_count))};
           if(state.phase==='SUBSETS'&&state.upload.subset&&args.choices.length===1&&same(args.choices[0].work_id,state.upload.subset.work_id)&&result.skipped.length){
@@ -797,7 +834,7 @@ function field(v,type){
     async function submit(action,args,internal=false){
         authority();if(operation.busy||state.pending!==null||(operation.sequencing&&!internal))fail('OUTCOME_UNKNOWN');
         if(!allowed.has(action)||!same(args?.run_id,state.run_id))fail('REQUEST_INVALID');
-        if(action==='CREATE'){if(state.phase!=='CREATE'||JSON.stringify(args.descriptor)!==JSON.stringify(state.descriptor)||!same(args.command_id,state.command_id))fail('REQUEST_INVALID');}
+        if(['CREATE','PAYE_GUARD_DECISION'].includes(action)){if(state.phase!=='CREATE'||JSON.stringify(args.descriptor)!==JSON.stringify(state.descriptor)||!same(args.command_id,state.command_id))fail('REQUEST_INVALID');}
         else if(!state.create_receipt||state.create_receipt.empty||['READBACK','COMPLETE'].includes(state.phase))fail('REQUEST_INVALID');
         if(['WORK_PAGE','MATCHING_PAGE'].includes(action)&&args.page_no!==String(BigInt(state.selection_pages)+1n))fail('REQUEST_INVALID');
         if(action==='SEAL_ENQUEUE'&&(!same(args.command_id,state.command_id)||args.expected_pages!==state.selection_pages||args.expected_count!==state.selection_count))fail('REQUEST_INVALID');
@@ -805,6 +842,9 @@ function field(v,type){
         authority();if(operation.busy||state.pending!==null||(operation.sequencing&&!internal))fail('OUTCOME_UNKNOWN');save({...state,pending:{action,bytes,body_sha256}});return dispatch(false);
       }
     return Object.freeze({key,snapshot,
+      async decide(decision,reason,token){return this.mutate('PAYE_GUARD_DECISION',{run_id:state.run_id,command_id:state.command_id,descriptor:state.descriptor,decision,reason,...(token===null?{}:{reauth_token:token})});},
+      retireUnaccepted(){authority();if(operation.busy||operation.sequencing||state.pending!==null||state.phase!=='CREATE'||state.create_receipt!==null)fail('OUTCOME_UNKNOWN');
+        try{storage?.removeItem(key);}catch{fail('JOURNAL_INVALID');}operation.retired=true;choiceSubmissionMemory.delete(key);choiceSubmissionOperations.delete(key);},
       async create(){return this.mutate('CREATE',{run_id:state.run_id,command_id:state.command_id,descriptor:state.descriptor});},
       async mutate(action,args){return submit(action,args);},
       async retry(){if(operation.busy||operation.sequencing||state.pending===null)fail('NO_PENDING_REQUEST');return dispatch(true);},
@@ -893,8 +933,11 @@ function field(v,type){
       },
       async sealEnqueue(){
         authority();if(operation.busy||operation.sequencing||state.pending!==null||!['GUARD','SEAL'].includes(state.phase))fail('REQUEST_INVALID');
-        // DR-10 adds its real conditional Guard read/decision before this seam.
-        if(state.phase==='GUARD')save({...state,phase:'SEAL'});
+        if(state.phase==='GUARD'){
+          const g=(await options.transport.page('GUARD',{run_id:state.run_id})).rows[0];authority();
+          if(g.guard_applies&&g.decision==='NONE'||g.unexecuted&&['VERIFY_BOTH','VERIFY_PAYE'].includes(g.decision))fail('GUARD_UNRESOLVED');
+          save({...state,phase:'SEAL'});
+        }
         return submit('SEAL_ENQUEUE',{run_id:state.run_id,command_id:state.command_id,expected_pages:state.selection_pages,expected_count:state.selection_count});
       },
       acknowledgeComplete(store){
@@ -1068,11 +1111,75 @@ function field(v,type){
   }
   // EX-01: this native child owns credential fields only. The server supplies
   // action/Candidate/amount; the existing caller owns the original command.
+  // DR-10 / SCR-39: one original-cut policy choice, never a financial total.
+  async function openPayeSameWeekGuard(options,guard,submission){
+    requireActor(options);
+    if(typeof options.showReadWindow!=='function'||typeof options.current!=='function'||!field([guard],'guardRows')
+      ||!guard.guard_applies||!same(guard.run_id,submission.run_id)||!field(submission.command_id,'uuid')||!field(submission.descriptor,'descriptor'))fail('REQUEST_INVALID');
+    const doc=options.document||document,win=options.window||window;
+    const el=(tag,text,cls)=>{const node=doc.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
+    const content=el('section',undefined,'bpay-next-paye-guard'),footer=el('div',undefined,'bpay-next-window-actions');
+    const notice=el('div',undefined,'bpay-next-paye-banner '+(guard.unexecuted?'is-blocked':'is-warning'));
+    notice.append(el('strong',guard.unexecuted?'An unpaid PAYE Draft already exists for this pay week.':'A paid PAYE Draft already exists for this pay week.'),
+      el('p',guard.unexecuted?'Pay or cancel that Draft first, or create the Umbrella Draft only.':'Another PAYE Draft for the same week needs a verified override.'));
+    content.append(notice);
+    const subjects=el('div',undefined,'bpay-next-paye-subjects');
+    for(const fact of guard.existing){const subject=el('div',undefined,'bpay-next-paye-subject');subject.append(el('strong','PAYE Draft'+(fact.reference?' · '+fact.reference:'')),el('span',fact.status));subjects.append(subject);}
+    content.append(subjects);
+    const choices=el('fieldset',undefined,'bpay-next-paye-choices');choices.append(el('legend','What to create'));
+    const name='paye-choice-'+submission.run_id;
+    let decision=guard.unexecuted?'UMBRELLA_ONLY':'VERIFY_BOTH',busy=false,closed=false,frame,resolve,reject;
+    const done=new Promise((r,j)=>{resolve=r;reject=j;});
+    const definitions=[['UMBRELLA_ONLY','Create Umbrella only',guard.umbrella_candidates+' Candidates. PAYE payments stay ticked.'],
+      ['VERIFY_BOTH','Verify and create PAYE + Umbrella',guard.paye_candidates+' PAYE and '+guard.umbrella_candidates+' Umbrella Candidates.'],
+      ['VERIFY_PAYE','Verify and create PAYE Draft',guard.paye_candidates+' Candidates.']];
+    for(const [key,title,sub] of definitions){if(guard.unexecuted&&key!=='UMBRELLA_ONLY')continue;
+      const label=el('label',undefined,'bpay-next-paye-choice'),radio=el('input');radio.type='radio';radio.name=name;radio.value=key;radio.checked=key===decision;
+      radio.onchange=()=>{if(busy||!current())return;decision=key;paint();};label.append(radio,el('strong',title),el('span',sub));choices.append(label);}
+    content.append(choices);
+    const reasonLabel=el('label',undefined,'bpay-next-paye-reason'),reason=el('textarea');reason.rows=3;reason.maxLength=500;reason.placeholder='Required';reasonLabel.append(el('span','Reason for the override'),reason);
+    const confirmLabel=el('label',undefined,'bpay-next-paye-confirm'),confirm=el('input');confirm.type='checkbox';confirmLabel.append(confirm,el('span','I confirm a second PAYE Draft for this pay week'));
+    if(!guard.unexecuted)content.append(reasonLabel,confirmLabel);
+    const result=el('p','', 'ws-notice ws-notice--danger');result.dataset.nextLiveCopy='';result.hidden=true;result.setAttribute('role','alert');content.append(result);
+    const hint=el('span','Next: your password and code.','bpay-next-paye-hint'),cancel=el('button','Cancel','btn'),create=el('button','Verify and create','btn primary');
+    cancel.type=create.type='button';cancel.dataset.nextSecondary='';footer.append(hint,cancel,create);
+    const current=()=>!closed&&options.current()===true&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true;
+    function paint(){const verify=decision!=='UMBRELLA_ONLY';reasonLabel.hidden=confirmLabel.hidden=!verify;hint.hidden=!verify&&guard.umbrella_candidates!=='0';
+      hint.textContent=!verify?'No Umbrella payments are ticked.':busy?'Checking…':!reason.value.trim()?'Enter a reason and tick the confirmation.':!field(reason.value,'guardReason')?'Enter a shorter reason.':!confirm.checked?'Tick the confirmation to continue.':'Next: your password and code.';
+      create.textContent=busy?'Checking…':verify?'Verify and create':'Create Umbrella Draft';
+      create.disabled=busy||!current()||(verify&&(!field(reason.value,'guardReason')||!confirm.checked));
+      cancel.disabled=busy;for(const input of choices.querySelectorAll('input'))input.disabled=busy;reason.disabled=confirm.disabled=busy;
+      // No empty companion Draft can be requested.
+      if(!verify&&guard.umbrella_candidates==='0')create.disabled=true;
+    }
+    reason.oninput=confirm.onchange=paint;
+    cancel.onclick=()=>{if(!busy)void frame.close();};
+    create.onclick=async()=>{if(create.disabled||!current())return;busy=true;result.hidden=true;paint();
+      try{let token=null;const savedReason=decision==='UMBRELLA_ONLY'?null:reason.value;
+        if(decision!=='UMBRELLA_ONLY')token=await openBpayNextReauth({...options,reauthCurrent:()=>current()&&frame.alive()},
+          {action:'PAYE_SAME_WEEK_OVERRIDE',run_id:submission.run_id,command_id:submission.command_id,decision,reason:savedReason,context:guard.context});
+        if(!current())fail('ACCEPTED_IDENTITY_CONFLICT');if(decision!=='UMBRELLA_ONLY'&&token===null)return;
+        resolve({decision,reason:savedReason,token});await frame.close();
+      }catch(e){
+        if(['BPAY_NEXT_CHOICE_CONTEXT_CHANGED','BPAY_NEXT_WORKBENCH_CURSOR_STALE'].includes(e?.serverCode)){
+          e.serverCode='BPAY_NEXT_CHOICE_CONTEXT_CHANGED';reject(e);await frame.close();return;
+        }
+        result.textContent='Could not verify this choice; try again.';result.hidden=false;
+        win.requestAnimationFrame(()=>{if(!closed)result.scrollIntoView({block:'center'});});
+      }
+      finally{busy=false;if(!closed)paint();}
+    };
+    frame=options.showReadWindow({title:'PAYE Draft needs your decision',content,footer,small:true,
+      canFocus:()=>same(options.currentActorId(),options.actorId)&&options.ownerReady()===true,
+      onDismiss:()=>{closed=true;reason.value='';confirm.checked=false;resolve(null);}});
+    paint();return done;
+  }
+
   async function openBpayNextReauth(options,intent) {
     requireActor(options);
     if(!options || typeof options.showReadWindow!=='function' || typeof options.currentActorId!=='function'
       || typeof options.ownerReady!=='function' || !record(intent) || !reauthAction(intent.action))fail('DEPENDENCY_UNAVAILABLE');
-    const {action,...args}=intent,bytes=requestBody(action,args);
+    const {action,...args}=intent,bytes=reauthIntentBody(action,args);
     if(Object.hasOwn(args,'reauth_token'))fail('REQUEST_INVALID');
     const doc=options.document||document,win=options.window||window,transport=options.transport||createTransport(options);
     const prefix=(win.__modalStack||[]).slice(),endpoint=options.api('/api/banking/pay/next/command');
@@ -1084,9 +1191,10 @@ function field(v,type){
     const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
     const content=el('section',undefined,'bpay-next-reauth'),intro=el('div',undefined,'bpay-next-reauth-intro');
     const title=el('strong',preview.action_label+' · '+preview.candidate_name);
-    const [whole,fraction='']=preview.total_amount.split('.');
-    const amount=el('p','£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0')+(preview.amount_basis==='DRAFT_GROSS'?' · Draft gross':''));
-    intro.append(title,amount);content.append(intro);
+    intro.append(title);
+    if(preview.total_amount!==null){const [whole,fraction='']=preview.total_amount.split('.');
+      intro.append(el('p','£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0')+(preview.amount_basis==='DRAFT_GROSS'?' · Draft gross':'')));}
+    content.append(intro);
     const fieldWrap=el('label',undefined,'bpay-next-reauth-field'),fieldTitle=el('span','Password'),input=el('input');
     input.type='password';input.autocomplete='current-password';input.placeholder='Your CloudTMS password';input.dataset.nextFocusKey='reauth-password';fieldWrap.append(fieldTitle,input);
     const error=el('p','', 'bpay-next-reauth-error'),result=el('p','', 'bpay-next-reauth-result');error.setAttribute('role','alert');result.setAttribute('role','status');
@@ -1129,7 +1237,7 @@ function field(v,type){
       const expected=start?{ok:'true',tfa_required:'false',purpose:'label',reauth_token:'reauthToken',expires_in:'numberPositive'}
         :{ok:'true',purpose:'label',reauth_token:'reauthToken',expires_in:'numberPositive'};
       if(!shape(body,expected)||body.purpose!=='BPAY_NEXT_ACTION'||body.expires_in>300||!current())fail();
-      requestBody(action,{...args,reauth_token:body.reauth_token});
+      reauthIntentBody(action,{...args,reauth_token:body.reauth_token});
       token=body.reauth_token;clearCredentials();await frame.close();
     }
     async function start(){
@@ -1174,23 +1282,24 @@ function field(v,type){
     for(const node of [consequence,values,result])node.setAttribute('data-next-live-copy','');values.setAttribute('role','status');result.setAttribute('role','alert');result.hidden=true;content.append(question,consequence,values,result);
     const footer=el('div',undefined,'bpay-next-window-actions'),cancel=el('button','Cancel','btn'),create=el('button','Create Draft','btn primary');
     cancel.type=create.type='button';cancel.dataset.nextSecondary='';create.disabled=true;footer.append(cancel,create);
-    let frame,closed=false,counting=false,count=null,failed=false,accepted=false,resolve;
+    let frame,closed=false,counting=false,count=null,failed=false,stale=false,accepted=false,resolve;
     const done=new Promise(r=>{resolve=r;});
     const current=()=>{try{return !closed&&options.current()===true&&store.snapshot().revision===revision&&JSON.stringify(store.freeze(options.currentContext()))===JSON.stringify(captured);}catch{return false;}};
-    function update(){content.classList.toggle('is-failed',failed);icon.textContent=failed?'!':'?';create.textContent=failed?'Try again':'Create Draft';create.disabled=counting||!current()||(!failed&&(!count||count.candidate_count==='0'));result.classList.toggle('ws-notice',failed);result.classList.toggle('ws-notice--danger',failed);result.hidden=!failed&&count?.candidate_count!=='0';result.setAttribute('role',failed?'alert':'status');result.textContent=failed?'Try again or contact support if it keeps happening.':count?.candidate_count==='0'?'There is nothing to pay in this selection.':'';}
+    function update(){content.classList.toggle('is-failed',failed);icon.textContent=failed?'!':'?';create.textContent=stale?'Refresh':failed?'Try again':'Create Draft';create.disabled=counting||(stale?options.current()!==true:!current()||(!failed&&(!count||count.candidate_count==='0')));result.classList.toggle('ws-notice',failed);result.classList.toggle('ws-notice--danger',failed);result.hidden=!failed&&count?.candidate_count!=='0';result.setAttribute('role',failed?'alert':'status');result.textContent=stale?'The list has changed. Refresh and try again.':failed?'Try again or contact support if it keeps happening.':count?.candidate_count==='0'?'There is nothing to pay in this selection.':'';}
     async function readCount(){
       if(counting||!current())return;counting=true;failed=false;count=null;title.textContent='Create Draft?';consequence.textContent='The Draft will include exactly what is ticked now. Anything that changes afterwards goes to the next Draft.';values.hidden=false;values.textContent='Counting ticked Candidates…';update();
       try{
         const value=await options.countSelection();
-        if(!current()||!field(value.candidate_count,'integer')||!field(value.member_count,'integer')||!sameWorkbenchRevisionForSubmit(context,value.context))throw new Failure('RESPONSE_INVALID');
+        if(!current()||!sameWorkbenchRevisionForSubmit(context,value.context)){const changed=new Failure('SERVER_REFUSED');changed.serverCode='BPAY_NEXT_CHOICE_CONTEXT_CHANGED';throw changed;}
+        if(!field(value.candidate_count,'integer')||!field(value.member_count,'integer'))throw new Failure('RESPONSE_INVALID');
         count=value;title.textContent='Create Draft for '+BigInt(value.candidate_count).toLocaleString('en-GB')+(value.candidate_count==='1'?' Candidate?':' Candidates?');
         const channel=captured.namespace.scope.channel;values.textContent=(channel==='ALL'?'PAYE + Umbrella':channel==='PAYE'?'PAYE':'Umbrella')+' · '+options.selectionLabel();
-      }catch{
-        if(closed)return;failed=true;title.textContent='Could not count the ticked Candidates.';consequence.textContent='Nothing was created. Your ticks are kept.';values.hidden=true;
+      }catch(e){
+        if(closed)return;failed=true;stale=['BPAY_NEXT_CHOICE_CONTEXT_CHANGED','BPAY_NEXT_WORKBENCH_CURSOR_STALE'].includes(e?.serverCode);title.textContent=stale?'Create Draft?':'Could not count the ticked Candidates.';consequence.textContent='Nothing was created. Your ticks are kept.';values.hidden=true;
       }finally{counting=false;if(!closed)update();}
     }
     cancel.addEventListener('click',()=>void frame.close());
-    create.addEventListener('click',()=>{if(create.disabled||!current())return;if(failed){void readCount();return;}accepted=true;void frame.close();});
+    create.addEventListener('click',()=>{if(create.disabled)return;if(stale){void frame.close().then(()=>options.onRefresh?.());return;}if(!current())return;if(failed){void readCount();return;}accepted=true;void frame.close();});
     frame=options.showReadWindow({title:'Create Draft',content,footer,small:true,confirmation:true,canFocus:()=>options.current()===true,onDismiss:()=>{let answer=null;try{if(accepted&&current())answer=store.freeze(options.currentContext());}catch{}closed=true;resolve(answer);},onMount:()=>void readCount()});
     // The standard adapter schedules onMount; direct local adapters may not.
     return done;
@@ -1603,7 +1712,7 @@ function field(v,type){
         submission=createChoiceSubmission({...submissionOptions,resumeOnly:true});
         if(!submission){
           const descriptor=await openCreateDraftConfirmation({...options,document:doc,choiceStore:store,context,current,currentContext:()=>readyLists.snapshot().context,
-            countSelection:()=>readyLists.countSelection(),selectionLabel:()=>readyLists.selectionLabel()});
+            countSelection:()=>readyLists.countSelection(),selectionLabel:()=>readyLists.selectionLabel(),onRefresh:async()=>{await workbenchShell.load();await readyLists.refresh();}});
           if(!descriptor)return;
           if(!current())fail('ACCEPTED_IDENTITY_CONFLICT');
           submission=createChoiceSubmission({...submissionOptions,descriptor});
@@ -1614,7 +1723,20 @@ function field(v,type){
           try{
             let state=submission.snapshot();
             if(state.pending){await submission.retry();state=submission.snapshot();}
-            if(state.phase==='CREATE'){await submission.create();state=submission.snapshot();}
+            if(state.phase==='CREATE'){
+              const captured=state.descriptor;
+              const cutCurrent=()=>current()&&JSON.stringify(store.freeze(readyLists.snapshot().context))===JSON.stringify(captured);
+              if(!cutCurrent()){const changed=new Failure('SERVER_REFUSED');changed.serverCode='BPAY_NEXT_CHOICE_CONTEXT_CHANGED';throw changed;}
+              const guard=(await transport.page('GUARD',{run_id:state.run_id,descriptor:captured})).rows[0];
+              if(!cutCurrent()){const changed=new Failure('SERVER_REFUSED');changed.serverCode='BPAY_NEXT_CHOICE_CONTEXT_CHANGED';throw changed;}
+              if(guard.guard_applies){
+                const decision=await openPayeSameWeekGuard({...options,document:doc,window:win,transport,current:cutCurrent},guard,state);
+                if(decision===null){submission.retireUnaccepted();finished=true;await submissionWindow.close();return;}
+                if(!cutCurrent()){const changed=new Failure('SERVER_REFUSED');changed.serverCode='BPAY_NEXT_CHOICE_CONTEXT_CHANGED';throw changed;}
+                await submission.decide(decision.decision,decision.reason,decision.token);
+              }else await submission.create();
+              state=submission.snapshot();
+            }
             if(['SUBSETS','EXCLUSIONS','MATCHING','EXPLICIT'].includes(state.phase)){await submission.advanceSelection();state=submission.snapshot();}
             if(state.phase==='CASES'){await submission.advanceCases();state=submission.snapshot();}
             if(['GUARD','SEAL'].includes(state.phase)){await submission.sealEnqueue();state=submission.snapshot();}
@@ -1635,7 +1757,12 @@ function field(v,type){
               readyLists?.refreshSelection();workbenchShell?.refreshSelectionLabel();
             }
           }catch(e){
-            const state=submission.snapshot();if(progressWindow){progressWindow.submissionFailure();return;}const beforeAcceptance=state.phase==='CREATE'&&state.create_receipt===null&&state.pending===null&&e instanceof Failure&&['SERVER_REFUSED','AUTH_REQUIRED'].includes(e.code)&&!e.unknown;
+            const state=submission.snapshot();
+            if(e?.serverCode==='BPAY_NEXT_CHOICE_CONTEXT_CHANGED'&&state.phase==='CREATE'&&state.pending===null){
+              spinner.hidden=true;keepOpen.hidden=true;message.textContent='The list has changed. Refresh and try again.';result.hidden=true;
+              footer.replaceChildren(button('Refresh',async()=>{submission.retireUnaccepted();finished=true;await submissionWindow.close();await workbenchShell.load();await readyLists.refresh();},false,true));footer.hidden=false;return;
+            }
+            if(progressWindow){progressWindow.submissionFailure();return;}const beforeAcceptance=state.phase==='CREATE'&&state.create_receipt===null&&state.pending===null&&e instanceof Failure&&['SERVER_REFUSED','AUTH_REQUIRED'].includes(e.code)&&!e.unknown;
             message.textContent=beforeAcceptance?'The Draft was not started; your ticks are kept.':state.pending?'The result is not known; your request is kept.':'The request is kept and can be continued.';
             keepOpen.hidden=true;spinner.hidden=true;result.className='ws-notice ws-notice--danger';result.textContent='Could not finish sending the ticked payments.';result.hidden=false;
             if(!retry){retry=button('Try again',()=>void continueOriginal(),false,true);retry.className='btn primary';footer.hidden=false;footer.append(retry);}retry.disabled=false;
@@ -1789,5 +1916,5 @@ function field(v,type){
       const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();child.document.close();dates.formatAdvice(child.document);completed=true;
     }finally{win.clearTimeout(timer);controller.abort();controller.signal.removeEventListener('abort',abort);await reader?.cancel().catch(()=>{});reader?.releaseLock();if(!reader)await response?.body?.cancel().catch(()=>{});if(!completed&&!child.closed){child.document.write('<p style="color:#900">INCOMPLETE: advice could not be loaded. Do not use this as complete payment advice.</p>');child.document.close();}}
   }
-  return Object.freeze({ open, close, openBpayNextReauth, openBpayNextPaymentIssueReauth, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
+  return Object.freeze({ open, close, openBpayNextReauth, openBpayNextPaymentIssueReauth, openPayeSameWeekGuard, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
 });
