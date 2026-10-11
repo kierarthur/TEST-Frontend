@@ -8,7 +8,7 @@ function open(options,seed={}){
   const doc=options.document,win=options.window,Office=win.CloudTMSBpayNextOffice,Cases=win.CloudTMSBpayNextCasePreview;
   if(!Office||!Cases||!UUID.test(options.actorId)||options.ownerReady?.()!==true||options.currentActorId?.()!==options.actorId
     ||typeof options.showReadWindow!=='function'||typeof options.pickCandidate!=='function')throw Error('Window unavailable');
-  const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+  const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;if(cls==='bpay-next-case-result')n.setAttribute('role',String(text??'').startsWith('Could not')?'alert':'status');return n;};
   const body=el('section',undefined,'bpay-next-advance bpay-next-credit'),form=el('fieldset',undefined,'bpay-next-advance-form'),previewHost=el('div'),footer=el('div');
   const field=(label,name,{area=false,placeholder='',hint='',value=''}={})=>{
     const wrap=el('label',undefined,'bpay-next-advance-field'),title=el('span',label),input=el(area?'textarea':'input');input.id='bpay-next-credit-'+name;input.name=name;input.value=value;input.placeholder=placeholder;

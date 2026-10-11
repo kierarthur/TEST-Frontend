@@ -94,7 +94,7 @@ function mount(options){
     const input=currentInput(),pending=snapshot()?.pending;
     if(shown&&(!input||!equal(input,shownInput))){shown=null;shownInput=null;line='Details changed; preview again.';}
     result.textContent=line==='Preview first.'&&!input?(options.inputHint?.()||line):line;
-    result.setAttribute('role',/Could not|Set a pay channel|Sign in|Details have changed/.test(result.textContent)?'alert':'status');
+    result.setAttribute('role',/Could not|Set a pay channel|Sign in|Details have changed|This Case (?:has payment activity|is in a Draft|has changed|cannot)/.test(result.textContent)?'alert':'status');
     panel.replaceChildren();panel.hidden=shown===null;
     const empty=doc.createElement('dl');empty.className='bpay-next-case-empty';empty.hidden=shown!==null||!options.showEmptySchedule||Boolean(pending)||accepted!==null;
     for(const title of ['Weekly repayment','Last due']){const term=doc.createElement('dt'),value=doc.createElement('dd');term.textContent=title;value.textContent='—';empty.append(term,value);}
