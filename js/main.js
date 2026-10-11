@@ -280889,6 +280889,24 @@ async function openCandidate(row) {
       const originalMethod = (full && full.pay_method) ? String(full.pay_method).toUpperCase() : null;
       const newMethod      = payload.pay_method ? String(payload.pay_method).toUpperCase() : null;
       const hasExistingId  = !!full?.id;
+      // EX-08: qualify before choosing either the NEXT route or legacy bank rules.
+      const routeParent = currentFrame(), routeContext = window.modalCtx, routeActor = SESSION?.user?.id;
+      let nextPayOwner = null;
+      if (hasExistingId && ['PAYE','UMBRELLA'].includes(originalMethod) && ['PAYE','UMBRELLA'].includes(newMethod)) {
+        try {
+          const ownerClient = bankingNextOwnerClient();
+          if (!ownerClient) throw Error();
+          nextPayOwner = await ownerClient.begin('candidate:pay-method:'+full.id+':'+crypto.randomUUID());
+          if (currentFrame()!==routeParent || window.modalCtx!==routeContext || SESSION?.user?.id!==routeActor) return {ok:false};
+          if (!['NEXT','LEGACY'].includes(nextPayOwner?.active_owner)) throw Error();
+        } catch {
+          await openUiConfirmModal({title:'Change pay channel',message:'Could not check payment settings; try again.',confirm_label:'Close',hide_cancel:true,kind:'candidate-pay-method-notice'});
+          return {ok:false};
+        }
+      }
+      const nextPayChange = nextPayOwner?.active_owner==='NEXT';
+      const isNextUmbrellaChange = nextPayChange && originalMethod==='UMBRELLA' && newMethod==='UMBRELLA'
+        && String(full.umbrella_id??'').toLowerCase()!==String(payload.umbrella_id??'').toLowerCase();
 
       const isFlip = !!(
         hasExistingId &&
@@ -280972,7 +280990,7 @@ async function openCandidate(row) {
 
       let routeChangeResult = null;
 
-      if (isFlip) {
+      if (isFlip || isNextUmbrellaChange) {
         L('[onSave] detected prospective-only PAYE↔UMBRELLA change', {
           originalMethod,
           newMethod,
@@ -280995,7 +281013,7 @@ async function openCandidate(row) {
             return { ok:false };
           }
           destinationPatch.umbrella_id = effectiveUmbrellaId;
-        } else {
+        } else if (!nextPayChange) {
           normaliseTouchedCandidateBankFields(
             destinationPatch,
             payload,
@@ -281010,13 +281028,16 @@ async function openCandidate(row) {
             originalMethod,
             newMethod,
             candidate_id: full.id,
-            destination_patch: destinationPatch
+            destination_patch: destinationPatch,
+            next_owner: nextPayOwner
           });
 
           if (!outcome || outcome.confirmed !== true || !outcome.result) {
             L('[onSave] pay-method change cancelled or not committed');
             return { ok:false };
           }
+          if (currentFrame()!==routeParent || window.modalCtx!==routeContext || SESSION?.user?.id!==routeActor
+              || (nextPayChange && bankingNextOwnerClient()?.peek()?.owner_epoch!==nextPayOwner.owner_epoch)) return {ok:false};
 
           routeChangeResult = outcome.result;
           const authoritativeCandidate = (
@@ -281030,20 +281051,21 @@ async function openCandidate(row) {
             ...(newMethod === 'PAYE' ? destinationPatch : {})
           };
 
-          full = { ...full, ...authoritativeCandidate, pay_method: newMethod };
+          const acceptedMethod = nextPayChange ? authoritativeCandidate.pay_method : newMethod;
+          full = { ...full, ...authoritativeCandidate, pay_method: acceptedMethod };
           window.modalCtx.__payFlipDone = true;
           window.modalCtx.__payMethodChangeOperationId = routeChangeResult.operation_id || null;
           window.modalCtx.__payMethodChangeJobId = routeChangeResult.job_id || null;
           window.modalCtx.data = {
             ...(window.modalCtx.data || {}),
             ...authoritativeCandidate,
-            pay_method: newMethod
+            pay_method: acceptedMethod
           };
-          window.modalCtx.dbPayMethod = newMethod;
+          window.modalCtx.dbPayMethod = acceptedMethod;
 
           try {
             const payMethodSelect = document.querySelector('select[name="pay_method"]');
-            if (payMethodSelect) payMethodSelect.value = newMethod;
+            if (payMethodSelect) payMethodSelect.value = acceptedMethod;
           } catch (selectError) {
             W('failed to synchronise pay_method select after committed change', selectError);
           }
@@ -281053,7 +281075,7 @@ async function openCandidate(row) {
           // re-run the route transition or create a second TSFIN propagation path.
           delete payload.pay_method;
           delete payload.umbrella_id;
-          for (const field of candidateBankClearFields) delete payload[field];
+          if (!nextPayChange) for (const field of candidateBankClearFields) delete payload[field];
 
           L('[onSave] prospective-only pay-method change committed', {
             operation_id: routeChangeResult.operation_id || null,
@@ -281079,7 +281101,7 @@ async function openCandidate(row) {
 
       // If we are saving as UMBRELLA in a non-flip scenario, always clear bank
       // details on the candidate record to avoid confusion with old PAYE data.
-      if (payload.pay_method === 'UMBRELLA') {
+      if (payload.pay_method === 'UMBRELLA' && !nextPayChange) {
         clearBankOnPayload(payload);
       }
 
@@ -281092,7 +281114,11 @@ if (Object.prototype.hasOwnProperty.call(payload, 'key_norm')) {
 // Preserve intentional PAYE bank-field clears as null before the generic empty-string cleanup.
 // The dedicated route-change RPC has already committed route destination fields, so the
 // ordinary candidate PATCH must not write those fields a second time.
-if (routeChangeResult) {
+if (nextPayChange) {
+  // Company display and method repaints are not Candidate bank-edit intent.
+  for (const field of candidateBankClearFields) delete payload[field];
+  normaliseTouchedCandidateBankFields(payload, routeContext.__bpayNextOwnBankIntent || {});
+} else if (routeChangeResult) {
   for (const field of candidateBankClearFields) delete payload[field];
 } else {
   normaliseTouchedCandidateBankFields(payload, statePay, pay);
@@ -285407,6 +285433,15 @@ async function mountCandidatePayTab() {
   const fs = window.modalCtx.formState;
   fs.pay = fs.pay || {};
   const stagedPay = fs.pay;
+  // Trusted edits to the existing PAYE controls remain separately owned by Candidate save.
+  for (const [field,input] of [['account_holder',accHolder],['bank_name',bankName],['sort_code',sortCode],['account_number',accNum]]) {
+    if (!input) continue;
+    input.addEventListener('input', event=>{
+      if (!event.isTrusted || !isCurrentPayMount() || payMethod!=='PAYE' || input.disabled) return;
+      payContext.__bpayNextOwnBankIntent ||= {};
+      payContext.__bpayNextOwnBankIntent[field] = input.value;
+    });
+  }
 
   if (LOG) {
     console.log('[PAYTAB] STATE@ENTRY', {
@@ -289162,7 +289197,37 @@ async function openClientPicker(onPick, opts) {
 
 
 
+async function openNextCandidatePayMethodChange(candidate, context = {}) {
+  const actor=SESSION?.user?.id, parent=currentFrame(), parentContext=window.modalCtx;
+  const client=bankingNextOwnerClient();
+  const stillParent=()=>SESSION?.user?.id===actor && currentFrame()===parent && window.modalCtx===parentContext;
+  try {
+    if (!client || !candidate?.id) throw Error();
+    const owner=await client.begin('candidate:pay-method:'+candidate.id+':'+crypto.randomUUID());
+    if (!stillParent()) return {handled:true,outcome:null};
+    if (context.next_owner && (owner.active_owner!==context.next_owner.active_owner || owner.owner_epoch!==context.next_owner.owner_epoch)) throw Error();
+    if (owner.active_owner==='LEGACY') return {handled:false,outcome:null};
+    if (owner.active_owner!=='NEXT' || !window.CloudTMSBpayNextPayMethodChange || !window.CloudTMSBpayNextUi) throw Error();
+    const companies=Array.from(document.getElementById('umbList')?.options??[], option=>({id:String(option.getAttribute('data-id')??'').toLowerCase(),name:String(option.value??'')}));
+    const chosen=String(context.destination_patch?.umbrella_id??'').toLowerCase();
+    if (chosen && !companies.some(company=>company.id===chosen)) {
+      const name=String(parentContext.formState?.pay?.umbrella_name??document.getElementById('umbrella_name')?.value??'').trim();
+      if (name) companies.push({id:chosen,name});
+    }
+    const outcome=await window.CloudTMSBpayNextPayMethodChange.open({document,window,actorId:actor,candidateId:String(candidate.id).toLowerCase(),targetMethod:context.newMethod,
+      umbrellaId:chosen||null,companies,ownerEpoch:owner.owner_epoch,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,
+      ownerReady:()=>client.peek()?.active_owner==='NEXT' && client.peek()?.owner_epoch===owner.owner_epoch,
+      current:()=>window.__modalStack?.includes(parent)===true,
+      showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal})});
+    return {handled:true,outcome:stillParent()?outcome:null};
+  } catch {
+    if (stillParent()) await openUiConfirmModal({title:'Change pay channel',message:'Could not open the pay channel window; try again.',confirm_label:'Close',hide_cancel:true,kind:'candidate-pay-method-notice'});
+    return {handled:true,outcome:null};
+  }
+}
 async function openCandidatePayMethodChangeModal(candidate, context = {}) {
+  const next = await openNextCandidatePayMethodChange(candidate, context);
+  if (next.handled) return next.outcome;
   const LOG = (typeof window.__LOG_CAND === 'boolean')
     ? window.__LOG_CAND
     : (typeof window.__LOG_MODAL === 'boolean' ? window.__LOG_MODAL : false);

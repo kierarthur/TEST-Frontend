@@ -628,3 +628,49 @@
   #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-actions button,
   #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-actions) #btnCloseModal { min-height: 44px; min-width: 44px; }
 }
+/* EX-08 / SCR-74 native medium impact window, supplied B6 design. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-channel-change) {width:min(980px,calc(100vw - 48px));}
+#modal.ctms-modern-modal .bpay-next-channel-change {font-size:14px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal .bpay-next-channel-company {display:flex;flex-direction:column;gap:7px;margin:0 0 16px;font-size:12px;font-weight:700;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-channel-company select {min-height:40px;width:100%;box-sizing:border-box;}
+#modal.ctms-modern-modal .bpay-next-channel-subject {margin:4px 0 0;color:var(--ctms-modal-sub);font-size:12px;font-weight:600;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-channel-subject) {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;height:auto;min-height:64px;flex:0 0 auto;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-channel-subject) .spacer {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-channel-subject) #modalTitle {grid-column:1;grid-row:1;min-width:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-channel-subject {grid-column:1;grid-row:2;min-width:0;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-channel-subject) #btnCloseModal {grid-column:2;grid-row:1 / span 2;align-self:center;}
+#modal.ctms-modern-modal .bpay-next-channel-cards {display:flex;flex-direction:column;gap:16px;}
+#modal.ctms-modern-modal .bpay-next-channel-card {padding:18px;border:1px solid var(--ctms-modal-line);border-radius:16px;background:var(--ctms-modal-panel-soft);}
+#modal.ctms-modern-modal .bpay-next-channel-card header {display:flex;flex-direction:column;gap:4px;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid var(--ctms-modal-line);}
+#modal.ctms-modern-modal .bpay-next-channel-card header>span {font-size:10px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:#a7b1ff;}
+#modal.ctms-modern-modal .bpay-next-channel-card header>strong {font-size:15px;}
+#modal.ctms-modern-modal .bpay-next-channel-card table {width:100%;table-layout:fixed;border:1px solid var(--ctms-modal-line);border-radius:13px;border-collapse:separate;border-spacing:0;overflow:visible;}
+#modal.ctms-modern-modal .bpay-next-channel-card th {position:sticky;top:0;z-index:2;background:var(--ctms-modal-panel-raised);text-transform:uppercase;font-size:11px;letter-spacing:.02em;color:#a9ccf1;}
+#modal.ctms-modern-modal .bpay-next-channel-card th,#modal.ctms-modern-modal .bpay-next-channel-card td {padding:12px;vertical-align:middle;border-bottom:1px solid var(--ctms-modal-line);}
+#modal.ctms-modern-modal .bpay-next-channel-card th:first-child {width:46%;text-align:left;border-top-left-radius:13px;}
+#modal.ctms-modern-modal .bpay-next-channel-card th:nth-child(2) {width:16%;text-align:right;}
+#modal.ctms-modern-modal .bpay-next-channel-card th:last-child {text-align:left;border-top-right-radius:13px;}
+#modal.ctms-modern-modal .bpay-next-channel-card tbody tr:last-child td {border-bottom:0;}
+#modal.ctms-modern-modal .bpay-next-channel-card td small {display:block;margin-top:6px;font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-channel-money {text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-channel-badge {display:inline-block;padding:3px 8px;border:1px solid #426fa8;border-radius:999px;background:#172c4c;color:#c9dcff;font-size:11px;font-weight:700;}
+#modal.ctms-modern-modal .bpay-next-channel-badge.is-warning {border-color:#a87b23;color:#ffe1a3;background:#332a17;}
+#modal.ctms-modern-modal .bpay-next-channel-actions {width:100%;align-items:center;}
+#modal.ctms-modern-modal .bpay-next-channel-hint {margin:0 auto 0 0;max-width:70%;font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-channel-result {margin:0 0 14px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal:has(.bpay-next-channel-change) .bpay-next-channel-company[hidden],#modal.ctms-modern-modal:has(.bpay-next-channel-change) #modalActions button[hidden] {display:none;}
+#modal.ctms-modern-modal .bpay-next-channel-empty {padding:18px;border:1px solid var(--ctms-modal-line);border-radius:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-channel-sentinel {min-height:1px;color:var(--ctms-modal-sub);font-size:12px;}
+@media(max-width:640px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-channel-change){width:calc(100vw - 12px);}
+ #modal.ctms-modern-modal .bpay-next-channel-company select,#modal.ctms-modern-modal .bpay-next-channel-actions button{min-height:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-channel-change) :is(#btnCloseModal,#modalActions button){min-height:44px;height:44px;min-width:44px;}
+ #modal.ctms-modern-modal .bpay-next-channel-card{padding:12px;}
+ #modal.ctms-modern-modal .bpay-next-channel-card thead{display:none;}
+ #modal.ctms-modern-modal .bpay-next-channel-card tr,#modal.ctms-modern-modal .bpay-next-channel-card td{display:block;box-sizing:border-box;width:100%;text-align:left;}
+ #modal.ctms-modern-modal .bpay-next-channel-card td{border-bottom:0;padding:8px 10px;}
+ #modal.ctms-modern-modal .bpay-next-channel-card td.bpay-next-channel-money{text-align:right;font-variant-numeric:tabular-nums;}
+ #modal.ctms-modern-modal .bpay-next-channel-card td>small{grid-column:2;}
+ #modal.ctms-modern-modal .bpay-next-channel-card tr{border-bottom:1px solid var(--ctms-modal-line);padding:6px 0;}
+ #modal.ctms-modern-modal .bpay-next-channel-hint{max-width:100%;flex-basis:100%;}
+}
