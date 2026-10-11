@@ -294,3 +294,6 @@
 }
 
 #modal.ctms-modern-modal .bpay-next-case-paused { opacity: .65; }
+
+/* WB24 complete Candidate selection uses the existing checkbox style. */
+#modal.ctms-kind-bpay-next-read .bpay-next-candidate-include {gap:8px;justify-content:flex-start;min-height:44px;padding:4px 8px;}

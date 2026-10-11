@@ -911,7 +911,7 @@ function field(v,type){
           onScope:scope=>{issueLists?.setScope(scope);readyLists?.setScope(scope);},onTab:tab=>{if(tab!=='READY')issueLists?.setKind(tab==='ACTION'?'ACTION_REQUIRED':'BLOCKED');}});
         readyLists=win.CloudTMSBpayNextWorkbench.mountReadyCandidates({...options,host:workbenchShell.readyHost,client:workbenchShell.client,debug:controller.debug,windowAlive:()=>readWindow?.alive()===true,
           canInteract:()=>readWindow?.active()===true,onChoiceStore:store=>choiceStores.set(store.key,store),onSelection:()=>workbenchShell?.refreshSelectionLabel(),openBankRecord:id=>openCandidateRecord(options,id,close),
-          openCandidate:address=>{if(candidateWindow?.alive())return;candidateWindow=win.CloudTMSBpayNextWorkbench.openCandidateWindow({...options,host:workbenchShell.readyHost,client:workbenchShell.client,preparationTransport:transport,choiceStore:readyLists.choiceStore(),onSelection:()=>workbenchShell?.refreshSelectionLabel(),onChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);}});
+          openCandidate:address=>{if(candidateWindow?.alive())return;candidateWindow=win.CloudTMSBpayNextWorkbench.openCandidateWindow({...options,host:workbenchShell.readyHost,client:workbenchShell.client,preparationTransport:transport,choiceStore:readyLists.choiceStore(),onSelection:()=>{readyLists?.refreshSelection();workbenchShell?.refreshSelectionLabel();},onChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);}});
         readyLists.joinHeader(workbenchShell.snapshot());
         issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:workbenchShell.issueHost,windowAlive:()=>readWindow?.alive()===true,client:workbenchShell.client,externalTabs:true,debug:controller.debug,parentContext:()=>workbenchShell.snapshot().context,parentAvailable:()=>workbenchShell.snapshot().available,parentReadError:()=>workbenchShell.snapshot().readError,canInteract:()=>readWindow?.active()===true,
           openIssue:address=>{if(issueWindow?.alive())return;issueWindow=win.CloudTMSBpayNextWorkbench.openIssueWindow({...options,host:workbenchShell.issueHost,client:workbenchShell.client,windowAlive:()=>readWindow?.alive()===true,onIssueChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);},onAvailability:value=>{workbenchShell.setIssueAvailability(value);const header=workbenchShell.snapshot();issueReadAvailable=value.available&&header.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,header.context);if(host.isConnected)render();}});
@@ -1043,7 +1043,7 @@ function field(v,type){
     doc.addEventListener('visibilitychange',render);
     sheet=Object.freeze({focus:()=>readWindow?.focus(),close,controller});
     readWindow=options.showReadWindow({title:'Banking Pay',content:host,beforeClose,canFocus:()=>same(options.currentActorId(),options.actorId)&&options.ownerReady()===true,onDismiss:dismiss,onMount:()=>{
-      render();if(!started){started=true;void act(async()=>{await loadCapabilities();if(capabilities?.environment_ready&&controller.snapshot().run_id)await refresh();});}
+      render();readyLists?.refreshSelection();if(!started){started=true;void act(async()=>{await loadCapabilities();if(capabilities?.environment_ready&&controller.snapshot().run_id)await refresh();});}
     }});
     return sheet;
   }
