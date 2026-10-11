@@ -522,6 +522,7 @@ function decimalCompare(a,b){const negA=a.startsWith('-'),negB=b.startsWith('-')
 function keyCompare(a,b,kind,sort){if(kind==='CANDIDATE_ESTIMATE'){for(let n=0;n<4;n++){const value=n===0||n===2?BigInt(a[n])<BigInt(b[n])?-1:BigInt(a[n])>BigInt(b[n])?1:0:textCompare(a[n],b[n]);if(value)return value;}return 0;}for(let n=0;n<a.length;n++){const value=typeof a[n]==='number'?a[n]-b[n]:typeof a[n]==='boolean'?Number(a[n])-Number(b[n]):n===1&&(sort.startsWith('AMOUNT_')||kind==='EXPORT_ROWS'&&sort.includes('_AMOUNT_'))?decimalCompare(a[n],b[n]):textCompare(a[n],b[n]);if(value)return sort.endsWith('_DESC')?-value:value;}return 0;}
 function fail(code,status=503,retryable=false,reload=false){return Object.assign(new Error(code),{code,status,retryable,reload});}
 function normalizeWorkbenchInput(kind,input={}){
+  if(kind==='SNOOZES')return globalThis.CloudTMSBpayNextSnoozeActions.normalizeSnoozesInput(input);
   if(!KINDS.includes(kind)||!record(input)||Reflect.ownKeys(input).some(k=>typeof k!=='string'||!Object.hasOwn(COMMON,k)))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
   const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,count_selection:null,selection_memory:null,progress_after:null,estimate:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
   for(const k of ['candidate_id','client_id','item_id'])if(typeof args[k]==='string')args[k]=args[k].toLowerCase();
@@ -571,6 +572,7 @@ function validateJobProgress(progress,args,actorId,revision){
 }
 
 function validateWorkbenchResponse(payload,kind,args,actorId=null){
+  if(kind==='SNOOZES'&&payload?.ok===true)return globalThis.CloudTMSBpayNextSnoozeActions.validateSnoozesResponse(payload,args,actorId);
   const original=payload;
   if(Object.hasOwn(payload??{},'job_progress')){
     if(kind!=='HEADER')throw fail('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');

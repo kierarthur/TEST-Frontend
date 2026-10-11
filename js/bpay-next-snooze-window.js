@@ -211,9 +211,20 @@ function validateBpayNextSnoozeManyReceipt(r,args){
    const bytes=new Uint8Array(size);let offset=0;for(const p of parts){bytes.set(p,offset);offset+=p.byteLength;}return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
   }catch(e){void reader.cancel().catch(()=>{});throw e;}finally{reader.releaseLock();}
  }
+
+ function managementContext(m,scope){
+  if(!exact(m,['agency_id','module_epoch','candidate_id','work_id','scope_kind','scope_identity','snooze_id','expected_version','active','until_date','note'])
+   ||!uuid(m.agency_id)||!uuid(m.candidate_id)||!uuid(m.snooze_id)||!version(m.module_epoch)||m.module_epoch==='0'
+   ||!version(m.expected_version)||m.expected_version==='0'||typeof m.active!=='boolean'||m.candidate_id!==scope.candidate_id
+   ||m.scope_kind!==scope.scope_kind||m.work_id!==(scope.work_id??null)||typeof m.scope_identity!=='string'||m.scope_identity.length<1||m.scope_identity.length>500
+   ||m.until_date!==null&&!date(m.until_date)||typeof m.note!=='string'||m.note.length>500)invalid();
+  return {...m,conflict:null,business_date:null};
+ }
+
  function open(options,subject){
   const doc=options.document,win=options.window??doc.defaultView,actor=String(options.actorId??'').toLowerCase();
   if(!doc||!uuid(actor)||typeof options.showReadWindow!=='function'||typeof options.authFetch!=='function'||typeof options.api!=='function')invalid();
+  if(subject.management&&(!subject.clear||subject.many))invalid();
   const base=normaliseBpayNextSnoozeAction('SNOOZE_CHECK',{...subject.scope,phase:'PRE_OPEN',until_date:null,indefinite:false,note:''});
   const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
   const button=(label,fn,primary=false)=>{const b=el('button',label,'btn'+(primary?' primary':''));b.type='button';b.addEventListener('click',fn);return b;};
@@ -265,7 +276,8 @@ function validateBpayNextSnoozeManyReceipt(r,args){
   function store(){const value=JSON.stringify({version:2,namespace,pending,progress});if(encoder.encode(value).byteLength>32768)invalid();storage.setItem(journalKey,value);}
   function keep(body){const bytes=JSON.stringify(body);if(encoder.encode(bytes).byteLength>32768)invalid();const old=pending;pending=bytes;try{store();}catch(e){pending=old;throw e;}}
   function clearPending(){pending=null;if(progress)store();else storage.removeItem(journalKey);}
-  function boundArgs(action,args,retained=false){const value=action.endsWith('_MANY')?normaliseBpayNextSnoozeMany(action,args):normaliseBpayNextSnoozeAction(action,args);
+  function boundArgs(action,args,retained=false){
+   if(subject.management&&action!=='SNOOZE_CLEAR')invalid();const value=action.endsWith('_MANY')?normaliseBpayNextSnoozeMany(action,args):normaliseBpayNextSnoozeAction(action,args);
    if(value.candidate_id!==context.candidate_id||action.endsWith('_MANY')&&(value.work_id!==context.work_id||!retained&&value.expected_revision_id!==context.expected_revision_id)
     ||action!=='SNOOZE_CLEAR'&&!action.endsWith('_MANY')&&(value.work_id??null)!==context.work_id
     ||action==='SNOOZE_CLEAR'&&!retained&&value.snooze_id!==context.snooze_id
@@ -353,10 +365,10 @@ function validateBpayNextSnoozeManyReceipt(r,args){
    beforeClose:async()=>{if(busy)return false;if(!accepted&&context&&snapshot()!==original&&!pending)return await confirm('Discard changes?','Your snooze changes have not been saved.','Discard changes');return true;},
    onDismiss:()=>{closed=true;void(async()=>{if(accepted){try{await options.onAccepted?.(accepted);}catch{accepted={...accepted,message:'Saved; could not refresh.'};}win.dispatchEvent(new win.CustomEvent('cloudtms:bpay-next:snooze-changed',{detail:{candidate_id:context.candidate_id,work_id:context.work_id,message:accepted.message}}));}finish(accepted);})();}});
   for(const control of [indefinite,dateInput,note])control.addEventListener('input',()=>{warning.hidden=true;warningCheck=null;warningInput=null;consent.checked=false;render();});consent.addEventListener('input',render);render();notice('Loading…');
-  void(async()=>{try{context=Object.freeze(await check(base));if(!current())return;namespace={environment:'TEST',agency_id:context.agency_id,owner_epoch:context.module_epoch,actor_user_id:actor,scope_kind:context.scope_kind,scope_identity:context.scope_identity};journalKey='cloudtms.bpay-next.snooze.v1.'+JSON.stringify(namespace);
+  void(async()=>{try{context=Object.freeze(subject.management?managementContext(subject.management,subject.scope):await check(base));if(!current())return;namespace={environment:'TEST',agency_id:context.agency_id,owner_epoch:context.module_epoch,actor_user_id:actor,scope_kind:context.scope_kind,scope_identity:context.scope_identity};journalKey='cloudtms.bpay-next.snooze.v1.'+JSON.stringify(namespace);
     const saved=storage.getItem(journalKey);if(saved!==null){const entry=JSON.parse(saved);if(!exact(entry,['version','namespace','pending','progress'])||entry.version!==2||JSON.stringify(entry.namespace)!==JSON.stringify(namespace))invalid();
-     if(entry.pending!==null){if(typeof entry.pending!=='string'||encoder.encode(entry.pending).byteLength>32768)invalid();const retained=JSON.parse(entry.pending);if(!exact(retained,['action','readback','args'])||retained.readback!==false||retained.action==='SNOOZE_CHECK')invalid();boundArgs(retained.action,retained.args,true);pending=entry.pending;}
-     if(entry.progress!==null){const p=entry.progress;if(!exact(p,['action','next','complete','summary'])||!['SNOOZE_SET_MANY','SNOOZE_CLEAR_MANY'].includes(p.action)||typeof p.complete!=='boolean'||!exact(p.summary,['total_count','successful_count','failed_count'])||Object.values(p.summary).some(v=>!version(v))||BigInt(p.summary.successful_count)+BigInt(p.summary.failed_count)>BigInt(p.summary.total_count))invalid();boundArgs(p.action,p.next,true);progress=p;}
+     if(entry.pending!==null){if(typeof entry.pending!=='string'||encoder.encode(entry.pending).byteLength>32768)invalid();const retained=JSON.parse(entry.pending);if(!exact(retained,['action','readback','args'])||retained.readback!==false||retained.action==='SNOOZE_CHECK')invalid();boundArgs(retained.action,retained.args,true);if(subject.management&&retained.args.snooze_id!==context.snooze_id)invalid();pending=entry.pending;}
+     if(entry.progress!==null){if(subject.management)invalid();const p=entry.progress;if(!exact(p,['action','next','complete','summary'])||!['SNOOZE_SET_MANY','SNOOZE_CLEAR_MANY'].includes(p.action)||typeof p.complete!=='boolean'||!exact(p.summary,['total_count','successful_count','failed_count'])||Object.values(p.summary).some(v=>!version(v))||BigInt(p.summary.successful_count)+BigInt(p.summary.failed_count)>BigInt(p.summary.total_count))invalid();boundArgs(p.action,p.next,true);progress=p;}
     }
     const inputs=pending?JSON.parse(pending).args:progress?.next;indefinite.checked=inputs?.indefinite??(context.active&&context.until_date===null);dateInput.value=(inputs?.until_date??context.until_date)?displayDate(inputs?.until_date??context.until_date):'';note.value=inputs?.note??context.note;dateHint.textContent='Earliest '+displayDate(context.business_date)+'.';original=snapshot();
     if(progress){ensureResults();notice('Scroll to see the results.');if(BigInt(progress.next.page_no)>1n){pageBlocks=[{page_no:progress.next.page_no,rows:[]}];busy=false;await oldPage('back');}accepted={ok:true,next:true,candidate_id:context.candidate_id,work_id:context.work_id,message:bulkMessage(progress)};}
