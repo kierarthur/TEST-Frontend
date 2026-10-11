@@ -54,10 +54,11 @@
         const titleHost=document.getElementById('modalTitle');
         titleHost.parentElement.querySelectorAll('[data-next-window-header-detail]').forEach(node=>{if(node!==headerDetail)node.remove();});
         if(headerDetail){headerDetail.dataset.nextWindowHeaderDetail='';titleHost.insertAdjacentElement('afterend',headerDetail);}
-        document.getElementById('modalBody').replaceChildren(content);
+        const body=document.getElementById('modalBody');
+        if(body.childNodes.length!==1||body.firstChild!==content)body.replaceChildren(content);
         const actions=document.getElementById('modalActions');
-        actions.querySelectorAll('[data-next-window-footer]').forEach(node=>node.remove());
-        if(footer){footer.setAttribute('data-next-window-footer','');actions.append(footer);}
+        actions.querySelectorAll('[data-next-window-footer]').forEach(node=>{if(node!==footer)node.remove();});
+        if(footer){footer.setAttribute('data-next-window-footer','');if(footer.parentElement!==actions)actions.append(footer);}
         window.queueMicrotask(()=>{if(!active())return;onMount?.();if(!initialFocus&&active()&&canFocus()){initialFocus=true;((confirmation&&footer?controls(footer)[0]:controls(content)[0])??document.getElementById('btnCloseModal')).focus();}});
       };
       const dismissed=()=>{if(closed)return;closed=true;footer?.remove();headerDetail?.remove();const tabs=document.getElementById('modalTabs');tabs.hidden=false;tabs.style.display='';const panel=document.getElementById('modal');panel.classList.remove('bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');panel.setAttribute('role','dialog');panel.setAttribute('aria-labelledby','modalTitle');onDismiss?.();settled(true);};

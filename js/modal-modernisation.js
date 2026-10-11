@@ -280,6 +280,8 @@
 
   const isMoneyInput = (input) => {
     if (!(input instanceof HTMLInputElement)) return false;
+    // NEXT create fields preserve exact entered decimal text and schedule values.
+    if(input.hasAttribute('data-next-exact-input'))return false;
     if (['checkbox', 'radio', 'hidden', 'date', 'time', 'datetime-local'].includes(safeText(input.type).toLowerCase())) return false;
     const identity = [input.name, input.id, input.dataset.field, input.dataset.expField, input.dataset.key]
       .map(safeText)

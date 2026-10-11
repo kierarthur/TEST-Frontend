@@ -64,11 +64,14 @@ function mount(options){
     if(!active())return;
     const input=currentInput(),pending=snapshot()?.pending;
     if(shown&&(!input||!equal(input,shownInput))){shown=null;shownInput=null;line='Details changed; preview again.';}
-    result.textContent=line;
+    result.textContent=line==='Preview first.'&&!input?(options.inputHint?.()||line):line;
+    result.setAttribute('role',/Could not|Set a pay channel|Sign in|Details have changed/.test(result.textContent)?'alert':'status');
     panel.replaceChildren();panel.hidden=shown===null;
+    const empty=doc.createElement('dl');empty.className='bpay-next-case-empty';empty.hidden=shown!==null||!options.showEmptySchedule||Boolean(pending)||accepted!==null;
+    for(const title of ['Weekly repayment','Last due']){const term=doc.createElement('dt'),value=doc.createElement('dd');term.textContent=title;value.textContent='—';empty.append(term,value);}
     if(shown){
       const label=doc.createElement('span');label.className='bpay-next-case-eyebrow';label.textContent='Preview';
-      const heading=doc.createElement('h3');heading.textContent=shown.weekly_due===null?money(shown.total)+' to pay':money(shown.weekly_due)+' a week for '+shown.week_count+' weeks';
+      const heading=doc.createElement('h3');heading.textContent=shown.weekly_due===null?money(shown.total)+' to pay':(options.weeklyLimitLabel?'Up to ':'')+money(shown.weekly_due)+' a week for '+shown.week_count+' weeks';
       const details=doc.createElement('dl');
       const rows=shown.weekly_due===null?[]:[['First due',due(shown.first_due_monday)],['Last due',due(shown.last_due_monday)]];
       rows.push(['Total',money(shown.total)],['Minimum earnings threshold',shown.minimum_earnings_threshold===null?'None':money(shown.minimum_earnings_threshold)],
@@ -78,14 +81,18 @@ function mount(options){
       for(const warning of shown.warnings){const message=doc.createElement('p');message.className='bpay-next-case-warning';message.textContent=warning==='EXISTING_REPAYMENTS'?'This Candidate already has repayments.':warning;panel.append(message);}
     }
     previewButton.disabled=busy||Boolean(pending)||accepted!==null||!input;
+    previewButton.hidden=Boolean(pending)||accepted!==null;
     applyButton.textContent=pending?'Try again':accepted?'Refresh':'Apply';
     applyButton.disabled=busy||(!pending&&!accepted&&!(shown&&input&&equal(input,shownInput)));
-    host.replaceChildren(panel,result);footer.replaceChildren(previewButton,applyButton);
+    host.replaceChildren(panel,empty,result);
+    if(footer.childNodes.length!==2||footer.firstChild!==previewButton||footer.lastChild!==applyButton)footer.replaceChildren(previewButton,applyButton);
+    options.onState?.({busy,pending:Boolean(pending),accepted:accepted!==null,preview:shown===null?null:JSON.parse(JSON.stringify(shown))});
   }
   function message(error,unknown){
     if(unknown)return 'Could not confirm the result; try again.';
     if(error?.serverCode==='BPAY_NEXT_CASE_PREVIEW_CHANGED'||error?.code==='BPAY_NEXT_CASE_PREVIEW_CHANGED')return 'Details have changed; preview again.';
     if(error?.code==='AUTH_REQUIRED')return 'Sign in again to continue.';
+    if(error?.serverCode==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'||error?.code==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND')return 'Set a pay channel on the Candidate, then preview again.';
     return 'Could not save this Case; preview again.';
   }
   async function refreshCase(){
@@ -101,7 +108,7 @@ function mount(options){
     busy=true;shown=null;shownInput=null;line='Checking…';paint();
     try{const value=await preview(input);if(!active())return;if(!equal(input,currentInput())){line='Details changed; preview again.';return;}
       if(!validPreview(value,input))throw Error('Preview unavailable');shown=value;shownInput=input;line='';
-    }catch{if(active()){shown=null;shownInput=null;line='Could not prepare the preview; try again.';}}
+    }catch(error){if(active()){shown=null;shownInput=null;line=error?.serverCode==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'||error?.code==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'?'Set a pay channel on the Candidate, then preview again.':error?.code==='AUTH_REQUIRED'?'Sign in again to continue.':'Could not prepare the preview; try again.';}}
     finally{busy=false;paint();}
   };
   applyButton.onclick=async()=>{

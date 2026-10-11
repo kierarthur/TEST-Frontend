@@ -629,6 +629,30 @@
   #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-actions) #btnCloseModal { min-height: 44px; min-width: 44px; }
 }
 /* EX-08 / SCR-74 native medium impact window, supplied B6 design. */
+/* FC-04: supplied small form, within the existing native frame. */
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-form {display:block;border:0;padding:0;margin:0;min-width:0;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-form,#modal.ctms-modern-modal #modalBody .bpay-next-advance-method {background:transparent;box-shadow:none;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance [hidden] {display:none;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-field {display:flex;flex-direction:column;gap:8px;margin:0 0 20px;color:var(--ctms-modal-sub);font-size:12px;font-weight:680;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-field input,#modal.ctms-modern-modal #modalBody .bpay-next-advance-field textarea,#modal.ctms-modern-modal #modalBody .bpay-next-advance-picker {box-sizing:border-box;width:100%;min-height:44px;border:1px solid var(--ctms-modal-line);border-radius:10px;background:var(--ctms-modal-input);color:var(--ctms-modal-text);padding:10px 12px;font-size:13px;text-align:left;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-field textarea {min-height:74px;resize:vertical;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-currency {position:relative;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-currency span {position:absolute;top:50%;left:12px;transform:translateY(-50%);color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-currency input {padding-left:22px;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-currency:has(input[name=threshold]:placeholder-shown) span,
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-currency:has(input[name=floor]:placeholder-shown) span {visibility:hidden;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-field small {font-size:12px;font-weight:400;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-method {border:0;margin:0 0 16px;padding:0;min-width:0;color:var(--ctms-modal-sub);font-size:12px;font-weight:680;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-method legend {margin-bottom:4px;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-method label {display:flex;align-items:center;gap:8px;min-height:44px;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-method input {accent-color:var(--ctms-modal-accent);width:18px;height:18px;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-section {margin:0 0 20px;padding:14px;border:1px solid var(--ctms-modal-line);border-radius:13px;background:var(--ctms-modal-panel-soft);font-size:14px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-error {font-size:13px;color:#ffb8bd;margin:0 0 16px;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance-subject {font-size:14px;font-weight:700;margin:0 0 16px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal .bpay-next-case-actions [hidden] {display:none;}
+#modal.ctms-modern-modal #modalBody .bpay-next-case-empty {display:grid;grid-template-columns:1fr 1.35fr;gap:12px 14px;font-size:12px;color:var(--ctms-modal-sub);margin:0;}
+#modal.ctms-modern-modal #modalBody .bpay-next-case-empty dd {margin:0;color:var(--ctms-modal-text);font-weight:700;}
+#modal.ctms-modern-modal #modalBody .bpay-next-advance button:focus-visible,#modal.ctms-modern-modal #modalBody .bpay-next-advance input:focus-visible,#modal.ctms-modern-modal #modalBody .bpay-next-advance textarea:focus-visible {outline:2px solid var(--ctms-modal-accent);outline-offset:3px;}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-channel-change) {width:min(980px,calc(100vw - 48px));}
 #modal.ctms-modern-modal .bpay-next-channel-change {font-size:14px;color:var(--ctms-modal-text);}
 #modal.ctms-modern-modal .bpay-next-channel-company {display:flex;flex-direction:column;gap:7px;margin:0 0 16px;font-size:12px;font-weight:700;color:var(--ctms-modal-sub);}
