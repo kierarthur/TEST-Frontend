@@ -66,7 +66,7 @@
     CSV_ISSUE: { instruction_id: 'uuid', transfer_id: 'uuid', file_name: 'file', csv_sha256: 'sha', csv_text: 'csv', phase: 'csv', payment_recorded: 'boolean', replay: 'boolean' }
   };
   const ROWS = {
-    PROGRESS:{run_id:'uuid',status:'run',actor_display_name:'label',started_at_utc:'timestamp',expires_at_utc:'timestamp',selected_candidates:'integer',ready:'integer',review:'integer',pending:'integer',preparing:'integer',removed:'integer',enrolled_candidates:'integer',enrolment_complete:'boolean',enrolment_failed:'boolean',safe_to_close:'true'},
+    PROGRESS:{run_id:'uuid',status:'run',actor_display_name:'label',started_at_utc:'timestamp',expires_at_utc:'timestamp',selected_candidates:'integer',ready:'integer',review:'integer',pending:'integer',preparing:'integer',removed:'integer',enrolled_candidates:'integer',enrolment_complete:'boolean',enrolment_failed:'boolean',safe_to_close:'true',expired_at_utc:'timestamp?'},
     RATES:{rate_detail_id:'uuid',bucket:'bucket',approved_hours:'money',source_pay_rate:'money?',rate_schedule_id:'uuid?',available_paye_rate:'money?',available_umbrella_rate:'money?',available_charge_rate:'money?',approved_charge_rate:'money?'},
     BREAKS:{break_detail_id:'uuid',break_no:'positive',break_start_at:'timestamp?',break_end_at:'timestamp?',break_start_local:'clock?',break_end_local:'clock?',break_minutes:'integer'},
     SHIFTS:{shift_detail_id:'uuid',detail_no:'positive',work_date:'date',shift_start_at:'timestamp?',shift_end_at:'timestamp?',shift_start_local:'clock?',shift_end_local:'clock?',
@@ -410,7 +410,9 @@ function field(v,type){
       ||n('ready')+n('review')+n('pending')+n('removed')!==n('selected_candidates')
       ||n('preparing')>n('pending')||n('enrolled_candidates')>n('selected_candidates')
       ||(p.enrolment_complete&&n('enrolled_candidates')!==n('selected_candidates'))
-      ||Date.parse(p.expires_at_utc)-Date.parse(p.started_at_utc)!==72*60*60*1000)fail();
+      ||Date.parse(p.expires_at_utc)-Date.parse(p.started_at_utc)!==72*60*60*1000
+      ||(p.expired_at_utc!==null&&(p.status!=='CANCELLED'||n('pending')!==0n||n('preparing')!==0n
+        ||Date.parse(p.expired_at_utc)<Date.parse(p.expires_at_utc))))fail();
     return body;
   }
   if(['ACCEPTED_CANDIDATES','ACCEPTED_WORK'].includes(kind)){
@@ -947,17 +949,20 @@ function field(v,type){
   const workerReviewWindows=new Map();
   function openWorkerReview(options,runId){
     requireActor(options);if(!field(runId,'uuid')||options.ownerReady()!==true)fail('REQUEST_INVALID');
-    const identity=options.actorId.toLowerCase()+':'+runId.toLowerCase(),existing=workerReviewWindows.get(identity);
+    const reviewScope=options.progressNamespace?preparationScope(options.progressNamespace):null;
+    const identity=options.actorId.toLowerCase()+':'+(reviewScope??'')+':'+runId.toLowerCase(),existing=workerReviewWindows.get(identity);
     if(existing?.alive()){existing.focus();return existing;}
     const doc=options.document||document,win=options.window||window,transport=options.transport||createTransport(options);
     const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
-    const content=el('section',undefined,'bpay-next-worker-review'),footer=el('div',undefined,'bpay-next-window-actions');
-    let frame,controller,busy=false,closed=false,timer=null,page=null,readError='',result='',selected=null,scrollOffset=0,loadingMore=false;
-    const current=()=>!closed&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true;
+    const content=el('section',undefined,'bpay-next-worker-review'),footer=el('div',undefined,'bpay-next-window-actions'),headerDetail=el('span',undefined,'bpay-next-progress-subtitle');
+    headerDetail.hidden=true;headerDetail.dataset.nextLiveCopy='';
+    let frame,controller,busy=false,closed=false,timer=null,page=null,progressFacts=null,progressTicket=0,readError='',result='',selected=null,scrollOffset=0,loadingMore=false;
+    const current=()=>{try{return !closed&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true
+      &&(!reviewScope||!options.progressCurrentNamespace||preparationScope(options.progressCurrentNamespace())===reviewScope);}catch{return false;}};
     const button=(text,fn,disabled=false,primary=false)=>{const b=el('button',text,primary?'btn primary':'btn');b.type='button';b.disabled=disabled;if(!primary)b.dataset.nextSecondary='';b.dataset.nextFocusKey=text;b.addEventListener('click',()=>void act(fn));return b;};
     const money=v=>{if(v===null)return '—';const neg=v.startsWith('-'),[whole,fraction='']=(neg?v.slice(1):v).split('.');return (neg?'−':'')+'£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0').slice(0,2);};
     const focus=ui.continuity(content,doc,()=>content.querySelector('button'));
-    async function act(fn){if(busy||!current())return;busy=true;readError='';render();try{await fn();}catch{readError=controller.snapshot().pending?'The result is not known; try this request again.':'Could not complete this action; refresh and try again.';}finally{busy=false;render();}}
+    async function act(fn){if(busy||!current())return;busy=true;readError='';render();try{await fn();}catch(e){readError=e?.serverCode==='BPAY_NEXT_CONFIRM_PREPARATION_EXPIRED_OR_UNBOUND'?'This Draft has expired.':controller.snapshot().pending?'The result is not known; try this request again.':'Could not complete this action; refresh and try again.';}finally{busy=false;render();}}
     async function readRows(cursor=null){
       const before=cursor?page?.rows??[]:[];loadingMore=cursor!==null;if(!cursor)scrollOffset=0;render();
       try{const next=await controller.page('WORKERS',{run_id:runId,after_candidate_id:cursor?.after_candidate_id??null,limit:100});if(!current())return;page={...next,rows:[...before,...next.rows]};}catch{page=null;throw Error('Read unavailable');}finally{loadingMore=false;}
@@ -973,8 +978,14 @@ function field(v,type){
       const review=await controller.mutate('REVIEW',{run_id:runId});
       if(controller.settleWorkerAction(h,review))result=h.worker_status==='CANCELLED'?(a.action==='RELEASE'?'Candidate removed from Draft.':'Candidate not in this Draft.'):h.worker_status==='READY'?'Candidate ready.':'Could not prepare this Candidate after several tries.';
     }
+    async function readDeadline(){
+      const ticket=++progressTicket;const next=await transport.page('PROGRESS',{run_id:runId});
+      if(!current()||ticket!==progressTicket)return false;progressFacts=next.rows[0];return true;
+    }
     async function refresh(){
-      const s=controller.snapshot();if(s.pending)return;await updateAction();
+      const s=controller.snapshot();if(s.pending)return;if(!await readDeadline())return;
+      if(['CANCELLING','CANCELLED'].includes(progressFacts.status)){result=progressFacts.expired_at_utc?'This Draft has expired.':'Its payments are returning to Banking Pay.';await readRows();return;}
+      await updateAction();
       if(!controller.snapshot().worker_action)await controller.mutate('REVIEW',{run_id:runId});await readRows();
     }
     async function ask(row,kind){
@@ -999,7 +1010,9 @@ function field(v,type){
       await updateAction();await readRows();
     }
     function render(){
-      if(!controller||!content.isConnected)return;win.clearTimeout(timer);if(!current()){content.replaceChildren(el('p','Banking Pay is unavailable.'));footer.replaceChildren();return;}const token=focus.before(),s=controller.snapshot(),locked=busy||s.busy||s.pending!==null||s.worker_action!==null||!current();
+      if(!controller||!content.isConnected)return;win.clearTimeout(timer);if(!current()){headerDetail.hidden=true;headerDetail.textContent='';content.replaceChildren(el('p','Banking Pay is unavailable.'));footer.replaceChildren();return;}
+      headerDetail.textContent=progressFacts&&!['DRAFT','EXECUTING','COMPLETE'].includes(progressFacts.status)?(progressFacts.expired_at_utc?'Expired at '+win.CloudTMSBpayNextDates.formatTimestamp(progressFacts.expired_at_utc):'Expires '+win.CloudTMSBpayNextDates.formatTimestamp(progressFacts.expires_at_utc)):'';headerDetail.hidden=!headerDetail.textContent;
+      const token=focus.before(),s=controller.snapshot(),locked=busy||s.busy||s.pending!==null||s.worker_action!==null||!current();
       const top=el('div',undefined,'bpay-next-review-tools');top.append(button('Refresh',refresh,locked));
       const message=el('p',readError||(s.pending?'The result is not known; try this request again.':result||(busy&&page===null?'Loading Draft…':'')),readError||s.pending?'ws-notice ws-notice--danger':'ws-notice ws-notice--info');message.hidden=!message.textContent;message.dataset.nextLiveCopy='';message.setAttribute('role',readError||s.pending?'alert':'status');
       if(!readError&&!s.pending&&['Candidate ready.','Candidate removed from Draft.','Candidate not in this Draft.','Draft confirmed.'].includes(result))message.className='ws-notice bpay-next-result-success';
@@ -1024,13 +1037,13 @@ function field(v,type){
       const empty=page?.complete&&page.rows.length===0?el('p','No Candidates in this Draft.'):null,more=loadingMore?el('p','Loading more…'):null;
       more?.setAttribute('role','status');
       content.replaceChildren(...(message.hidden?[]:[message]),...(recovery?[recovery]:[]),top,...(empty?[empty]:[]),scroll,...(more?[more]:[]));scroll.scrollTop=scrollOffset;footer.replaceChildren();
-      footer.append(button('Confirm Draft',async()=>{await controller.mutate('CONFIRM',{run_id:runId,review_revision:s.review_revision});result='Draft confirmed.';await readRows();},locked||Boolean(readError)||page===null||!s.can_confirm||!s.review_revision||s.confirmed,true));focus.after(token);
+      footer.append(button('Confirm Draft',async()=>{await controller.mutate('CONFIRM',{run_id:runId,review_revision:s.review_revision});result='Draft confirmed.';await readRows();},locked||Boolean(readError)||page===null||!progressFacts||['CANCELLING','CANCELLED'].includes(progressFacts.status)||!s.can_confirm||!s.review_revision||s.confirmed,true));focus.after(token);
       if(!busy&&!s.busy&&!s.pending&&current()&&frame?.active()&&doc.visibilityState!=='hidden'&&s.worker_action)timer=win.setTimeout(()=>void act(async()=>{await updateAction();await readRows();}),2000);
     }
     controller=createController({actorId:options.actorId,reviewRunId:runId,storage:options.storage||win.sessionStorage,uuid:options.uuid||(()=>win.crypto.randomUUID()),transport,onChange:render});
     if(controller.snapshot().run_id===null)controller.bind({run_id:runId});
     const visibility=()=>{win.clearTimeout(timer);if(doc.visibilityState!=='hidden'&&frame?.active())void act(refresh);};
-    frame=options.showReadWindow({title:'Draft review',content,footer,canFocus:current,onMount:()=>{render();void act(refresh);},onDismiss:()=>{closed=true;win.clearTimeout(timer);doc.removeEventListener('visibilitychange',visibility);win.removeEventListener('focus',visibility);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);workerReviewWindows.delete(identity);}});
+    frame=options.showReadWindow({title:'Draft review',content,footer,headerDetail,canFocus:current,onMount:()=>{render();void act(refresh);},onDismiss:()=>{closed=true;progressTicket++;win.clearTimeout(timer);doc.removeEventListener('visibilitychange',visibility);win.removeEventListener('focus',visibility);win.removeEventListener('cloudtms:bpay-next-owner-changed',render);workerReviewWindows.delete(identity);}});
     doc.addEventListener('visibilitychange',visibility);win.addEventListener('focus',visibility);win.addEventListener('cloudtms:bpay-next-owner-changed',render);workerReviewWindows.set(identity,frame);return frame;
   }
   // DR06 navigation metadata uses the original actor/agency/owner, never a new cut.
@@ -1104,13 +1117,13 @@ function field(v,type){
         const p=facts,n=k=>BigInt(p[k]),terminal=['DRAFT','EXECUTING','COMPLETE','CANCELLING','CANCELLED'].includes(p.status);
         headerDetail.textContent='Started by '+p.actor_display_name+' · '+format(p.started_at_utc);headerDetail.hidden=false;
         if(p.status==='REVIEW'){const notice=el('div',undefined,'ws-notice bpay-next-result-success');notice.append(el('strong','The Draft is ready to review.'));if(n('review')>0n)notice.append(el('p',count(p.review)+' Candidates need review before you can confirm.'));body.push(notice);}
-        if(p.status==='CANCELLING'||p.status==='CANCELLED'){const notice=el('p',p.status==='CANCELLING'?'Its payments are returning to Banking Pay.':'Its payments are back in Banking Pay.',p.status==='CANCELLING'?'ws-notice ws-notice--info':'ws-notice ws-notice--danger');body.push(notice);}
+        if(p.status==='CANCELLING'||p.status==='CANCELLED'){const notice=el('p',p.status==='CANCELLING'?'Its payments are returning to Banking Pay.':p.expired_at_utc?'Its payments are back in Banking Pay. Create a new Draft to pay them.':'Could not check whether its payments are back in Banking Pay.',p.status==='CANCELLING'?'ws-notice ws-notice--info':'ws-notice ws-notice--danger');body.push(notice);}
         if(['DRAFT','EXECUTING','COMPLETE'].includes(p.status))body.push(el('p','This Draft is confirmed.','ws-notice bpay-next-result-success'));
         if(n('removed')>0n&&!terminal){const excluded=el('div',undefined,'ws-notice ws-notice--info');excluded.append(el('strong',count(p.removed)+' Candidates are not in this Draft.'));body.push(excluded);}
         const figures=el('div',undefined,'bpay-next-progress-figures');if(readError)figures.classList.add('is-stale');
         const effective=n('selected_candidates')-n('removed'),done=n('ready')+n('review');
         const subject=el('div',undefined,'bpay-next-progress-subject');subject.append(el('h3',count(terminal?p.selected_candidates:effective)+' Candidates'));figures.append(subject);
-        if(!['DRAFT','EXECUTING','COMPLETE'].includes(p.status))subject.append(el('p',(p.status==='CANCELLED'?'Expiry time ':p.status==='CANCELLING'?'Expiry time ':'Expires ')+format(p.expires_at_utc)+(terminal?'':' if not confirmed')));
+        if(!['DRAFT','EXECUTING','COMPLETE'].includes(p.status))subject.append(el('p',p.expired_at_utc?'Expired at '+format(p.expired_at_utc):(terminal?'Expiry time ':'Expires ')+format(p.expires_at_utc)+(terminal?'':' if not confirmed')));
         if(!terminal){const progress=el('progress');progress.max=10000;progress.value=effective===0n?10000:Number(done*10000n/effective);progress.setAttribute('aria-label','Draft');const heading=el('div',undefined,'bpay-next-progress-heading');heading.append(el('strong','Draft'),el('span',count(done)+' of '+count(effective)+' Candidates'));figures.append(heading,progress);
           const totals=el('dl',undefined,'bpay-next-progress-totals');for(const [label,key] of [['Done','ready'],['To review','review'],['Still to do','pending']]){const group=el('div');group.append(el('dt',label),el('dd',count(p[key])));totals.append(group);}figures.append(totals);
           if(!p.enrolment_complete)figures.append(el('p',p.enrolment_failed?'Could not start every Candidate; continue processing or contact support.':'Starting Candidates…'));
