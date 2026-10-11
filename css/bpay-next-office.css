@@ -705,3 +705,14 @@
 }
 
 #modal.ctms-modern-modal #modalBody .bpay-next-debt .bpay-next-advance-method small {font-size:12px;font-weight:400;}
+
+#modal.ctms-modern-modal #modalBody .bpay-next-case-edit-facts {display:grid;grid-template-columns:1fr 1.5fr;gap:12px 16px;margin:0 0 24px;font-size:13px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal #modalBody .bpay-next-case-edit-facts dd {margin:0;color:var(--ctms-modal-text);font-weight:600;}
+#modal.ctms-modern-modal #modalBody .bpay-next-case-edit-blocked {border:1px solid var(--ctms-modal-line);border-radius:10px;padding:12px;background:var(--ctms-modal-panel-soft);color:var(--ctms-modal-text);font-size:13px;}
+
+#modal.ctms-modern-modal #modalBody .bpay-next-case-edit-status {justify-self:start;padding:3px 8px;border:1px solid var(--ctms-modal-line);border-radius:999px;background:var(--ctms-modal-panel-soft);color:var(--ctms-modal-sub);font-size:11px;font-weight:700;}
+#modal.ctms-modern-modal #modalBody .bpay-next-case-edit-facts dd {overflow-wrap:anywhere;white-space:pre-wrap;}
+
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-edit-cards:not([hidden])) #modalActions:has(> [data-next-window-footer][hidden]) {display:none;}
+
+@media(max-width:480px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-edit-blocked button {min-height:44px;min-width:44px;}}

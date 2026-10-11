@@ -26,9 +26,38 @@
     &&(v.case_kind==='CREDIT'?['start_monday','weekly_due','week_count','minimum_earnings_threshold','take_home_floor_override'].every(k=>v[k]===null)
       :v.start_monday!==null&&new Date(v.start_monday+'T00:00:00Z').getUTCDay()===1&&(v.weekly_due!==null||v.week_count!==null));}
   const CONTEXT_SCHEMA={actor_user_id:'uuid',owner_epoch:'positive',financial_view_revision:'integer',pay_channel:'channel',candidate_default_floor:'money?',valuation_policy_id:'uuid'};
+  const EDIT_CONTEXT_SCHEMA={...CONTEXT_SCHEMA,case_id:'uuid',case_revision:'positive',rule_id:'uuid',rule_revision:'positive'};
+  const EDIT_ISSUES=Object.freeze(['BPAY_NEXT_CASE_HAS_ACTIVITY','BPAY_NEXT_CASE_HELD_BY_DRAFT','BPAY_NEXT_CASE_EDIT_UNSUPPORTED','BPAY_NEXT_CASE_PROTECTION_CHANGED','BPAY_NEXT_CASE_PROTECTION_BALANCE_INVALID']);
+  function caseEditToken(v,edit){return object(v)&&Object.keys(v).sort().join()==='context,input'&&caseInput(v.input)
+    &&shape(v.context,EDIT_CONTEXT_SCHEMA)&&enc.encode(JSON.stringify(v)).byteLength<=32768
+    &&(!edit||(typeof edit.case_id==='string'&&v.context.case_id.toLowerCase()===edit.case_id.toLowerCase()
+      &&v.context.case_revision===edit.expected_case_revision));}
+  function caseEditState(v){
+    const schema={case_id:'uuid',candidate_id:'uuid',case_revision:'positive',rule_id:'uuid',rule_revision:'positive',applied_edit_command_id:'uuid?'};
+    if(!object(v)||Object.keys(v).sort().join()!==[...Object.keys(schema),'status','editable','issue_code','input','protection'].sort().join()
+      ||!shape(Object.fromEntries(Object.keys(schema).map(k=>[k,v[k]])),schema)
+      ||!['OPEN','PAUSED','CLOSED','WRITTEN_OFF'].includes(v.status)||typeof v.editable!=='boolean'
+      ||!(v.issue_code===null||EDIT_ISSUES.includes(v.issue_code))||v.editable!==(v.issue_code===null)
+      ||!(v.input===null||caseInput(v.input)&&v.input.candidate_id.toLowerCase()===v.candidate_id.toLowerCase()))return false;
+    if(v.protection!==null){const p=v.protection,ps={run_id:'uuid',run_worker_id:'uuid?',channel:'channel?',protected_amount:'money?'};
+      if(!object(p)||Object.keys(p).sort().join()!==[...Object.keys(ps),'run_status','worker_status','next_action'].sort().join()
+        ||!shape(Object.fromEntries(Object.keys(ps).map(k=>[k,p[k]])),ps)
+        ||!['PREPARING','REVIEW','DRAFT','CANCELLING','CANCELLED','EXECUTING','COMPLETE','EXPIRED','DISCARDED'].includes(p.run_status)
+        ||!(p.worker_status===null||['PREPARING','REVIEW','READY','DRAFT','CANCELLING','CANCELLED','ISSUED','COMPLETE'].includes(p.worker_status))
+        ||!['CANCEL_CANDIDATE_PAYMENT','REMOVE_CANDIDATE_OR_DISCARD','DISCARD_PREPARATION'].includes(p.next_action)
+        ||v.issue_code!=='BPAY_NEXT_CASE_HELD_BY_DRAFT')return false;}
+    return !v.editable||v.input!==null;
+  }
+  function caseEditReceipt(v){return object(v)&&Object.keys(v).sort().join()===['command_id','case_id','candidate_id','case_revision','rule_id','phase','issue_code'].sort().join()
+    &&shape(Object.fromEntries(['command_id','case_id','candidate_id','case_revision','rule_id'].map(k=>[k,v[k]])),
+      {command_id:'uuid',case_id:'uuid',candidate_id:'uuid',case_revision:'positive',rule_id:'uuid'})
+    &&['PENDING','CASE_EDITED','BLOCKED'].includes(v.phase)
+    &&(v.phase==='BLOCKED'?EDIT_ISSUES.includes(v.issue_code):v.issue_code===null)
+    &&v.command_id.toLowerCase()===v.rule_id.toLowerCase();}
+
   function caseToken(v){return object(v)&&Object.keys(v).sort().join() === 'context,input'&&caseInput(v.input)&&shape(v.context,CONTEXT_SCHEMA)&&enc.encode(JSON.stringify(v)).byteLength<=24576;}
-  function casePreview(v,input){const s={candidate_id:'uuid',weekly_due:'positiveMoney?',week_count:'positive?',first_due_monday:'date?',last_due_monday:'date?',total:'positiveMoney',minimum_earnings_threshold:'money?',take_home_floor_override:'money?',effective_take_home_floor:'money?'};
-    if(!object(v)||Object.keys(v).length!==11||!shape(Object.fromEntries(Object.keys(s).map(k=>[k,v[k]])),s)||!caseToken(v.preview_token)
+  function casePreview(v,input,edit=null){const s={candidate_id:'uuid',weekly_due:'positiveMoney?',week_count:'positive?',first_due_monday:'date?',last_due_monday:'date?',total:'positiveMoney',minimum_earnings_threshold:'money?',take_home_floor_override:'money?',effective_take_home_floor:'money?'};
+    if(!object(v)||Object.keys(v).length!==11||!shape(Object.fromEntries(Object.keys(s).map(k=>[k,v[k]])),s)||!(edit?caseEditToken(v.preview_token,edit):caseToken(v.preview_token))
       ||!equal(v.preview_token.input,input)||v.candidate_id.toLowerCase()!==input.candidate_id.toLowerCase()
       ||!Array.isArray(v.warnings)||v.warnings.length>1||v.warnings.some(x=>x!=='EXISTING_REPAYMENTS'))return false;
     const pennies=v=>v===null?null:BigInt(v.split('.')[0])*100n+BigInt((v.split('.')[1]??'').padEnd(2,'0'));
@@ -48,8 +77,8 @@ function mount(options){
   if(!doc||!host||!footer||[getInput,current,preview,submit,retry,snapshot,readCase].some(f=>typeof f!=='function'))throw Error('Case window unavailable');
   footer.classList.add('bpay-next-case-actions');
   const validInput=options.validInput??caseInput,validPreview=options.validPreview??casePreview;
-  let shown=null,shownInput=null,busy=false,accepted=options.acceptedCase?.()??null,ended=false,line='Preview first.';
-  if(accepted)line='This Case is being added.';
+  let shown=null,shownInput=null,busy=false,accepted=options.acceptedCase?.()??null,ended=false,needsRefresh=false,line='Preview first.';
+  if(accepted)line=options.editContext?'Changes are being saved.':'This Case is being added.';
   else if(snapshot()?.pending)line='Could not confirm the result; try again.';
   const panel=doc.createElement('section');panel.className='bpay-next-case-preview';panel.setAttribute('aria-label','Preview');
   const result=doc.createElement('p');result.className='bpay-next-case-result';result.setAttribute('role','status');result.setAttribute('aria-live','polite');
@@ -85,7 +114,8 @@ function mount(options){
     }
     previewButton.disabled=busy||Boolean(pending)||accepted!==null||!input;
     previewButton.hidden=Boolean(pending)||accepted!==null;
-    applyButton.textContent=pending?'Try again':accepted?'Refresh':'Apply';
+    previewButton.textContent=needsRefresh?'Refresh':'Preview';
+    applyButton.textContent=pending?'Try again':accepted?'Refresh':options.editContext?'Save changes':'Apply';
     applyButton.disabled=busy||(!pending&&!accepted&&!(shown&&input&&equal(input,shownInput)));
     host.replaceChildren(panel,empty,result);
     if(footer.childNodes.length!==2||footer.firstChild!==previewButton||footer.lastChild!==applyButton)footer.replaceChildren(previewButton,applyButton);
@@ -95,23 +125,43 @@ function mount(options){
     if(unknown)return 'Could not confirm the result; try again.';
     if(error?.serverCode==='BPAY_NEXT_CASE_PREVIEW_CHANGED'||error?.code==='BPAY_NEXT_CASE_PREVIEW_CHANGED')return 'Details have changed; preview again.';
     if(error?.code==='AUTH_REQUIRED')return 'Sign in again to continue.';
+    const code=error?.serverCode??error?.code;
+    if(options.editContext&&EDIT_ISSUES.includes(code))needsRefresh=true;
+    if(code==='BPAY_NEXT_CASE_HAS_ACTIVITY')return 'This Case has payment activity and cannot be changed.';
+    if(code==='BPAY_NEXT_CASE_HELD_BY_DRAFT')return 'This Case is in a Draft and cannot be changed.';
+    if(code==='BPAY_NEXT_CASE_PROTECTION_CHANGED')return 'This Case has changed; refresh and try again.';
+    if(code==='BPAY_NEXT_CASE_EDIT_UNSUPPORTED')return 'This Case cannot be changed here.';
     if(error?.serverCode==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'||error?.code==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND')return 'Set a pay channel on the Candidate, then preview again.';
     return 'Could not save this Case; preview again.';
   }
   async function refreshCase(){
-    const page=await readCase(accepted.case_id);
+    const page=await readCase(accepted.case_id,accepted);
     if(!active())return;
     if(!page||!Array.isArray(page.rows))throw Error('Case unavailable');
     if(page.rows.length===0){line='This Case is being added.';return;}
     if(page.rows.some(row=>row.case_id?.toLowerCase()!==accepted.case_id.toLowerCase()))throw Error('Case unavailable');
-    line='Case added.';if(onApplied){await onApplied(accepted,page);ended=true;}if(active())paint();
+    if(options.editContext){
+      if(page.complete!==true||page.next_cursor!==null)throw Error('Case unavailable');
+      const receipt=page.rows[0].edit_receipt;
+      if(!caseEditReceipt(receipt)||receipt.command_id.toLowerCase()!==accepted.command_id.toLowerCase()
+        ||receipt.case_revision!==accepted.case_revision||receipt.rule_id.toLowerCase()!==accepted.rule_id.toLowerCase()
+        ||page.rows.some(row=>!equal(row.edit_receipt,receipt)))throw Error('Edit unavailable');
+      if(receipt.phase==='PENDING'){line='Changes are being saved.';return;}
+      if(receipt.phase==='BLOCKED'){line=message({code:receipt.issue_code},false);await options.onBlocked?.(accepted,page);accepted=null;shown=null;shownInput=null;ended=true;return;}
+      if(page.rows.some(row=>BigInt(row.edit_state.case_revision)<BigInt(accepted.case_revision)
+        ||(row.edit_state.case_revision===accepted.case_revision&&(row.edit_state.rule_id.toLowerCase()!==accepted.rule_id.toLowerCase()
+          ||row.edit_state.applied_edit_command_id?.toLowerCase()!==accepted.command_id.toLowerCase()
+          ||row.current_rule_id?.toLowerCase()!==accepted.rule_id.toLowerCase()))))throw Error('Edit unavailable');
+    }
+    line=options.editContext?'Changes saved.':'Case added.';if(onApplied){await onApplied(accepted,page);ended=true;}if(active())paint();
   }
   previewButton.onclick=async()=>{
+    if(needsRefresh&&!busy&&active()){await options.onEditRefresh?.();return;}
     const input=currentInput();if(busy||!active()||!input||snapshot()?.pending||accepted)return;
     busy=true;shown=null;shownInput=null;line='Checking…';paint();
     try{const value=await preview(input);if(!active())return;if(!equal(input,currentInput())){line='Details changed; preview again.';return;}
       if(!validPreview(value,input))throw Error('Preview unavailable');shown=value;shownInput=input;line='';
-    }catch(error){if(active()){shown=null;shownInput=null;line=error?.serverCode==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'||error?.code==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'?'Set a pay channel on the Candidate, then preview again.':error?.code==='AUTH_REQUIRED'?'Sign in again to continue.':'Could not prepare the preview; try again.';}}
+    }catch(error){if(active()){shown=null;shownInput=null;line=EDIT_ISSUES.includes(error?.serverCode??error?.code)?message(error,false):error?.serverCode==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'||error?.code==='BPAY_NEXT_CASE_CREATE_SOURCE_CHANNEL_UNBOUND'?'Set a pay channel on the Candidate, then preview again.':error?.code==='AUTH_REQUIRED'?'Sign in again to continue.':'Could not prepare the preview; try again.';}}
     finally{busy=false;paint();}
   };
   applyButton.onclick=async()=>{
@@ -129,5 +179,5 @@ function mount(options){
   };
   paint();return Object.freeze({changed:paint,refresh:paint,destroy(){ended=true;previewButton.onclick=null;applyButton.onclick=null;}});
 }
-return Object.freeze({CASE_INPUT_SCHEMA,caseInput,caseToken,casePreview,equal,mount});
+return Object.freeze({CASE_INPUT_SCHEMA,caseInput,caseToken,caseEditToken,caseEditState,caseEditReceipt,casePreview,equal,mount});
 });

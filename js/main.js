@@ -12986,20 +12986,20 @@ async function bankingExportSnoozesPdf(filters = {}) {
 
 
 async function openBankingPaymentAdvanceModal(seed = {}) {
-  if (!(seed?.finance_case_id || seed?.case_id || seed?.id)) {
+  { // FC09 qualifies both create and edit before any legacy reader.
     const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
     const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
     const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
       &&(!parent||parent._ctxRef===boundContext);
     try {
-      const owner=await ownerClient.begin('advance:create:'+crypto.randomUUID());
+      const owner=await ownerClient.begin('advance:case:'+crypto.randomUUID());
       if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return null;
       if(owner.active_owner==='NEXT') {
         if(SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextPaymentAdvance)throw Error();
         return await window.CloudTMSBpayNextPaymentAdvance.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
           ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
           pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),
-          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated},seed);
+          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated,onCaseEdited:seed.onCaseEdited},seed);
       }
       if(owner.active_owner!=='LEGACY')throw Error();
     } catch {
@@ -14509,20 +14509,20 @@ async function openBankingPaymentAdvanceModal(seed = {}) {
 
 
 async function openBankingManualCreditAdjustmentModal(seed = {}) {
-  if (!(seed?.finance_case_id || seed?.case_id || seed?.id)) {
+  { // FC09 qualifies both create and edit before any legacy reader.
     const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
     const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
     const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
       &&(!parent||parent._ctxRef===boundContext);
     try {
-      const owner=await ownerClient.begin('credit:create:'+crypto.randomUUID());
+      const owner=await ownerClient.begin('credit:case:'+crypto.randomUUID());
       if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return null;
       if(owner.active_owner==='NEXT') {
         if(SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextManualCredit)throw Error();
         return await window.CloudTMSBpayNextManualCredit.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
           ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
           pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),
-          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated},seed);
+          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated,onCaseEdited:seed.onCaseEdited},seed);
       }
       if(owner.active_owner!=='LEGACY')throw Error();
     } catch {
@@ -15576,20 +15576,20 @@ async function openBankingManualCreditAdjustmentModal(seed = {}) {
 
 
 async function openBankingManualDebtAdjustmentModal(seed = {}) {
-  if (!(seed?.finance_case_id || seed?.case_id || seed?.id)) {
+  { // FC09 qualifies both create and edit before any legacy reader.
     const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
     const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
     const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
       &&(!parent||parent._ctxRef===boundContext);
     try {
-      const owner=await ownerClient.begin('debt:create:'+crypto.randomUUID());
+      const owner=await ownerClient.begin('debt:case:'+crypto.randomUUID());
       if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return null;
       if(owner.active_owner==='NEXT') {
         if(SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextManualDebt)throw Error();
         return await window.CloudTMSBpayNextManualDebt.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
           ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
           pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),
-          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated},seed);
+          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated,onCaseEdited:seed.onCaseEdited},seed);
       }
       if(owner.active_owner!=='LEGACY')throw Error();
     } catch {
@@ -100492,49 +100492,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return getFinanceCases().find((row) => String(row?.finance_case_id || row?.id || '').trim() === id) || null;
     };
 
-    const canEditBankDetailsForFinanceCase = (row) => {
-      if (!row || typeof row !== 'object') return false;
-
-      const actionFlags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
-      const caseType = String(row.case_type || '').trim().toUpperCase();
-      const payMethod = String(
-        row.pay_method ||
-        row.current_pay_method ||
-        row.source_pay_method ||
-        ''
-      ).trim().toUpperCase();
-      const taxability = String(row.taxability || '').trim().toUpperCase();
-      const routingKind = String(
-        row.routing_kind ||
-        row.finance_routing_kind ||
-        ''
-      ).trim().toUpperCase();
-
-      const explicitlyEditable =
-        actionFlags.can_edit_bank_details === true ||
-        row.edit_bank_details_allowed === true ||
-        row.oneoff_bank_details_editable === true;
-
-      if (!explicitlyEditable) return false;
-
-      if (caseType === 'PAYMENT_ADVANCE') {
-        return payMethod === 'UMBRELLA';
-      }
-
-      if (caseType === 'MANUAL_CREDIT_ADJUSTMENT') {
-        const isNonTaxable = (taxability === 'NON_TAXABLE' || taxability === 'NONTAXABLE');
-        const isCandidateDirected =
-          !routingKind ||
-          routingKind === 'CANDIDATE_DIRECTED_ONEOFF' ||
-          routingKind === 'ONEOFF_BANK_ACCOUNT' ||
-          routingKind === 'ONE_OFF_BANK_ACCOUNT';
-
-        return payMethod === 'UMBRELLA' && isNonTaxable && isCandidateDirected;
-      }
-
-      return false;
-    };
-
     const findTimesheetSnooze = ({ snooze_id, timesheet_id } = {}) => {
       const sid = String(snooze_id || '').trim();
       const tid = String(timesheet_id || '').trim();
@@ -102718,6 +102675,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
       if (a === 'banking:finance:editPaymentAdvance') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      if(bankingNextOwnerClient().peek()?.active_owner==='NEXT'){
+        const context=findFinanceCaseById(financeCaseId);
+        await openBankingPaymentAdvanceModal({...(context??{}),case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||context?.candidate_id||'')});return;
+      }
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Payment Advance not found.'); return; }
       const availability = getFinanceCaseActionAvailability(row);
@@ -102735,6 +102696,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:finance:editManualCredit') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      if(bankingNextOwnerClient().peek()?.active_owner==='NEXT'){
+        const context=findFinanceCaseById(financeCaseId);
+        await openBankingManualCreditAdjustmentModal({...(context??{}),case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||context?.candidate_id||'')});return;
+      }
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Manual Credit Adjustment not found.'); return; }
       const availability = getFinanceCaseActionAvailability(row);
@@ -102750,47 +102715,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return;
     }
 
-    if (a === 'banking:finance:editBankDetails') {
-      const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
-      const row = findFinanceCaseById(financeCaseId);
-      if (!row) { toast('Finance case not found.'); return; }
-      if (!canEditBankDetailsForFinanceCase(row)) {
-        toast('Bank details can only be edited for eligible umbrella one-off payouts that are still Not processed yet.');
-        return;
-      }
-
-      const caseType = String(row.case_type || '').trim().toUpperCase();
-
-      if (caseType === 'PAYMENT_ADVANCE') {
-        if (typeof openBankingPaymentAdvanceModal !== 'function') {
-          toast('Payment Advance modal is not available.');
-          return;
-        }
-        const childResult = await openBankingPaymentAdvanceModal(deep(row));
-        if (childResultShouldRefreshPayWorkbench(childResult)) {
-          await refreshPayWorkbench({ reason: 'FINANCE_CHILD_MODAL_RETURN', mode: 'SOFT' });
-        }
-        return;
-      }
-
-      if (caseType === 'MANUAL_CREDIT_ADJUSTMENT') {
-        if (typeof openBankingManualCreditAdjustmentModal !== 'function') {
-          toast('Manual Credit Adjustment modal is not available.');
-          return;
-        }
-        const childResult = await openBankingManualCreditAdjustmentModal(deep(row));
-        if (childResultShouldRefreshPayWorkbench(childResult)) {
-          await refreshPayWorkbench({ reason: 'FINANCE_CHILD_MODAL_RETURN', mode: 'SOFT' });
-        }
-        return;
-      }
-
-      toast('Edit bank details is not available for this finance case.');
-      return;
-    }
-
     if (a === 'banking:finance:editManualDebt') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      if(bankingNextOwnerClient().peek()?.active_owner==='NEXT'){
+        const context=findFinanceCaseById(financeCaseId);
+        await openBankingManualDebtAdjustmentModal({...(context??{}),case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||context?.candidate_id||'')});return;
+      }
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Manual Debt Adjustment not found.'); return; }
       const availability = getFinanceCaseActionAvailability(row);
