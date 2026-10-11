@@ -821,7 +821,8 @@
       if (!(button instanceof HTMLButtonElement)) return;
       // Column-sort labels are controls, not actions; "Uploaded" must not be
       // promoted to the purple Upload action by the shared verb matcher.
-      if (button.matches('[data-ws-sort]')) {
+      if (button.matches('[data-ws-sort]') ||
+          (kindSlug === 'bpay-next-read' && button.matches('[data-next-focus-key="candidate-export"]'))) {
         button.classList.remove('ctms-action-danger', 'ctms-action-primary');
         return;
       }
