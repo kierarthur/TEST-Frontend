@@ -362744,7 +362744,23 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   GE();
 }
 
+function showNextTimesheetSnoozeResult(message,error=false){
+ const host=document.getElementById('modalBody');if(!host)return;let line=host.querySelector('[data-next-timesheet-snooze-result]');if(!line){line=document.createElement('p');line.className='ws-notice';line.setAttribute('data-next-timesheet-snooze-result','');line.setAttribute('data-next-live-copy','');host.prepend(line);}line.textContent=message;line.setAttribute('role',error?'alert':'status');
+}
+async function openNextTimesheetPaymentSnooze(input={}){
+ const ownerClient=bankingNextOwnerClient(),actor=SESSION?.user?.id,parent=currentFrame();
+ if(!ownerClient){showNextTimesheetSnoozeResult('Could not check payment settings; try again.',true);return {handled:true,result:null};}
+ try{await ownerClient.qualify('timesheet:snooze:'+crypto.randomUUID());if(SESSION?.user?.id!==actor||currentFrame()!==parent)return {handled:true,result:null};
+  const owner=ownerClient.peek();if(owner?.active_owner==='LEGACY')return {handled:false,result:null};if(owner?.active_owner!=='NEXT'||!window.CloudTMSBpayNextSnooze)throw Error();
+  const mc=window.modalCtx??{},row=mc.data??{},details=mc.timesheetDetails??{},candidate=mc.timesheetRelated?.candidate??{},ts=details.timesheet??{};
+  const scope={candidate_id:String(input.candidate_id??input.candidateId??candidate.id??candidate.candidate_id??row.candidate_id??'').toLowerCase(),physical_timesheet_id:String(input.timesheet_id??input.timesheetId??row.timesheet_id??row.id??'').toLowerCase(),physical_timesheet_version:String(ts.version??details.current_version??row.version??''),scope_kind:'WHOLE_TIMESHEET',snooze_kind:'TIMESHEET_PAYMENT'};
+  const child=window.CloudTMSBpayNextSnooze.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal})},
+   {scope,clear:input.clear===true,label:'Timesheet payment',candidateLabel:input.candidate_display_name??candidate.display_name??row.candidate_name,clientLabel:input.client_name??mc.timesheetRelated?.client?.name??row.client_name,dateLabel:(ts.week_ending_date??row.week_ending_date)?'Week ending '+String(ts.week_ending_date??row.week_ending_date).split('-').reverse().join('/'):null});
+  return {handled:true,result:await child.done};
+ }catch{if(SESSION?.user?.id===actor&&currentFrame()===parent)showNextTimesheetSnoozeResult('Could not open the snooze; try again.',true);return {handled:true,result:null};}
+}
 async function openTimesheetPaymentSnoozeModal(input = {}) {
+  const next=await openNextTimesheetPaymentSnooze(input);if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
@@ -363658,6 +363674,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
         if (!result || result.ok !== true) return;
 
         await refreshOverviewOnly();
+        if(result.next===true){showNextTimesheetSnoozeResult(result.message??'Snooze updated.');return;}
 
         if (result.action === 'clear') {
           toast('Timesheet payment snooze cleared.');
@@ -363696,6 +363713,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
       clearSnoozePaymentBtn.disabled = true;
 
       try {
+        const next=await openNextTimesheetPaymentSnooze({...buildSnoozeSeed(),clear:true});if(next.handled){if(next.result?.ok){await refreshOverviewOnly();showNextTimesheetSnoozeResult(next.result.message??'Snooze removed.');}return;}
         if (typeof openUiConfirmModal === 'function') {
           const confirmRes = await openUiConfirmModal({
             title: 'Clear payment snooze?',

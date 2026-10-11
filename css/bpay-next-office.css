@@ -330,3 +330,42 @@
  #modal.ctms-kind-bpay-next-read .bpay-next-estimate-feedback.is-outdated {color:#ffe7b6;}
  #modal.ctms-kind-bpay-next-read .bpay-next-row-more summary {min-height:44px;display:flex;align-items:center;}
 }
+
+/* WB38 shared native snooze window and inline controls, dark Office only. */
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-window {display:grid;gap:16px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-window h2,
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-window p {margin:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-subject {display:grid;gap:5px;padding:14px 16px;border:1px solid #31445e;border-radius:9px;background:#101d30;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-subject span {color:#b8c6d9;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-subject-line {display:flex;align-items:start;justify-content:space-between;gap:12px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form {display:grid;gap:16px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form label {display:grid;gap:7px;font-size:13px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form label:has(input[type=checkbox]),
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning label {display:flex;align-items:center;gap:8px;min-height:32px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form input[type=text],
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form textarea {box-sizing:border-box;width:100%;padding:10px 12px;color:#eef4fc;background:#0b1422;border:1px solid #385576;border-radius:7px;font:inherit;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form small {color:#b8c6d9;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form .bpay-next-snooze-field-error {color:#f5c1bd;}
+#modal.ctms-kind-bpay-next-read [data-next-destructive].primary {background:#823739;border-color:#b55c60;color:#fff;}
+#modal.ctms-kind-bpay-next-read .bpay-next-window-actions [data-next-destructive]:not(.primary) {margin-right:auto;border-color:#b55c60;color:#f5c1bd;}
+#modal.ctms-kind-bpay-next-read .bpay-next-window-actions:has([data-next-destructive]) {width:100%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-snooze-results .bpay-next-snooze-money {text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+#modal.ctms-kind-bpay-next-read #modalActions:has(> .bpay-next-window-actions[hidden]) {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form input[type=checkbox],
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning input[type=checkbox] {width:18px;height:18px;accent-color:var(--ctms-modal-accent);}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning {padding:12px 14px;border:1px solid #8e6b35;border-radius:8px;background:#302819;color:#ffe7b6;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-partial {border-color:#8e6b35;background:#302819;color:#ffe7b6;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-window [hidden] {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-results {max-height:40vh;overflow:auto;}
+#modal.ctms-kind-bpay-next-read .bpay-next-inline-snooze {display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:10px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-inline-snooze .btn {font-size:12px;min-height:30px;padding:5px 8px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-row-menu {position:fixed;inset:auto;margin:0;z-index:4;background:#101d30;border:1px solid #385576;border-radius:7px;min-width:180px;padding:4px;box-shadow:0 8px 24px #0008;}
+#modal.ctms-kind-bpay-next-read .bpay-next-row-menu .btn {display:block;width:100%;text-align:left;border:0;background:transparent;}
+#modal.ctms-kind-bpay-next-read .bpay-next-row-more:not([open]) .bpay-next-row-menu {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-success {color:#a9e1bd;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-failure {color:#f5c1bd;}
+@media(max-width:720px){
+ #modal.ctms-kind-bpay-next-read .bpay-next-inline-snooze .btn,
+ #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form label:has(input[type=checkbox]) {min-height:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-inline-snooze {margin-left:0;}
+}
