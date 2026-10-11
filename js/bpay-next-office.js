@@ -39,7 +39,7 @@
   EXCLUSION_PAGE:{run_id:'uuid',page_no:'positive',excluded_work_ids:'emptyIds',excluded_candidate_ids:'emptyIds'},
   MATCHING_PAGE:{run_id:'uuid',page_no:'positive',after_member_no:'positive?'},
 
-    CREATE: { run_id: 'uuid', pay_date: 'date' },
+    CREATE: { run_id: 'uuid', command_id: 'uuid', descriptor: 'descriptor' },
     WORK_PAGE: { run_id: 'uuid', page_no: 'positive', choices: 'choices' },
     COMPONENT_PAGE: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',page_no:'positive',approved_line_ids:'ids'},
     COMPONENT_SEAL: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',expected_pages:'positive',expected_count:'positive'},
@@ -60,7 +60,7 @@
   EXCLUSION_PAGE:{run_id:'uuid',page_no:'positive',item_count:'integer',complete:'boolean',replay:'boolean'},
   MATCHING_PAGE:{run_id:'uuid',page_no:'positive',item_count:'integer',selection_count:'integer',selected_candidate_count:'integer',replay:'boolean',skipped:'skipped',complete:'boolean',next_after_member_no:'positive?'},
 
-    CREATE: { run_id: 'uuid', status: 'run', selection_state: 'selection', selection_count: 'integer', selected_candidate_count: 'integer', official_pay_date: 'date' },
+    CREATE: { run_id: 'uuid', status: 'run', selection_state: 'selection', selection_count: 'integer', selected_candidate_count: 'integer', official_pay_date: 'date', command_id:'uuid', agency_sequence:'positive?', choice_work_count:'integer', choice_case_count:'integer', empty:'boolean', replay:'boolean' },
     WORK_PAGE: { run_id: 'uuid', page_no: 'positive', item_count: 'positive', selection_count: 'integer', selected_candidate_count: 'integer', replay: 'boolean', skipped: 'skipped' },
     COMPONENT_PAGE: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',page_no:'positive',item_count:'positive',component_count:'positive',replay:'boolean'},
     COMPONENT_SEAL: {run_id:'uuid',work_id:'uuid',expected_revision_id:'uuid',sealed:'true',component_count:'positive',replay:'boolean'},
@@ -308,8 +308,6 @@ function field(v,type){
   const financial = action => ['PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
   function requestBody(action, args) {
     let schema = INPUT[action];
-    if(action==='CREATE'&&Object.hasOwn(args||{},'descriptor'))schema={run_id:'uuid',command_id:'uuid',descriptor:'descriptor'};
-    else if (action === 'CREATE' && !Object.hasOwn(args || {}, 'pay_date')) schema = {run_id:'uuid'};
     if(action==='PREPARATION_DISCARD'&&Object.hasOwn(args||{},'reason'))schema={...schema,reason:'discardReason'};
     if (action === 'PAYE_NET' && Object.hasOwn(args || {}, 'expected_projection_revision')) schema = { ...schema, expected_projection_revision: 'projectionRevision' };
     if (action === 'CANCEL_REQUEST' && (Object.hasOwn(args || {}, 'run_id') || Object.hasOwn(args || {}, 'pay_channel'))) schema = {...schema,run_id:'uuid',pay_channel:'channel'};
@@ -317,7 +315,7 @@ function field(v,type){
     return JSON.stringify({ action, ...args });
   }
   function receipt(payload, action, args) {
-    const schema=action==='CREATE'&&Object.hasOwn(args,'descriptor')?{...RECEIPT.CREATE,command_id:'uuid',agency_sequence:'positive?',choice_work_count:'integer',choice_case_count:'integer',empty:'boolean',replay:'boolean'}:RECEIPT[action];
+    const schema=RECEIPT[action];
     if (!shape(payload, schema)) fail();
     for (const k of ['run_id', 'run_worker_id', 'candidate_id', 'work_id', 'expected_revision_id', 'command_id', 'transfer_id', 'instruction_id']) if (Object.hasOwn(args, k) && !(action==='CANCEL_REQUEST'&&k==='run_id') && !same(payload[k], args[k])) fail();
     if(['EXCLUSION_PAGE','MATCHING_PAGE'].includes(action)&&payload.page_no!==args.page_no)fail();
@@ -325,8 +323,7 @@ function field(v,type){
     if(action==='MATCHING_PAGE'&&(BigInt(payload.item_count)>100n||payload.skipped.length>Number(payload.item_count)
       ||(payload.complete!==(payload.next_after_member_no===null))||(!payload.complete&&(payload.item_count==='0'
       ||BigInt(payload.next_after_member_no)!==BigInt(args.after_member_no??'0')+BigInt(payload.item_count)))))fail();
-    if(action==='CREATE'&&Object.hasOwn(args,'pay_date')&&payload.official_pay_date!==args.pay_date)fail();
-    if(action==='CREATE'&&Object.hasOwn(args,'descriptor')&&(payload.empty!==(payload.selected_candidate_count==='0')||payload.empty!==(payload.agency_sequence===null)||BigInt(payload.selection_count)>BigInt(payload.choice_work_count)||payload.official_pay_date!==args.descriptor.namespace.official_pay_date))fail();
+    if(action==='CREATE'&&(payload.empty!==(payload.selected_candidate_count==='0')||payload.empty!==(payload.agency_sequence===null)||BigInt(payload.selection_count)>BigInt(payload.choice_work_count)||payload.official_pay_date!==args.descriptor.namespace.official_pay_date))fail();
     if(action==='WORK_PAGE'){
       const ids=args.choices.map(x=>x.work_id.toLowerCase()),positions=payload.skipped.map(x=>ids.indexOf(x.work_id.toLowerCase()));
       if(positions.some((n,i)=>n<0||(i>0&&n<=positions[i-1])))fail();
@@ -1472,23 +1469,10 @@ function field(v,type){
       else body.append(el('p','Banking environment: '+capabilities.worker_environment+'.'));
       body.append(button('Re-check Banking capabilities',loadCapabilities,readBusy||s.busy));
       body.append(el('p','Name check (Confirmation of Payee) is unavailable. Provider execution is disabled; funding availability is not verified.'));
-      body.append(el('p','One selection produces separately addressable PAYE / Umbrella frozen Drafts. PAYE CSV and original advice are supported; Umbrella execution is not implemented in this thin view.'),el('p','Unsubmitted checkbox choices are not saved on Close; accepted selection and uncertain requests are retained.'));
       if(typeof options.ownerReady==='function'&&options.ownerReady()!==true)body.append(el('p','Banking ownership is unavailable or paused. Money controls are disabled.','bpay-next-alert'));
       if(error) {const a=el('p',error,'bpay-next-alert');a.setAttribute('role','alert');body.append(a);}
       if(s.pending){body.append(el('p','Uncertain request retained. Conflicting changes are disabled.'),button('Retry exact request',async()=>{const action=s.pending.action;const result=await controller.retry();if(action==='CSV_ISSUE')download(result);if(action==='REVIEW')await applyReview(result);else await refresh();},!capabilities?.environment_ready||readBusy||s.busy||(typeof options.ownerReady==='function'&&options.ownerReady()!==true)));}
       body.append(el('p',readBusy||s.busy?'Waiting for server…':'Server-owned amounts; no payment totals calculated here.'));
-      if(!s.selection_sealed&&!s.worker_id){body.append(button('Choose Candidate',chooseCandidate,locked||(s.case_pages!=='0'&&!s.case_sealed),true));if(s.case_pages!=='0'&&!s.case_sealed)body.append(el('p','Seal this Candidate’s Case selection before choosing another Candidate.'));}
-      if(!s.run_id){
-        if(s.candidate_id)body.append(el('p','Candidate selected. Approval facts below do not guarantee payment eligibility.'));
-        body.append(button('Start selection',async()=>{const run=controller.newId();await controller.mutate('CREATE',{run_id:run});},locked||!s.candidate_id));
-        // Resume explicitly reviews the existing run; no new preparation identity.
-        const [r,ri]=input('Resume run ID','text',resumeInput?.value||'');resumeInput=ri;body.append(r,el('p','Resume asks the server to Review this same sealed preparation; it does not create or prepare a replacement.'),button('Resume',async()=>{await applyReview(await controller.mutate('REVIEW',{run_id:resumeInput.value}));},locked),button('Open confirmed channel Drafts',async()=>{controller.bind({run_id:resumeInput.value});await loadDrafts();workers=null;},locked));
-      }else{body.append(el('p','Run '+s.run_id),button('Refresh progress',refresh,locked));}
-      if(current&&!s.selection_sealed&&(!status||status.header.run_status==='PREPARING')){
-        const rows=current.rows.map(r=>{const accepted=s.accepted_page_work_ids.includes(r.work_id.toLowerCase());const check=el('input');check.type='checkbox';check.setAttribute('data-next-focus-key','work:'+r.work_id);check.checked=accepted||selection.has(r.work_id);check.disabled=locked||accepted||r.current_revision_id===null;check.setAttribute('aria-label','Include '+(r.timesheet_reference||r.work_id));check.addEventListener('change',()=>{if(check.checked)selection.set(r.work_id,{work_id:r.work_id,expected_revision_id:r.current_revision_id,mode:'ALL'});else selection.delete(r.work_id);});return[check,r.timesheet_reference,r.client_display_name,humanDate(r.week_ending_date),r.approval_state,r.approved_source_ex_vat===null?null:'£'+r.approved_source_ex_vat,r.position_ready?'Current approval applied':'Position pending / not approved'];});
-        body.append(el('h3','Current approval facts — explicit Work selection'),table(['Include','Timesheet','Client','Week ending','Approval','Full approval ex VAT','Position fact'],rows));
-        if(!current.complete)body.append(button('Next Work page',()=>loadCurrent(current.next_cursor),locked));
-      }
       if(s.run_id&&s.selection_sealed&&!s.confirmed)body.append(button('Open progress',()=>openBpayNextPreparationProgress({...options,onPreparationDiscarded,document:doc,progressNamespace:workbenchShell?.snapshot().context,progressCurrentNamespace:()=>workbenchShell?.snapshot().context,submissionComplete:true},s.run_id),locked));
       const addresses=drafts?.rows??s.drafts;
       if(s.confirmed&&addresses.length){body.append(el('h3','Frozen channel Drafts'),el('p','Each address opens this same preparation for one frozen pay channel; Source and ordinary Work are not separate Drafts.'));
