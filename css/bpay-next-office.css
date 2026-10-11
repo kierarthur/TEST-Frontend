@@ -600,3 +600,31 @@
  #modal.ctms-modern-modal:has([data-daily-processing]) #btnCloseModal,#modal.ctms-modern-modal:has([data-daily-processing]) #btnPaymentHistory {min-height:44px;min-width:44px;}
  #modal.ctms-modern-modal:has([data-daily-processing]) #modalBody button {min-height:44px;min-width:44px;}
 }
+.ctms-kind-bpay-next-read .bpay-next-case-preview {
+  margin: 0; padding: 18px; border: 1px solid #273b57; border-radius: 13px;
+  background: linear-gradient(135deg, #101e34, #0a1424); color: #f1f5fb;
+}
+.ctms-kind-bpay-next-read .bpay-next-case-eyebrow {
+  color: #999cff; font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: 1px;
+}
+.ctms-kind-bpay-next-read .bpay-next-case-preview h3 {
+  margin: 6px 0 12px; padding-bottom: 12px; border-bottom: 1px solid #273b57; font-size: 14px;
+}
+.ctms-kind-bpay-next-read .bpay-next-case-preview dl {
+  display: grid; grid-template-columns: 1fr 1.35fr; gap: 12px 14px; margin: 0; font-size: 12px;
+}
+.ctms-kind-bpay-next-read .bpay-next-case-preview dt { color: #b8c7dc; }
+.ctms-kind-bpay-next-read .bpay-next-case-preview dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.ctms-kind-bpay-next-read .bpay-next-case-warning {
+  margin: 12px 0 0; padding: 12px; border: 1px solid #34445e; border-left: 4px solid #ffb547;
+  border-radius: 9px; font-size: 12px; font-weight: 700;
+}
+.ctms-kind-bpay-next-read .bpay-next-case-result { margin: 12px 0 0; color: #c5d2e5; font-size: 13px; }
+.ctms-kind-bpay-next-read .bpay-next-case-result:empty { display: none; }
+.ctms-kind-bpay-next-read .bpay-next-case-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 480px) {
+  .ctms-kind-bpay-next-read .bpay-next-case-preview { padding: 14px; }
+  .ctms-kind-bpay-next-read .bpay-next-case-preview dl { grid-template-columns: 1fr 1fr; gap: 12px 8px; }
+  #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-actions button,
+  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-actions) #btnCloseModal { min-height: 44px; min-width: 44px; }
+}

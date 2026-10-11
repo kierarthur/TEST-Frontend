@@ -4,10 +4,10 @@
  * only an explicit SAME-byte retry. Closing the sheet never clears it.
  */
 (function (root, factory) {
-  const api = factory(typeof module === 'object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates, typeof module === 'object' && module.exports ? require('./bpay-next-ui.js') : root.CloudTMSBpayNextUi);
+  const api = factory(typeof module === 'object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates, typeof module === 'object' && module.exports ? require('./bpay-next-ui.js') : root.CloudTMSBpayNextUi, typeof module === 'object' && module.exports ? require('./bpay-next-case-preview.js') : root.CloudTMSBpayNextCasePreview);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.CloudTMSBpayNextOffice = api;
-})(typeof globalThis === 'object' ? globalThis : this, function (dates, ui) {
+})(typeof globalThis === 'object' ? globalThis : this, function (dates, ui, cases) {
   'use strict';
   const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
   const INT = /^(?:0|[1-9]\d{0,18})$/;
@@ -122,6 +122,7 @@
   // CONFIRM freezes the parent Draft; its prepared worker remains READY.
   function draftActionsAllowed(h) { return h.run_status === 'DRAFT' && ['READY', 'DRAFT'].includes(h.worker_status); }
   const INPUT = {
+    CASE_CREATE:{command_id:'uuid',...cases.CASE_INPUT_SCHEMA,preview_token:'caseToken'},
     PREPARATION_DISCARD:{command_id:'uuid',run_id:'uuid',expected_preparation_revision:'integer'},
     WAKE:{run_id:'uuid'},
   EXCLUSION_PAGE:{run_id:'uuid',page_no:'positive',excluded_work_ids:'emptyIds',excluded_candidate_ids:'emptyIds'},
@@ -144,6 +145,7 @@
     CSV_ISSUE: { instruction_id: 'uuid', transfer_id: 'uuid' }
   };
   const RECEIPT = {
+    CASE_CREATE:{case_id:'uuid',command_id:'uuid',sequence:'positive',phase:'caseCreatePhase',replay:'boolean'},
     PREPARATION_DISCARD:{command_id:'uuid',run_id:'uuid',sequence:'positive?',phase:'discardReceiptPhase',expected_candidates:'integer',completed_candidates:'integer',removed_candidates:'integer',already_removed_candidates:'integer',blocked_candidates:'integer',replay:'boolean'},
     WAKE:{run_id:'uuid',accepted:'boolean',throttled:'boolean'},
   EXCLUSION_PAGE:{run_id:'uuid',page_no:'positive',item_count:'integer',complete:'boolean',replay:'boolean'},
@@ -195,6 +197,7 @@
   };
   const RETURN_HEADER = {run_id:'uuid',run_worker_id:'uuid',candidate_id:'uuid',financial_view_revision:'integer'};
   const PAGES = {
+    CASE_PREVIEW:{input:'caseInput'},
     GUARD:{run_id:'uuid'},
     PROGRESS:{run_id:'uuid'},
     RATES:{work_id:'uuid',expected_revision_id:'uuid',approved_line_id:'uuid',after_bucket:'bucket?',limit:'limit'},
@@ -290,6 +293,9 @@ function validDiscardProgress(p){
     &&(p.discard_phase==='DISCARDED'?p.status==='CANCELLED'&&blocked===0n:p.status==='REVIEW'&&blocked>0n);
 }
 function field(v,type){
+    if(type==='caseCreatePhase')return v==='ACCEPTED_PENDING_CASE';
+    if(type==='caseInput')return cases.caseInput(v);
+    if(type==='caseToken')return cases.caseToken(v);
     if(type==='guardDecision')return ['UMBRELLA_ONLY','VERIFY_BOTH','VERIFY_PAYE'].includes(v);
     if(type==='guardChannel')return ['ALL','PAYE','UMBRELLA'].includes(v);
     if(type==='guardReason')return typeof v==='string'&&v.trim().length>0&&!v.includes('\0')&&encoder.encode(v).byteLength<=500;
@@ -406,7 +412,7 @@ function field(v,type){
       ||value.provider_status!=='DISABLED'||value.funding_status!=='UNAVAILABLE'||value.csv_available!==value.environment_ready)fail();
     return Object.freeze({...value});
   }
-  const financial = action => ['PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
+  const financial = action => ['CASE_CREATE','PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
   const reauthAction = action => ['CANCEL_REQUEST','CSV_ISSUE','PAYE_SAME_WEEK_OVERRIDE'].includes(action);
   function reauthIntentBody(action,args){
     if(action!=='PAYE_SAME_WEEK_OVERRIDE')return requestBody(action,args);
@@ -425,18 +431,20 @@ function field(v,type){
     // Historical tokenless journals remain readable, byte-for-byte. A new
     // protected dispatch separately requires the completed helper below.
     if((reauthAction(action)||action==='PAYE_GUARD_DECISION') && Object.hasOwn(args || {},'reauth_token'))schema={...schema,reauth_token:'reauthToken'};
-    if (!schema || !shape(args, schema) || (action==='EXCLUSION_PAGE'&&args.excluded_work_ids.length+args.excluded_candidate_ids.length>100) || (action === 'CASE_PAGE' && args.component_ids.length !== args.selected.length)) fail('REQUEST_INVALID');
+    if(action==='CASE_CREATE'){const {command_id,preview_token,...input}=args||{};if(!field(command_id,'uuid')||!cases.caseInput(input)||!cases.caseToken(preview_token)||!cases.equal(preview_token.input,input))fail('REQUEST_INVALID');}
+    if (!schema || (action!=='CASE_CREATE'&&!shape(args, schema)) || (action==='EXCLUSION_PAGE'&&args.excluded_work_ids.length+args.excluded_candidate_ids.length>100) || (action === 'CASE_PAGE' && args.component_ids.length !== args.selected.length)) fail('REQUEST_INVALID');
     if(action==='PAYE_GUARD_DECISION'&&((args.decision==='UMBRELLA_ONLY'&&(args.reason!==null||Object.hasOwn(args,'reauth_token')))
       ||(args.decision!=='UMBRELLA_ONLY'&&!field(args.reauth_token,'reauthToken'))))fail('REQUEST_INVALID');
     const bytes=JSON.stringify({ action, ...args });
     if(action==='PAYE_GUARD_DECISION'&&encoder.encode(bytes).byteLength>32768)fail('REQUEST_INVALID');
-    if(financial(action) && encoder.encode(bytes).byteLength>2048)fail('REQUEST_INVALID');
+    if(financial(action) && encoder.encode(bytes).byteLength>(action==='CASE_CREATE'?32768:2048))fail('REQUEST_INVALID');
     return bytes;
   }
   function receipt(payload, action, args) {
     const schema=RECEIPT[action];
     if (!shape(payload, schema)) fail();
-    for (const k of ['run_id', 'run_worker_id', 'candidate_id', 'work_id', 'expected_revision_id', 'command_id', 'transfer_id', 'instruction_id']) if (Object.hasOwn(args, k) && !(action==='CANCEL_REQUEST'&&k==='run_id') && !same(payload[k], args[k])) fail();
+    for (const k of ['run_id', 'run_worker_id', 'candidate_id', 'work_id', 'expected_revision_id', 'command_id', 'transfer_id', 'instruction_id']) if (Object.hasOwn(args, k) && !(action==='CANCEL_REQUEST'&&k==='run_id') && !(action==='CASE_CREATE'&&k==='candidate_id') && !same(payload[k], args[k])) fail();
+    if(action==='CASE_CREATE'&&!same(payload.case_id,args.command_id))fail();
     if(['EXCLUSION_PAGE','MATCHING_PAGE'].includes(action)&&payload.page_no!==args.page_no)fail();
     if(action==='EXCLUSION_PAGE'&&payload.item_count!==String(args.excluded_work_ids.length+args.excluded_candidate_ids.length))fail();
     if(action==='MATCHING_PAGE'&&(BigInt(payload.item_count)>100n||payload.skipped.length>Number(payload.item_count)
@@ -574,9 +582,14 @@ function field(v,type){
       async page(kind, args) {
         const pageSchema=kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
         if (!Object.hasOwn(PAGES, kind) || !shape(args, pageSchema) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
-        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, k==='descriptor'?JSON.stringify(v):String(v));
+        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, (k==='descriptor'||k==='input')?JSON.stringify(v):String(v));
         if(kind==='GUARD'&&encoder.encode(query.toString()).byteLength>128*1024)fail('REQUEST_INVALID');
         let body = await call('/api/banking/pay/next/preparation-page?' + query.toString(), { method: 'GET' },false,null,kind==='PROGRESS'?Math.min(options.timeoutMs??LIMITS.timeout,2000):options.timeoutMs??LIMITS.timeout);
+  if(kind==='CASE_PREVIEW'){
+    if(!record(body)||Object.keys(body).sort().join()!=='complete,kind,next_cursor,ok,rows'||body.ok!==true||body.kind!==kind
+      ||body.complete!==true||body.next_cursor!==null||!Array.isArray(body.rows)||body.rows.length!==1||!cases.casePreview(body.rows[0],args.input))fail();
+    return body;
+  }
   if(kind==='GUARD'){
     if(!shape(body,{ok:'true',kind:'label',rows:'guardRows',complete:'true',next_cursor:'null'})||body.kind!==kind)fail();
     const g=body.rows[0];if(!same(g.run_id,args.run_id)||g.guard_applies!==(g.paye_candidates!=='0'&&g.existing.length>0)
@@ -1035,6 +1048,7 @@ function field(v,type){
       if(['WORKER_REPREPARE','WORKER_RELEASE'].includes(action)){if(!same(result.run_id,state.run_id)||!same(result.run_worker_id,state.worker_id))fail('ACCEPTED_IDENTITY_CONFLICT');next.can_confirm=false;next.review_revision=null;next.worker_action=['EXPIRED','DISCARDED'].includes(result.phase)?null:{...result,request_bytes:state.pending.bytes};}
       if(action==='PREPARATION_DISCARD'){if(!same(result.run_id,state.run_id))fail('ACCEPTED_IDENTITY_CONFLICT');next.can_confirm=false;next.review_revision=null;}
       if (action === 'CONFIRM') { next.confirmed = true; next.can_confirm = false; next.drafts=result.drafts.map(d=>({...d})); }
+      if(action==='CASE_CREATE'){next.case_id=result.case_id;next.candidate_id=args.candidate_id;}
       if (result.transfer_id) next.transfer_id = result.transfer_id;
       if (result.instruction_id) next.instruction_id = result.instruction_id;
       save(next); return result;
@@ -1051,6 +1065,7 @@ function field(v,type){
       } finally { busy = false; notify(); }
     }
     return Object.freeze({ snapshot, debug,
+      finishCaseCreation(caseId){if(busy||state.pending!==null||state.run_id!==null||state.worker_id!==null||!same(state.case_id,caseId))fail('REQUEST_INVALID');save({...state,case_id:null});},
       async mutate(action, args) { if (busy || state.pending !== null) fail('OUTCOME_UNKNOWN');
         if(reauthAction(action) && !Object.hasOwn(args||{},'reauth_token')
           && !(action==='CSV_ISSUE'&&same(args.instruction_id,state.instruction_id)&&same(args.transfer_id,state.transfer_id)))fail('AUTH_REQUIRED');
@@ -1916,5 +1931,23 @@ function field(v,type){
       const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();child.document.close();dates.formatAdvice(child.document);completed=true;
     }finally{win.clearTimeout(timer);controller.abort();controller.signal.removeEventListener('abort',abort);await reader?.cancel().catch(()=>{});reader?.releaseLock();if(!reader)await response?.body?.cancel().catch(()=>{});if(!completed&&!child.closed){child.document.write('<p style="color:#900">INCOMPLETE: advice could not be loaded. Do not use this as complete payment advice.</p>');child.document.close();}}
   }
-  return Object.freeze({ open, close, openBpayNextReauth, openBpayNextPaymentIssueReauth, openPayeSameWeekGuard, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
+  function mountCasePreviewFooter(options){
+    const candidateId=options.candidateId;
+    if(!field(candidateId,'uuid'))fail('REQUEST_INVALID');
+    const controller=options.controller??createController({...options,reviewJournalQualifier:'.case-create.'+candidateId.toLowerCase()});
+    const transport=options.transport;
+    const state=controller.snapshot();
+    if(state.run_id!==null||state.worker_id!==null||state.case_id!==null&&!same(state.candidate_id,candidateId))fail('REQUEST_INVALID');
+    if(state.pending){const body=JSON.parse(state.pending.bytes);if(state.pending.action!=='CASE_CREATE'||body.action!=='CASE_CREATE'||!same(body.candidate_id,candidateId))fail('REQUEST_INVALID');}
+    return cases.mount({...options,
+      current:()=>{try{requireActor(options);return options.current?.()===true;}catch{return false;}},
+      snapshot:controller.snapshot,retry:controller.retry,
+      acceptedCase:()=>{const saved=controller.snapshot();return saved.case_id?{case_id:saved.case_id}:null;},
+      onApplied:typeof options.onApplied==='function'?async(receipt,page)=>{await options.onApplied(receipt,page);controller.finishCaseCreation(receipt.case_id);}:undefined,
+      preview:async input=>{if(!same(input.candidate_id,candidateId))fail('REQUEST_INVALID');return (await transport.page('CASE_PREVIEW',{input})).rows[0];},
+      submit:(input,preview_token)=>{if(!same(input.candidate_id,candidateId))fail('REQUEST_INVALID');return controller.mutate('CASE_CREATE',{command_id:options.uuid(),...input,preview_token});},
+      readCase:case_id=>transport.page('CASE_COMPONENTS',{candidate_id:candidateId,case_id,after_component_ordinal:null,limit:100})
+    });
+  }
+  return Object.freeze({ mountCasePreviewFooter, open, close, openBpayNextReauth, openBpayNextPaymentIssueReauth, openPayeSameWeekGuard, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
 });
