@@ -1015,22 +1015,33 @@ function field(v,type){
   // WORKERS is an outcome list; full DR15 readers/totals remain their own card.
   // DY05: captured detail only; existing service readers retain run/line scope.
   function openFrozenWorkerDetail(options,workerId){
-    requireActor(options);if(!field(workerId,'uuid')||options.ownerReady()!==true)fail('REQUEST_INVALID');
+    requireActor(options);if(!field(workerId,'uuid')||!field(options.detailRunId,'uuid')||!field(options.detailCandidateId,'uuid')||options.ownerReady()!==true)fail('REQUEST_INVALID');
     const doc=options.document||document,win=options.window||window,transport=options.transport||createTransport(options);
     const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
     const content=el('section',undefined,'bpay-next-frozen-detail'),footer=el('div',undefined,'bpay-next-window-actions'),subtitle=el('span',undefined,'bpay-next-progress-subtitle');
     let frame,closed=false,busy=false,error='',tab='Lines',lines=null,comparisons=null,line=null,origin=null,shifts=null,breaks=null,rates=null,schedule=null,shiftId=null,selectedShift=null,selected=null,scrollTop=0;
-    const scope=options.progressNamespace?preparationScope(options.progressNamespace):null;let started=false,scrollAnchor=null,failedRead=null,loadingMore=false;
+    const scope=options.progressNamespace?preparationScope(options.progressNamespace):null;let started=false,scrollAnchor=null,failedRead=null,loadingMore=false,summary=null,summaryError='';
     const current=()=>{try{return !closed&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true&&(!scope||!options.progressCurrentNamespace||preparationScope(options.progressCurrentNamespace())===scope);}catch{return false;}};
     const focus=ui.continuity(content,doc,()=>content.querySelector('button'));
     const date=v=>v?new Intl.DateTimeFormat('en-GB',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric',timeZone:'UTC'}).format(new Date(v+'T00:00:00Z')):'—';
     const rateNames={DAY:'Day',NIGHT:'Night',SAT:'Sat',SUN:'Sun',BH:'Bank holiday'};
     const decimal=v=>{if(v===null)return '—';const [whole,fraction='']=v.split('.');return whole+'.'+fraction.replace(/0+$/,'').padEnd(2,'0');},rate=v=>{if(v===null)return '—';const text=decimal(v),neg=text.startsWith('-'),[whole,fraction]=text.replace(/^-/, '').split('.');return (neg?'−':'')+'£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction;};
-    const button=(label,fn,primary=false)=>{const n=el('button',label,primary?'btn primary':'btn');n.type='button';n.disabled=busy||!current();if(!primary)n.dataset.nextSecondary='';n.dataset.nextFocusKey=label;n.addEventListener('click',()=>void act(fn));return n;};
-    async function act(fn){if(busy||!current())return;const host=content.querySelector('.bpay-next-frozen-scroll'),top=host?.getBoundingClientRect().top,node=host&&Array.from(host.querySelectorAll('[data-frozen-row-key]')).find(n=>n.getBoundingClientRect().bottom>top);scrollAnchor=node?{key:node.dataset.frozenRowKey,offset:node.getBoundingClientRect().top-top}:null;busy=true;error='';render();try{await fn();}catch{error='Could not load this detail; refresh and try again.';}finally{busy=false;loadingMore=false;render();}}
+    const button=(label,fn,primary=false,preserveDetailError=false)=>{const n=el('button',label,primary?'btn primary':'btn');n.type='button';n.disabled=busy||!current();if(!primary)n.dataset.nextSecondary='';n.dataset.nextFocusKey=label;n.addEventListener('click',()=>void act(fn,preserveDetailError));return n;};
+    async function act(fn,preserveDetailError=false){if(busy||!current())return;const host=content.querySelector('.bpay-next-frozen-scroll'),top=host?.getBoundingClientRect().top,node=host&&Array.from(host.querySelectorAll('[data-frozen-row-key]')).find(n=>n.getBoundingClientRect().bottom>top);scrollAnchor=node?{key:node.dataset.frozenRowKey,offset:node.getBoundingClientRect().top-top}:null;busy=true;if(!preserveDetailError)error='';render();try{await fn();}catch{error='Could not load this detail; refresh and try again.';}finally{busy=false;loadingMore=false;render();}}
     const append=(old,next,direction='next')=>{const history=[...(old?.history??[])],pages=[...(old?.pages??[])],after=old?(direction==='back'?history.at(-1):old.next_cursor):null,block={after,...next};
       if(!old){pages.push(block);}else if(direction==='back'){pages.unshift(block);history.pop();if(pages.length>3)pages.pop();}else{pages.push(block);if(pages.length>3){history.push(pages.shift().after);while(encoder.encode(JSON.stringify(history)).byteLength>32768)history.shift();}}
       const last=pages.at(-1);return {...last,pages,history,rows:pages.flatMap(p=>p.rows)};};
+    // DY-09: one existing scoped read; these totals are not a sum of loaded lines.
+    async function readSummary(){
+      summary=null;summaryError='';
+      try{
+        const page=await transport.page('STATUS',{run_id:options.detailRunId,run_worker_id:workerId,after_transfer_no:null,limit:1});
+        if(!current())return;
+        const h=page.header;
+        if(!same(h.run_id,options.detailRunId)||!same(h.run_worker_id,workerId)||!same(h.candidate_id,options.detailCandidateId))fail();
+        summary=h;
+      }catch{if(current())summaryError='Could not load payment totals; refresh and try again.';}
+    }
     async function readLines(cursor=null,direction='next'){const args={run_worker_id:workerId,after_line_no:cursor?.after_line_no??null,limit:100};failedRead={kind:'LINES',args,direction};const next=await transport.page('LINES',args);if(current()){lines=append(cursor||direction==='back'?lines:null,next,direction);failedRead=null;}}
     async function readDetail(kind,args,old=null,direction='next'){failedRead={kind,args:{...args},old,direction};const next=await transport.frozenPage(kind,args);if(!current())return null;if(line&&!same(next.origin.revision_id,line.captured_revision_id))fail();if(origin&&JSON.stringify(origin)!==JSON.stringify(next.origin))fail();origin=next.origin;failedRead=null;return append(old,next,direction);}
     async function chooseLine(next){line=next;origin=null;shifts=breaks=rates=schedule=null;shiftId=null;selectedShift=null;selected=next.run_line_id;scrollTop=0;scrollAnchor=null;
@@ -1075,11 +1086,20 @@ function field(v,type){
       if(tab==='Breaks'){const choices=selectedShift&&!shifts?.rows.some(r=>same(r.shift_detail_id,selectedShift.shift_detail_id))?[selectedShift,...(shifts?.rows??[])]:shifts?.rows??[];if(choices.length>1){const label=el('label','Shift'),select=el('select');select.disabled=busy;select.setAttribute('aria-label','Shift');for(const row of choices){const option=el('option',date(row.work_date)+(row.shift_start_local?' · '+row.shift_start_local:''));option.value=row.shift_detail_id;option.selected=shiftId===row.shift_detail_id;select.append(option);}select.addEventListener('change',()=>void act(async()=>{shiftId=select.value;selectedShift=choices.find(r=>same(r.shift_detail_id,shiftId))??null;breaks=null;breaks=await readDetail('BREAKS',{run_line_id:line.run_line_id,shift_detail_id:shiftId,after_break_no:null,limit:100});}));label.append(select);parts.push(label);}host=list(['Break','Start – finish','Minutes'],(breaks?.rows??[]).map(r=>['Break '+r.break_no,r.break_start_local&&r.break_end_local?r.break_start_local+' – '+r.break_end_local:'—',String(r.break_minutes)]));}
       if(tab==='Used rates')host=list(['Rate','Approved hours','Used pay rate'],['DAY','NIGHT','SAT','SUN','BH'].flatMap(code=>(rates?.rows??[]).filter(r=>r.bucket===code)).map(r=>[rateNames[r.bucket],decimal(r.approved_hours),rate(r.source_pay_rate)]));
       if(tab==='Available rates'){const rows=schedule?.rows??[],standard=['DAY','NIGHT','SAT','SUN','BH'].flatMap(code=>rows.filter(r=>r.rate_family==='STANDARD'&&r.rate_code===code));host=list(['Rate','PAYE pay','Umbrella pay','Charge'],[...standard,...rows.filter(r=>r.rate_family!=='STANDARD')].map(r=>[rateNames[r.rate_code]||r.rate_code,rate(r.paye_rate),rate(r.umbrella_rate),rate(r.charge_rate)]));}
-      if(host)parts.push(host);const page=tab==='Lines'?lines:tab==='Shifts'?shifts:tab==='Breaks'?breaks:tab==='Used rates'?rates:schedule;
+      if(host)parts.push(host);
+      if(summary?.target_pay_channel==='UMBRELLA'&&tab==='Lines'){
+        const totals=el('dl',undefined,'bpay-next-frozen-totals');totals.setAttribute('aria-label','Umbrella payment totals');
+        for(const [label,key] of [['Pay ex VAT','frozen_gross_ex_vat'],['VAT','frozen_gross_vat'],['Pay inc VAT','frozen_gross_inc_vat'],['Bank amount','cash_amount']]){
+          const group=el('div'),value=el('dd',rate(summary[key]));value.dataset.nextFormattedMoney='';group.append(el('dt',label),value);totals.append(group);
+        }
+        parts.push(totals);
+      }
+      if(summaryError){const notice=el('div',undefined,'ws-notice ws-notice--danger'),copy=el('p',summaryError);copy.setAttribute('role','alert');notice.append(copy,button('Refresh',readSummary,false,true));parts.push(notice);}
+      const page=tab==='Lines'?lines:tab==='Shifts'?shifts:tab==='Breaks'?breaks:tab==='Used rates'?rates:schedule;
       if(busy){const n=el('p',loadingMore?'Loading more…':'Loading…','bpay-next-frozen-caption');n.setAttribute('role','status');parts.push(n);}else if(page?.complete&&page.rows.length===0)parts.push(el('p',tab==='Breaks'?'No recorded breaks.':'No recorded detail.','bpay-next-frozen-caption'));
       content.replaceChildren(...parts);if(host){host.scrollTop=scrollTop;const node=scrollAnchor&&Array.from(host.querySelectorAll('[data-frozen-row-key]')).find(n=>n.dataset.frozenRowKey===scrollAnchor.key);if(node)host.scrollTop=Math.max(0,host.scrollTop+node.getBoundingClientRect().top-host.getBoundingClientRect().top-scrollAnchor.offset);}focus.after(token);
     }
-    frame=options.showReadWindow({title:'Draft detail',headerDetail:subtitle,content,footer,canFocus:current,onDismiss:()=>{closed=true;},onMount:()=>{render();if(!started){started=true;void act(async()=>{await readLines();if(lines?.rows.length)await chooseLine(lines.rows[0]);});}}});return frame;
+    frame=options.showReadWindow({title:'Draft detail',headerDetail:subtitle,content,footer,canFocus:current,onDismiss:()=>{closed=true;},onMount:()=>{render();if(!started){started=true;void act(async()=>{await readSummary();await readLines();if(lines?.rows.length)await chooseLine(lines.rows[0]);});}}});return frame;
   }
   const workerReviewWindows=new Map();
   function openWorkerReview(options,runId){
@@ -1169,9 +1189,9 @@ function field(v,type){
         if(row.worker_status==='REVIEW'){stateValue.append(el('small','Could not prepare this Candidate; try again or contact support.'));}
         if(row.discard_outcome==='BLOCKED'){state.textContent='Could not remove';state.className='candidate-office-badge candidate-office-badge--danger';stateValue.replaceChildren(state,el('small','This payment cannot be removed; refresh or contact support.'));}
         const actions=el('div',undefined,'bpay-next-review-row-actions');
-        if(row.worker_status==='READY')actions.append(button('Draft detail',()=>openFrozenWorkerDetail(options,row.run_worker_id),locked));
-        tr.addEventListener('dblclick',()=>{if(row.worker_status==='READY'&&!locked)openFrozenWorkerDetail(options,row.run_worker_id);});
-        tr.addEventListener('keydown',e=>{if(e.key==='Enter'&&row.worker_status==='READY'&&!locked&&!e.target.closest('button')){e.preventDefault();openFrozenWorkerDetail(options,row.run_worker_id);}});
+        if(row.worker_status==='READY')actions.append(button('Draft detail',()=>openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id),locked));
+        tr.addEventListener('dblclick',()=>{if(row.worker_status==='READY'&&!locked)openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id);});
+        tr.addEventListener('keydown',e=>{if(e.key==='Enter'&&row.worker_status==='READY'&&!locked&&!e.target.closest('button')){e.preventDefault();openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id);}});
         if(progressFacts?.discard_phase===null&&row.worker_status==='REVIEW')actions.append(button('Try again',()=>ask(row,'WORKER_REPREPARE'),locked));
         if(progressFacts?.discard_phase===null&&['PREPARING','REVIEW','READY'].includes(row.worker_status))actions.append(button('Remove from Draft',()=>ask(row,'WORKER_RELEASE'),locked));
         if(hasActions){tr.children[3].append(actions);tr.children[3].hidden=actions.childElementCount===0;}rows.append(tr);

@@ -529,3 +529,9 @@
  #modal.ctms-kind-bpay-next-read:has(.bpay-next-frozen-detail) #btnCloseModal {min-height:44px;min-width:44px;}
  #modal.ctms-kind-bpay-next-read .bpay-next-frozen-detail select {min-height:44px;min-width:44px;}
 }
+
+/* DY09: existing scoped Umbrella money, separate from line pages. */
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:0;padding:14px;border:1px solid var(--ctms-modal-line);border-radius:12px;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals dt {font-size:11px;text-transform:uppercase;font-weight:700;color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals dd {margin:5px 0 0;font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+@media(max-width:700px){#modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals {grid-template-columns:repeat(2,minmax(0,1fr));}}
