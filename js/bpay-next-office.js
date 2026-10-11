@@ -971,7 +971,8 @@ function field(v,type){
       const actions=el('div',undefined,'bpay-next-window-actions');let dialog,accepted=false;
       const cancel=el('button',remove?'Keep in Draft':'Cancel','btn'),submit=el('button',remove?'Remove from Draft':'Try again',remove?'btn btn-warn':'btn primary');
       cancel.type=submit.type='button';cancel.dataset.nextSecondary='';if(remove)submit.dataset.nextDestructive='';cancel.addEventListener('click',()=>void dialog.close());submit.addEventListener('click',()=>{if(!current())return;accepted=true;void dialog.close();});
-      if(remove)actions.append(submit,cancel);else actions.append(cancel,submit);
+      if(remove)actions.classList.add('bpay-next-worker-remove-actions');
+      actions.append(cancel,submit);
       const confirmed=await new Promise(resolve=>{dialog=options.showReadWindow({title:remove?'Remove from Draft':'Try again',content:body,footer:actions,small:true,confirmation:true,canFocus:current,onDismiss:()=>resolve(accepted&&current())});});
       if(!confirmed)return;requireActor(options);
       const receipt=await controller.mutate(kind,{command_id:controller.newId(),run_worker_id:row.run_worker_id,expected_preparation_revision:h.preparation_revision});

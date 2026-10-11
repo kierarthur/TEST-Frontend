@@ -14,6 +14,7 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-review-results tr[aria-selected=true] {background:var(--ctms-modal-panel-raised);box-shadow:inset 3px 0 var(--ctms-modal-accent-bright);}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results table.ctms-universal-card-table > tbody > tr > td[hidden] {display:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions {display:flex;gap:6px;flex-wrap:wrap;}
+#modal.ctms-kind-bpay-next-read .bpay-next-worker-remove-actions [data-next-destructive] {order:-1;}
 #modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions .btn {white-space:nowrap;}
 #modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-confirmation) #modalBody {padding:0;}
 #modal.ctms-kind-bpay-next-read .bpay-next-worker-confirmation h2 {display:flex;gap:12px;align-items:center;font-size:15px;margin:0;padding:16px 18px;border-bottom:1px solid var(--ctms-modal-line);}
