@@ -7118,6 +7118,7 @@ function renderTopNav(){
           <button type="button" role="menuitem" data-banking-destination="pay_next" hidden disabled>Banking Pay NEXT</button>
           <button type="button" role="menuitem" data-banking-destination="advance_next" hidden disabled>New Payment Advance</button>
           <button type="button" role="menuitem" data-banking-destination="credit_next" hidden disabled>New Manual Credit</button>
+          <button type="button" role="menuitem" data-banking-destination="debt_next" hidden disabled>New Manual Debt</button>
           <button type="button" role="menuitem" data-banking-destination="pay">Banking Pay</button>
           <button type="button" role="menuitem" data-banking-destination="payment_batches">Payment Batches</button>
           <button type="button" role="menuitem" data-banking-destination="loans_snoozes">Loans and Snoozes</button>
@@ -7140,8 +7141,9 @@ function renderTopNav(){
           nextItem.hidden=status.active_owner!=='NEXT'; nextItem.disabled=status.active_owner!=='NEXT';
           const advanceItem=menu.querySelector('[data-banking-destination="advance_next"]');advanceItem.hidden=status.active_owner!=='NEXT';advanceItem.disabled=status.active_owner!=='NEXT';
           const creditItem=menu.querySelector('[data-banking-destination="credit_next"]');creditItem.hidden=status.active_owner!=='NEXT';creditItem.disabled=status.active_owner!=='NEXT';
+          const debtItem=menu.querySelector('[data-banking-destination="debt_next"]');debtItem.hidden=status.active_owner!=='NEXT';debtItem.disabled=status.active_owner!=='NEXT';
           for(const item of menu.querySelectorAll('[data-banking-destination]')) {
-            if(!['id','pay_next','advance_next','credit_next'].includes(item.dataset.bankingDestination)) item.disabled=status.active_owner==='DISABLED';
+            if(!['id','pay_next','advance_next','credit_next','debt_next'].includes(item.dataset.bankingDestination)) item.disabled=status.active_owner==='DISABLED';
           }
         }).catch(()=>{if(menu.isConnected && SESSION?.user?.id===ownerActor)ownerNotice.textContent=bankingNextOwnerMessage(null);});
         const rect = b.getBoundingClientRect();
@@ -7163,11 +7165,12 @@ function renderTopNav(){
           try {
             const ownerClient = bankingNextOwnerClient();
             const owner = ownerClient?.peek() || null;
-            if (destination !== 'id' && (!['pay_next','advance_next','credit_next'].includes(destination) || owner?.active_owner !== 'NEXT')) {
+            if (destination !== 'id' && (!['pay_next','advance_next','credit_next','debt_next'].includes(destination) || owner?.active_owner !== 'NEXT')) {
               alert(bankingNextOwnerMessage(owner, destination !== 'pay_next')); return;
             }
             if(destination==='advance_next'){await openBankingPaymentAdvanceModal({});return;}
             if(destination==='credit_next'){await openBankingManualCreditAdjustmentModal({});return;}
+            if(destination==='debt_next'){await openBankingManualDebtAdjustmentModal({});return;}
             if (destination === 'pay_next') {
               if (!window.CloudTMSBpayNextOffice || !SESSION?.user?.id) {
                 alert('Banking Pay NEXT is unavailable. Please sign in again.');
@@ -15573,6 +15576,27 @@ async function openBankingManualCreditAdjustmentModal(seed = {}) {
 
 
 async function openBankingManualDebtAdjustmentModal(seed = {}) {
+  if (!(seed?.finance_case_id || seed?.case_id || seed?.id)) {
+    const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+    const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+    const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
+      &&(!parent||parent._ctxRef===boundContext);
+    try {
+      const owner=await ownerClient.begin('debt:create:'+crypto.randomUUID());
+      if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return null;
+      if(owner.active_owner==='NEXT') {
+        if(SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextManualDebt)throw Error();
+        return await window.CloudTMSBpayNextManualDebt.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+          ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+          pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),
+          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated},seed);
+      }
+      if(owner.active_owner!=='LEGACY')throw Error();
+    } catch {
+      if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'New Manual Debt',message:'Could not open the Manual Debt window; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-debt-notice'});
+      return null;
+    }
+  }
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({

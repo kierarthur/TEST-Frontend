@@ -703,3 +703,5 @@
 @media(max-width:480px){
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-advance) :is(#btnCloseModal,#modalActions button){min-height:44px;min-width:44px;}
 }
+
+#modal.ctms-modern-modal #modalBody .bpay-next-debt .bpay-next-advance-method small {font-size:12px;font-weight:400;}
