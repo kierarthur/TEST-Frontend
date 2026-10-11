@@ -990,7 +990,7 @@ function field(v,type){
         const tr=el('tr');tr.tabIndex=0;tr.dataset.workerId=row.run_worker_id;tr.setAttribute('aria-selected',String(selected===row.run_worker_id));
         tr.addEventListener('click',event=>{if(event.target.closest('button'))return;selected=row.run_worker_id;render();});
         const labels=['Candidate',money(row.frozen_ex_vat),null,null];
-        for(let i=0;i<4;i++){const td=el('td',labels[i]);td.dataset.label=['Candidate','Gross ex VAT','State','Actions'][i];if(i===1)td.className='bpay-next-review-money';tr.append(td);}
+        for(let i=0;i<4;i++){const td=el('td',labels[i]);td.dataset.label=['Candidate','Gross ex VAT','State','Actions'][i];if(i===1){td.className='bpay-next-review-money';td.dataset.nextFormattedMoney='';}tr.append(td);}
         const state=el('span',({PREPARING:'Preparing',REVIEW:'To review',READY:'Ready',CANCELLING:'Removing',CANCELLED:'Not in this Draft'})[row.worker_status]||'Preparing','candidate-office-badge candidate-office-badge--'+({REVIEW:'warning',READY:'success',PREPARING:'info',CANCELLING:'info',CANCELLED:'neutral'})[row.worker_status]);tr.children[2].append(state);
         const stateValue=el('div');stateValue.append(state);tr.children[2].replaceChildren(stateValue);
         if(row.worker_status==='REVIEW'){stateValue.append(el('small','Could not prepare this Candidate; try again or contact support.'));}
