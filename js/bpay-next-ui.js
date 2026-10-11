@@ -69,6 +69,7 @@
       });
       frame=window.__modalStack?.at(-1)??frame;
       return Object.freeze({active,alive:()=>!closed&&window.__modalStack?.includes(frame),
+        setConfirmation(value){if(typeof value!=='boolean'||closed||confirmation===value)return;confirmation=value;mount();},
         close(){if(!active())return Promise.resolve(false);if(closeWait)return closeWait;const button=document.getElementById('btnCloseModal');if(!button)return Promise.resolve(false);const pending=new Promise(resolve=>{settleClose=resolve;});closeWait=pending;button.click();return pending;},focus(){if(active())document.getElementById('modal').focus();}});
     };
   }

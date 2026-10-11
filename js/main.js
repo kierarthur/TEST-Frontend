@@ -20586,7 +20586,29 @@ function sanitizeBankingPaymentIssueError(errorOrJson, context = '') {
 
 
 
+// FC10 qualifies the original NEXT Case before any legacy Case/state lookup.
+async function openBankingNextCaseStatus(seed,action) {
+  const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+  const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+  const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
+    &&(!parent||parent._ctxRef===boundContext);
+  try {
+    const owner=await ownerClient.begin('case-status:'+crypto.randomUUID());
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return {handled:true,result:null};
+    if(owner.active_owner==='LEGACY')return {handled:false};
+    if(owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextCasePause)throw Error();
+    const result=await window.CloudTMSBpayNextCasePause.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+      ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+      showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseChanged:seed?.onCaseChanged},seed,action);
+    return {handled:true,result};
+  } catch {
+    if(current()&&currentFrame()===parent)await openUiConfirmModal({title:action==='CASE_PAUSE'?'Pause recovery':'Resume recovery',message:'Could not open this Case; refresh and try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-case-status-notice'});
+    return {handled:true,result:null};
+  }
+}
+
 async function confirmBankingFinanceCasePause(seed = {}) {
+  const next=await openBankingNextCaseStatus(seed,'CASE_PAUSE');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -20744,6 +20766,7 @@ async function confirmBankingFinanceCasePause(seed = {}) {
 }
 
 async function confirmBankingFinanceCaseResume(seed = {}) {
+  const next=await openBankingNextCaseStatus(seed,'CASE_RESUME');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -102755,6 +102778,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:finance:pause') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      const native=await openBankingNextCaseStatus({case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||''),candidate_display_name:String(ds('candidateDisplayName')||'Candidate')},'CASE_PAUSE');
+      if(native.handled){if(childResultShouldRefreshPayWorkbench(native.result))await refreshPayWorkbench({reason:'FINANCE_CHILD_MODAL_RETURN',mode:'SOFT'});return;}
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Finance case not found.'); return; }
       if (typeof confirmBankingFinanceCasePause !== 'function') { toast('Pause confirmation is not available.'); return; }
@@ -102767,6 +102792,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:finance:resume') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      const native=await openBankingNextCaseStatus({case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||''),candidate_display_name:String(ds('candidateDisplayName')||'Candidate')},'CASE_RESUME');
+      if(native.handled){if(childResultShouldRefreshPayWorkbench(native.result))await refreshPayWorkbench({reason:'FINANCE_CHILD_MODAL_RETURN',mode:'SOFT'});return;}
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Finance case not found.'); return; }
       if (typeof confirmBankingFinanceCaseResume !== 'function') { toast('Resume confirmation is not available.'); return; }

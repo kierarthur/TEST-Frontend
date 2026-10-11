@@ -123,6 +123,8 @@
   function draftActionsAllowed(h) { return h.run_status === 'DRAFT' && ['READY', 'DRAFT'].includes(h.worker_status); }
   const INPUT = {
     CASE_CREATE:{command_id:'uuid',...cases.CASE_INPUT_SCHEMA,preview_token:'caseToken'},
+    CASE_PAUSE:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',reason:'pauseReason'},
+    CASE_RESUME:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',reason:'pauseReason'},
     CASE_EDIT:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',...cases.CASE_INPUT_SCHEMA,preview_token:'caseEditToken'},
     PREPARATION_DISCARD:{command_id:'uuid',run_id:'uuid',expected_preparation_revision:'integer'},
     WAKE:{run_id:'uuid'},
@@ -147,6 +149,8 @@
   };
   const RECEIPT = {
     CASE_CREATE:{case_id:'uuid',command_id:'uuid',sequence:'positive',phase:'caseCreatePhase',replay:'boolean'},
+    CASE_PAUSE:{case_id:'uuid',candidate_id:'uuid',command_id:'uuid',action:'pauseAction',sequence:'positive',expected_case_revision:'positive',phase:'pauseAdmissionPhase',replay:'boolean'},
+    CASE_RESUME:{case_id:'uuid',candidate_id:'uuid',command_id:'uuid',action:'pauseAction',sequence:'positive',expected_case_revision:'positive',phase:'pauseAdmissionPhase',replay:'boolean'},
     CASE_EDIT:{case_id:'uuid',command_id:'uuid',sequence:'positive',case_revision:'positive',rule_id:'uuid',phase:'caseEditPhase',replay:'boolean'},
     PREPARATION_DISCARD:{command_id:'uuid',run_id:'uuid',sequence:'positive?',phase:'discardReceiptPhase',expected_candidates:'integer',completed_candidates:'integer',removed_candidates:'integer',already_removed_candidates:'integer',blocked_candidates:'integer',replay:'boolean'},
     WAKE:{run_id:'uuid',accepted:'boolean',throttled:'boolean'},
@@ -184,7 +188,7 @@
     ACCEPTED_CANDIDATES:{candidate_id:'uuid',accepted_input_id:'uuid',module_epoch:'positive',target_pay_channel:'channel',target_umbrella_id:'uuid?',pay_week_start:'date',case_scope:'acceptedCaseScope',case_selection_revision:'positive?',settings_witness_kind:'settingsWitness',input_evidence_sha256:'sha',prepare_job_id:'uuid?',prepare_job_status:'prepareJobStatus?',prepare_job_phase:'prepareJobPhase?',run_worker_id:'uuid?',worker_status:'worker?',has_unsealed_work:'boolean',waiting_command_id:'uuid?',waiting_command_sequence:'positive?',progress_state:'acceptedProgress',progress_code:'acceptedProgressCode?',review_issue_code:'issue?'},
     ACCEPTED_WORK:{candidate_id:'uuid',accepted_input_id:'uuid',accepted_work_input_id:'uuid',work_id:'uuid',original_revision_id:'uuid',effective_revision_id:'uuid',selection_mode:'mode',selected_line_count:'integer',publication_command_id:'uuid',predecessor_sequence:'positive',source_kind:'acceptedSourceKind',query_disposition:'acceptedQuery?',query_state_sha256:'sha?',input_evidence_sha256:'sha',effective_cut_id:'uuid?',cut_state:'acceptedCutState'},
     CURRENT_CASES: { case_id: 'uuid', candidate_id: 'uuid', case_kind: 'caseKind', tax_treatment: 'tax', status: 'caseStatus', principal_approved: 'money', principal_funded: 'money', principal_recovered: 'money', principal_written_off: 'money', active_hold_amount: 'money' },
-    CASE_COMPONENTS: { case_component_id: 'uuid', case_id: 'uuid', candidate_id: 'uuid', component_ordinal: 'positive', component_revision: 'positive', case_kind: 'caseKind', case_subtype: 'caseSubtype', tax_treatment: 'tax', instruction_kind: 'instruction', direction: 'direction', payroll_stage: 'stage', source_pay_channel: 'channel', resolution_state: 'resolution', approved_source_ex_vat: 'money', funded_source_ex_vat: 'money', recovered_source_ex_vat: 'money', written_off_source_ex_vat: 'money', active_payout_source_ex_vat: 'money', active_recovery_source_ex_vat: 'money' ,case_principal_approved:'money',rule_id:'uuid',current_rule_id:'uuid?',rule_revision:'positive?',weekly_due_source_ex_vat:'money?',minimum_earnings_threshold:'money?',take_home_floor_override:'money?',schedule_start_monday:'date?',next_due_monday:'date?',schedule_week_count:'positive?',outstanding_source_ex_vat:'money',amount_due:'money?',recoverable_this_run:'null',original_liability_reference:'caseReference?',edit_state:'caseEditState',edit_receipt:'caseEditReceipt?'},
+    CASE_COMPONENTS: { case_component_id: 'uuid', case_id: 'uuid', candidate_id: 'uuid', component_ordinal: 'positive', component_revision: 'positive', case_kind: 'caseKind', case_subtype: 'caseSubtype', tax_treatment: 'tax', instruction_kind: 'instruction', direction: 'direction', payroll_stage: 'stage', source_pay_channel: 'channel', resolution_state: 'resolution', approved_source_ex_vat: 'money', funded_source_ex_vat: 'money', recovered_source_ex_vat: 'money', written_off_source_ex_vat: 'money', active_payout_source_ex_vat: 'money', active_recovery_source_ex_vat: 'money' ,case_principal_approved:'money',rule_id:'uuid',current_rule_id:'uuid?',rule_revision:'positive?',weekly_due_source_ex_vat:'money?',minimum_earnings_threshold:'money?',take_home_floor_override:'money?',schedule_start_monday:'date?',next_due_monday:'date?',schedule_week_count:'positive?',outstanding_source_ex_vat:'money',amount_due:'money?',recoverable_this_run:'null',original_liability_reference:'caseReference?',edit_state:'caseEditState',edit_receipt:'caseEditReceipt?',pause_state:'casePauseState',pause_receipt:'casePauseReceipt?'},
     CURRENT_WORK: { work_id: 'uuid', candidate_id: 'uuid', original_timesheet_id: 'uuid', work_kind: 'workKind', week_ending_date: 'date', approval_state: 'approval', current_revision_id: 'uuid?', applied_revision_id: 'uuid?', position_ready: 'boolean', source_pay_channel: 'channel?', timesheet_reference: 'label?', client_display_name: 'label?', approved_source_ex_vat: 'money?' },
     WORKERS: { run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', frozen_ex_vat: 'money?', frozen_vat: 'money?', frozen_inc_vat: 'money?', review_issue_code: 'issue?', discard_outcome:'discardOutcome?',discard_blocked_code:'discardBlockedCode?' },
     CHANNEL_WORKERS: { run_worker_id: 'uuid', candidate_id: 'uuid', pay_channel:'channel', worker_status:'worker', frozen_ex_vat:'money', frozen_vat:'money', frozen_inc_vat:'money', review_issue_code:'issue?' },
@@ -295,6 +299,11 @@ function validDiscardProgress(p){
     &&(p.discard_phase==='DISCARDED'?p.status==='CANCELLED'&&blocked===0n:p.status==='REVIEW'&&blocked>0n);
 }
 function field(v,type){
+    if(type==='pauseReason')return cases.pauseReason(v);
+    if(type==='pauseAction')return ['CASE_PAUSE','CASE_RESUME'].includes(v);
+    if(type==='pauseAdmissionPhase')return v==='ACCEPTED_PENDING_STATUS';
+    if(type==='casePauseState')return cases.casePauseState(v);
+    if(type==='casePauseReceipt')return cases.casePauseReceipt(v);
     if(type==='caseEditToken')return cases.caseEditToken(v);
     if(type==='caseEditState')return cases.caseEditState(v);
     if(type==='caseEditReceipt')return cases.caseEditReceipt(v);
@@ -419,7 +428,7 @@ function field(v,type){
       ||value.provider_status!=='DISABLED'||value.funding_status!=='UNAVAILABLE'||value.csv_available!==value.environment_ready)fail();
     return Object.freeze({...value});
   }
-  const financial = action => ['CASE_CREATE','CASE_EDIT','PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
+  const financial = action => ['CASE_CREATE','CASE_EDIT','CASE_PAUSE','CASE_RESUME','PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
   const reauthAction = action => ['CANCEL_REQUEST','CSV_ISSUE','PAYE_SAME_WEEK_OVERRIDE'].includes(action);
   function reauthIntentBody(action,args){
     if(action!=='PAYE_SAME_WEEK_OVERRIDE')return requestBody(action,args);
@@ -439,6 +448,7 @@ function field(v,type){
     // protected dispatch separately requires the completed helper below.
     if((reauthAction(action)||action==='PAYE_GUARD_DECISION') && Object.hasOwn(args || {},'reauth_token'))schema={...schema,reauth_token:'reauthToken'};
     if(action==='CASE_CREATE'){const {command_id,preview_token,...input}=args||{};if(!field(command_id,'uuid')||!cases.caseInput(input)||!cases.caseToken(preview_token)||!cases.equal(preview_token.input,input))fail('REQUEST_INVALID');}
+    if(['CASE_PAUSE','CASE_RESUME'].includes(action)&&(!positive(args?.expected_case_revision)||BigInt(args.expected_case_revision)>=9223372036854775807n))fail('REQUEST_INVALID');
     if(action==='CASE_EDIT'){const {command_id,case_id,expected_case_revision,preview_token,...input}=args||{};
       if(!field(command_id,'uuid')||!field(case_id,'uuid')||!positive(expected_case_revision)||!cases.caseInput(input)
         ||!cases.caseEditToken(preview_token,{case_id,expected_case_revision})||!cases.equal(preview_token.input,input))fail('REQUEST_INVALID');}
@@ -447,7 +457,7 @@ function field(v,type){
       ||(args.decision!=='UMBRELLA_ONLY'&&!field(args.reauth_token,'reauthToken'))))fail('REQUEST_INVALID');
     const bytes=JSON.stringify({ action, ...args });
     if(action==='PAYE_GUARD_DECISION'&&encoder.encode(bytes).byteLength>32768)fail('REQUEST_INVALID');
-    if(financial(action) && encoder.encode(bytes).byteLength>(action==='CASE_EDIT'?49152:action==='CASE_CREATE'?32768:2048))fail('REQUEST_INVALID');
+    if(financial(action) && encoder.encode(bytes).byteLength>(['CASE_PAUSE','CASE_RESUME'].includes(action)?16384:action==='CASE_EDIT'?49152:action==='CASE_CREATE'?32768:2048))fail('REQUEST_INVALID');
     return bytes;
   }
   function receipt(payload, action, args) {
@@ -455,6 +465,7 @@ function field(v,type){
     if (!shape(payload, schema)) fail();
     for (const k of ['run_id', 'run_worker_id', 'candidate_id', 'work_id', 'expected_revision_id', 'command_id', 'transfer_id', 'instruction_id']) if (Object.hasOwn(args, k) && !(action==='CANCEL_REQUEST'&&k==='run_id') && !(['CASE_CREATE','CASE_EDIT'].includes(action)&&k==='candidate_id') && !same(payload[k], args[k])) fail();
     if(action==='CASE_CREATE'&&!same(payload.case_id,args.command_id))fail();
+    if(['CASE_PAUSE','CASE_RESUME'].includes(action)&&(payload.action!==action||!same(payload.case_id,args.case_id)||payload.expected_case_revision!==args.expected_case_revision))fail();
     if(action==='CASE_EDIT'&&(!same(payload.case_id,args.case_id)||!same(payload.rule_id,args.command_id)
       ||BigInt(payload.case_revision)!==BigInt(args.expected_case_revision)+1n))fail();
     if(['EXCLUSION_PAGE','MATCHING_PAGE'].includes(action)&&payload.page_no!==args.page_no)fail();
@@ -592,7 +603,7 @@ function field(v,type){
         return body;
       },
       async page(kind, args) {
-        const pageSchema=kind==='CASE_PREVIEW'&&(Object.hasOwn(args,'case_id')||Object.hasOwn(args,'expected_case_revision'))?{input:'caseInput',case_id:'uuid',expected_case_revision:'positive'}:kind==='CASE_COMPONENTS'&&Object.hasOwn(args,'edit_command_id')?{...PAGES.CASE_COMPONENTS,edit_command_id:'uuid'}:kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
+        const pageSchema=kind==='CASE_PREVIEW'&&(Object.hasOwn(args,'case_id')||Object.hasOwn(args,'expected_case_revision'))?{input:'caseInput',case_id:'uuid',expected_case_revision:'positive'}:kind==='CASE_COMPONENTS'?{...PAGES.CASE_COMPONENTS,...(Object.hasOwn(args,'edit_command_id')?{edit_command_id:'uuid'}:{}),...(Object.hasOwn(args,'pause_command_id')?{pause_command_id:'uuid'}:{})}:kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
         if (!Object.hasOwn(PAGES, kind) || !shape(args, pageSchema) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
         const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, (k==='descriptor'||k==='input')?JSON.stringify(v):String(v));
         if(kind==='GUARD'&&encoder.encode(query.toString()).byteLength>128*1024)fail('REQUEST_INVALID');
@@ -734,6 +745,9 @@ function field(v,type){
           if (prior !== null) { const ordered = Array.isArray(v) ? v[0] > prior[0] || (v[0] === prior[0] && v[1] > prior[1]) : (statusKind||['LINES','CASE_COMPONENTS','SELECTED_COMPONENTS','COMPONENTS','SHIFTS','BREAKS'].includes(kind)) ? BigInt(v) > BigInt(prior) : v > prior; if (!ordered) fail(); }
           if(kind==='WORK_CHOICES'&&r.selection_mode==='ALL'&&(r.selection_state!=='SEALED'||r.page_count!=='0'||r.component_count!=='0'))fail();
           if(kind==='CASE_COMPONENTS'&&r.original_liability_reference!==null&&(r.case_kind!=='MANUAL_DEBT'||r.case_subtype!=='MANUAL_DEBT'))fail();
+          if(kind==='CASE_COMPONENTS'&&(!same(r.pause_state.case_id,r.case_id)||!same(r.pause_state.candidate_id,r.candidate_id)
+            ||(r.pause_receipt!==null&&(!same(r.pause_receipt.case_id,r.case_id)||!same(r.pause_receipt.candidate_id,r.candidate_id)||!same(r.pause_receipt.command_id,args.pause_command_id)))
+            ||(Object.hasOwn(args,'pause_command_id')?(r.pause_receipt===null):r.pause_receipt!==null)))fail();
           if(kind==='CASE_COMPONENTS'&&(!same(r.edit_state.case_id,r.case_id)||!same(r.edit_state.candidate_id,r.candidate_id)
             ||(r.edit_receipt!==null&&(!same(r.edit_receipt.case_id,r.case_id)||!same(r.edit_receipt.candidate_id,r.candidate_id)||!same(r.edit_receipt.command_id,args.edit_command_id)))
             ||(Object.hasOwn(args,'edit_command_id')?(r.edit_receipt===null):r.edit_receipt!==null)))fail();
@@ -1017,7 +1031,13 @@ function field(v,type){
     const validWorkerAction=value=>{if(!shape(value,{...RECEIPT.WORKER_REPREPARE,request_bytes:'requestBytes'}))return false;try{const {action,...args}=JSON.parse(value.request_bytes);return action===(value.action==='REPREPARE'?'WORKER_REPREPARE':'WORKER_RELEASE')&&requestBody(action,args)===value.request_bytes&&same(args.command_id,value.command_id)&&same(args.run_worker_id,value.run_worker_id)&&args.expected_preparation_revision===value.expected_preparation_revision&&BigInt(value.preparation_revision)===BigInt(value.expected_preparation_revision)+1n;}catch{return false;}};
     const ids = rows => Array.isArray(rows) && rows.length <= 100 && rows.every(x => field(x,'uuid')) && new Set(rows.map(x=>x.toLowerCase())).size === rows.length;
     const validCases = value => ['case_pages','case_items','case_selected_count','case_excluded_count'].every(k=>integer(value[k])) && BigInt(value.case_items) === BigInt(value.case_selected_count) + BigInt(value.case_excluded_count) && (value.case_pages==='0') === (value.case_items==='0') && typeof value.case_sealed === 'boolean' && (!value.case_sealed || positive(value.case_pages)) && (value.case_cursor === null || shape(value.case_cursor,{after_case_id:'uuid'})) && (value.case_id === null || field(value.case_id,'uuid')) && (value.component_cursor === null || shape(value.component_cursor,{after_component_ordinal:'positive'})) && ids(value.accepted_page_component_ids) && Array.isArray(value.accepted_page_component_selected) && value.accepted_page_component_selected.length === value.accepted_page_component_ids.length && value.accepted_page_component_selected.every(v=>typeof v==='boolean') && (value.case_id !== null || (value.component_cursor === null && value.accepted_page_component_ids.length === 0));
-    let state = { version: 6, case_edit:null, worker_action:null, accepted_prepare:null, drafts:[], pay_channel:null, actor_id: options.actorId.toLowerCase(), run_id: null, worker_id: null, candidate_id: null, selection_pages: '0', selection_count: '0', selection_sealed: false, current_cursor: null, accepted_page_work_ids: [], can_confirm: false, confirmed: false, review_revision: null, instruction_id: null, transfer_id: null, pending: null, prior_case_selected_count:'0', ...caseDefaults };
+    const validCasePause=(value,parent)=>{try{if(!record(value)||!['CASE_PAUSE','CASE_RESUME'].includes(value.action))return false;
+      const {request_bytes,...accepted}=value,{action,...args}=JSON.parse(request_bytes);
+      return shape(accepted,RECEIPT[value.action])&&requestBody(action,args)===request_bytes&&action===value.action
+        &&same(args.command_id,value.command_id)&&same(args.case_id,value.case_id)&&args.expected_case_revision===value.expected_case_revision
+        &&same(parent.case_id,value.case_id)&&same(parent.candidate_id,value.candidate_id);
+    }catch{return false;}};
+    let state = { version: 7, case_pause:null, case_edit:null, worker_action:null, accepted_prepare:null, drafts:[], pay_channel:null, actor_id: options.actorId.toLowerCase(), run_id: null, worker_id: null, candidate_id: null, selection_pages: '0', selection_count: '0', selection_sealed: false, current_cursor: null, accepted_page_work_ids: [], can_confirm: false, confirmed: false, review_revision: null, instruction_id: null, transfer_id: null, pending: null, prior_case_selected_count:'0', ...caseDefaults };
     let busy = false;
     const saved = options.storage.getItem(key);
     if (saved !== null) {
@@ -1037,17 +1057,18 @@ function field(v,type){
         // new channel is deliberately unknown until an actual server header
         // and descriptor read qualify it; never default an old worker to PAYE.
         if(record(value)&&value.version===2&&!Object.hasOwn(value,'drafts')&&!Object.hasOwn(value,'pay_channel')){
-          const oldKeys=Object.keys(state).filter(k=>!['drafts','pay_channel','accepted_prepare','worker_action','case_edit'].includes(k)).sort().join();
+          const oldKeys=Object.keys(state).filter(k=>!['drafts','pay_channel','accepted_prepare','worker_action','case_edit','case_pause'].includes(k)).sort().join();
           if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');
           value={...value,version:3,drafts:[],pay_channel:null};
         }
-        if(record(value)&&value.version===3&&!Object.hasOwn(value,'accepted_prepare')){const oldKeys=Object.keys(state).filter(k=>!['accepted_prepare','worker_action','case_edit'].includes(k)).sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:4,accepted_prepare:null};}
-        if(record(value)&&value.version===4&&!Object.hasOwn(value,'worker_action')){const oldKeys=Object.keys(state).filter(k=>!['worker_action','case_edit'].includes(k)).sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:5,worker_action:null};}
-        if(record(value)&&value.version===5&&!Object.hasOwn(value,'case_edit')){const oldKeys=Object.keys(state).filter(k=>k!=='case_edit').sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:6,case_edit:null};}
-        if (!record(value) || value.version !== 6 || !(value.case_edit===null||shape(value.case_edit,RECEIPT.CASE_EDIT)&&same(value.case_edit.case_id,value.case_id)&&same(value.case_edit.rule_id,value.case_edit.command_id)) || !(value.worker_action===null||validWorkerAction(value.worker_action)) || !(value.accepted_prepare===null||shape(value.accepted_prepare,{command_id:'uuid',agency_sequence:'positive'})) || value.actor_id !== state.actor_id || Object.keys(value).sort().join() !== Object.keys(state).sort().join() || !['run_id','worker_id','candidate_id','instruction_id','transfer_id'].every(k => value[k] === null || field(value[k], 'uuid')) || !['selection_sealed','can_confirm','confirmed'].every(k=>typeof value[k]==='boolean') || !integer(value.selection_pages) || !integer(value.selection_count) || !integer(value.prior_case_selected_count) || !(value.current_cursor === null || shape(value.current_cursor,{after_week:'date',after_work_id:'uuid'})) || !ids(value.accepted_page_work_ids) || !validCases(value) || !(Array.isArray(value.drafts)&&(value.drafts.length===0||field(value.drafts,'drafts'))&&value.drafts.every(d=>same(d.run_id,value.run_id))) || !(value.pay_channel===null||(field(value.pay_channel,'channel')&&value.drafts.some(d=>d.pay_channel===value.pay_channel))) || !(value.review_revision === null || positive(value.review_revision)) || !(value.pending === null || (record(value.pending) && Object.keys(value.pending).length === 2 && typeof value.pending.action === 'string' && typeof value.pending.bytes === 'string' && JSON.parse(value.pending.bytes).action === value.pending.action && requestBody(value.pending.action, (({ action, ...args }) => args)(JSON.parse(value.pending.bytes))) === value.pending.bytes))) fail('JOURNAL_INVALID'); state = value; } catch { fail('JOURNAL_INVALID'); }
+        if(record(value)&&value.version===3&&!Object.hasOwn(value,'accepted_prepare')){const oldKeys=Object.keys(state).filter(k=>!['accepted_prepare','worker_action','case_edit','case_pause'].includes(k)).sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:4,accepted_prepare:null};}
+        if(record(value)&&value.version===4&&!Object.hasOwn(value,'worker_action')){const oldKeys=Object.keys(state).filter(k=>!['worker_action','case_edit','case_pause'].includes(k)).sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:5,worker_action:null};}
+        if(record(value)&&value.version===5&&!Object.hasOwn(value,'case_edit')){const oldKeys=Object.keys(state).filter(k=>!['case_edit','case_pause'].includes(k)).sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:6,case_edit:null};}
+        if(record(value)&&value.version===6&&!Object.hasOwn(value,'case_pause')){const oldKeys=Object.keys(state).filter(k=>k!=='case_pause').sort().join();if(Object.keys(value).sort().join()!==oldKeys)fail('JOURNAL_INVALID');value={...value,version:7,case_pause:null};}
+        if (!record(value) || value.version !== 7 || !(value.case_pause===null||validCasePause(value.case_pause,value)) || !(value.case_edit===null||shape(value.case_edit,RECEIPT.CASE_EDIT)&&same(value.case_edit.case_id,value.case_id)&&same(value.case_edit.rule_id,value.case_edit.command_id)) || !(value.worker_action===null||validWorkerAction(value.worker_action)) || !(value.accepted_prepare===null||shape(value.accepted_prepare,{command_id:'uuid',agency_sequence:'positive'})) || value.actor_id !== state.actor_id || Object.keys(value).sort().join() !== Object.keys(state).sort().join() || !['run_id','worker_id','candidate_id','instruction_id','transfer_id'].every(k => value[k] === null || field(value[k], 'uuid')) || !['selection_sealed','can_confirm','confirmed'].every(k=>typeof value[k]==='boolean') || !integer(value.selection_pages) || !integer(value.selection_count) || !integer(value.prior_case_selected_count) || !(value.current_cursor === null || shape(value.current_cursor,{after_week:'date',after_work_id:'uuid'})) || !ids(value.accepted_page_work_ids) || !validCases(value) || !(Array.isArray(value.drafts)&&(value.drafts.length===0||field(value.drafts,'drafts'))&&value.drafts.every(d=>same(d.run_id,value.run_id))) || !(value.pay_channel===null||(field(value.pay_channel,'channel')&&value.drafts.some(d=>d.pay_channel===value.pay_channel))) || !(value.review_revision === null || positive(value.review_revision)) || !(value.pending === null || (record(value.pending) && Object.keys(value.pending).length === 2 && typeof value.pending.action === 'string' && typeof value.pending.bytes === 'string' && JSON.parse(value.pending.bytes).action === value.pending.action && requestBody(value.pending.action, (({ action, ...args }) => args)(JSON.parse(value.pending.bytes))) === value.pending.bytes))) fail('JOURNAL_INVALID'); state = value; } catch { fail('JOURNAL_INVALID'); }
     }
     const notify = () => options.onChange?.(snapshot());
-    const snapshot = () => Object.freeze({ ...state, case_edit:state.case_edit===null?null:Object.freeze({...state.case_edit}), worker_action:state.worker_action===null?null:Object.freeze({...state.worker_action}), accepted_prepare:state.accepted_prepare===null?null:Object.freeze({...state.accepted_prepare}), drafts:Object.freeze(state.drafts.map(d=>Object.freeze({...d}))), current_cursor:state.current_cursor===null?null:Object.freeze({...state.current_cursor}),case_cursor:state.case_cursor===null?null:Object.freeze({...state.case_cursor}),component_cursor:state.component_cursor===null?null:Object.freeze({...state.component_cursor}),accepted_page_work_ids:Object.freeze([...state.accepted_page_work_ids]),accepted_page_component_ids:Object.freeze([...state.accepted_page_component_ids]),accepted_page_component_selected:Object.freeze([...state.accepted_page_component_selected]),pending: state.pending === null ? null : Object.freeze({ ...state.pending }), busy });
+    const snapshot = () => Object.freeze({ ...state, case_pause:state.case_pause===null?null:Object.freeze({...state.case_pause}), case_edit:state.case_edit===null?null:Object.freeze({...state.case_edit}), worker_action:state.worker_action===null?null:Object.freeze({...state.worker_action}), accepted_prepare:state.accepted_prepare===null?null:Object.freeze({...state.accepted_prepare}), drafts:Object.freeze(state.drafts.map(d=>Object.freeze({...d}))), current_cursor:state.current_cursor===null?null:Object.freeze({...state.current_cursor}),case_cursor:state.case_cursor===null?null:Object.freeze({...state.case_cursor}),component_cursor:state.component_cursor===null?null:Object.freeze({...state.component_cursor}),accepted_page_work_ids:Object.freeze([...state.accepted_page_work_ids]),accepted_page_component_ids:Object.freeze([...state.accepted_page_component_ids]),accepted_page_component_selected:Object.freeze([...state.accepted_page_component_selected]),pending: state.pending === null ? null : Object.freeze({ ...state.pending }), busy });
     function save(next) { if(!integer(next.prior_case_selected_count))fail('JOURNAL_INVALID');const bytes = JSON.stringify(next); if (encoder.encode(bytes).byteLength > LIMITS.journalBytes) fail('JOURNAL_TOO_LARGE'); options.storage.setItem(key, bytes); state = next; notify(); }
     function adopt(action, result, args) {
       const next = { ...state, pending: null };
@@ -1066,6 +1087,7 @@ function field(v,type){
       if(action==='PREPARATION_DISCARD'){if(!same(result.run_id,state.run_id))fail('ACCEPTED_IDENTITY_CONFLICT');next.can_confirm=false;next.review_revision=null;}
       if (action === 'CONFIRM') { next.confirmed = true; next.can_confirm = false; next.drafts=result.drafts.map(d=>({...d})); }
       if(action==='CASE_CREATE'){next.case_id=result.case_id;next.candidate_id=args.candidate_id;}
+      if(['CASE_PAUSE','CASE_RESUME'].includes(action)){if(!same(state.candidate_id,result.candidate_id))fail('ACCEPTED_IDENTITY_CONFLICT');next.case_id=result.case_id;next.case_pause={...result,request_bytes:state.pending.bytes};}
       if(action==='CASE_EDIT'){next.case_id=result.case_id;next.candidate_id=args.candidate_id;next.case_edit={...result};}
       if (result.transfer_id) next.transfer_id = result.transfer_id;
       if (result.instruction_id) next.instruction_id = result.instruction_id;
@@ -1085,7 +1107,12 @@ function field(v,type){
     return Object.freeze({ snapshot, debug,
       finishCaseCreation(caseId){if(busy||state.pending!==null||state.run_id!==null||state.worker_id!==null||!same(state.case_id,caseId))fail('REQUEST_INVALID');save({...state,case_id:null});},
       finishCaseEdit(commandId){if(busy||state.pending!==null||state.run_id!==null||state.worker_id!==null||!same(state.case_edit?.command_id,commandId))fail('REQUEST_INVALID');save({...state,case_id:null,case_edit:null});},
-      async mutate(action, args) { if (busy || state.pending !== null || state.case_edit!==null) fail('OUTCOME_UNKNOWN');
+      finishCasePause(outcome){const a=state.case_pause;
+        if(busy||state.pending!==null||state.run_id!==null||state.worker_id!==null||a===null||!cases.casePauseReceipt(outcome)||outcome.phase==='PENDING'
+          ||!same(a.command_id,outcome.command_id)||!same(a.case_id,outcome.case_id)||!same(a.candidate_id,outcome.candidate_id)
+          ||a.action!==outcome.action||a.sequence!==outcome.sequence||a.expected_case_revision!==outcome.expected_case_revision)fail('REQUEST_INVALID');
+        save({...state,case_id:null,case_pause:null});},
+      async mutate(action, args) { if (busy || state.pending !== null || state.case_edit!==null || state.case_pause!==null) fail('OUTCOME_UNKNOWN');
         if(reauthAction(action) && !Object.hasOwn(args||{},'reauth_token')
           && !(action==='CSV_ISSUE'&&same(args.instruction_id,state.instruction_id)&&same(args.transfer_id,state.transfer_id)))fail('AUTH_REQUIRED');
         const bytes = requestBody(action, args);
@@ -2000,7 +2027,7 @@ function field(v,type){
     if(sheet){const target=sheet;await target.selectDraft({run_id:protection.run_id,pay_channel:protection.channel,run_worker_id:protection.run_worker_id,candidate_id:candidateId},drafts.rows);
       requireActor(options);if(options.current?.()!==true||options.ownerReady()!==true||sheet!==target)fail('REQUEST_INVALID');target.focus();return target;}
     const controller=createController({...options,reviewRunId:protection.run_id,storage:options.storage??(options.window??window).sessionStorage,uuid:options.uuid??(()=>(options.window??window).crypto.randomUUID()),transport});
-    const saved=controller.snapshot();if(saved.pending!==null||saved.worker_action!==null||saved.case_edit!==null||saved.run_id!==null&&!same(saved.run_id,protection.run_id))fail('OUTCOME_UNKNOWN');
+    const saved=controller.snapshot();if(saved.pending!==null||saved.worker_action!==null||saved.case_edit!==null||saved.case_pause!==null||saved.run_id!==null&&!same(saved.run_id,protection.run_id))fail('OUTCOME_UNKNOWN');
     controller.bind({run_id:protection.run_id});controller.setDrafts(drafts.rows);controller.bindDraft({run_id:protection.run_id,pay_channel:protection.channel});
     controller.bind({worker_id:protection.run_worker_id,candidate_id:candidateId});
     return open({...options,reviewRunId:protection.run_id});

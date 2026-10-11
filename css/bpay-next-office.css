@@ -420,6 +420,21 @@
  #modal.ctms-kind-bpay-next-read .bpay-next-inline-snooze {margin-left:0;}
 }
 
+/* FC10 supplied recovery confirmation, within the existing native frame. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-reason {margin:18px;display:grid;gap:8px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-reason label {font-size:12px;font-weight:700;color:#b8c7dc;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-reason textarea {box-sizing:border-box;display:block;min-height:74px;width:100%;padding:10px;border:1px solid #35506e;border-radius:10px;background:#06111f;color:#e8eef8;font:inherit;resize:vertical;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-reason textarea::placeholder {color:#92a6c2;opacity:1;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-reason p {margin:0;padding:0;color:#ffb9c1;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-protection {padding-bottom:16px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-protection:empty {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-pause-open-draft {margin:0 18px;min-height:44px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-pause .bpay-next-question-icon[hidden] {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-pause [hidden] {display:none;}
+@media (max-width:600px) {
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-pause) button {min-height:44px;min-width:44px;}
+}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-pause) #modalActions:has(> [data-next-window-footer][hidden]) {display:none;}
 /* DR02 one primary action and the supplied SCR160 confirmation. */
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalActions button[data-next-secondary],
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalBody button[data-next-secondary] {background:transparent;color:var(--ctms-modal-text);box-shadow:none;border-color:#385576;}
