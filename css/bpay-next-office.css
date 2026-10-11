@@ -220,7 +220,7 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-detail-table {width:100%;table-layout:auto;border-collapse:collapse;}
 #modal.ctms-kind-bpay-next-read .bpay-next-detail-table th {font-size:12px;color:var(--ctms-modal-sub);text-align:left;white-space:normal;}
 #modal.ctms-kind-bpay-next-read .bpay-next-detail-table td {padding:10px 8px;vertical-align:top;}
-#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Amount],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Original],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Outstanding],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Due] {text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Amount],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Original],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Outstanding],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label=Due],#modal.ctms-kind-bpay-next-read .bpay-next-detail-table td[data-label="Weekly limit"] {text-align:right;font-variant-numeric:tabular-nums;}
 #modal.ctms-kind-bpay-next-read .bpay-next-detail-day {background:var(--ctms-modal-panel-raised);}
 #modal.ctms-kind-bpay-next-read .bpay-next-detail-shift td:first-child {padding-left:20px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-detail-section {font-weight:600;color:var(--ctms-modal-sub);}
@@ -292,3 +292,5 @@
  #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll td[data-label=Select]::before {content:none;}
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-detail-single td.bpay-next-detail-empty-status {display:none;}
 }
+
+#modal.ctms-modern-modal .bpay-next-case-paused { opacity: .65; }
