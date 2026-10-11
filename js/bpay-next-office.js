@@ -15,6 +15,15 @@
   const encoder = new TextEncoder();
   const LIMITS = Object.freeze({ page: 100, bytes: 128 * 1024, journalBytes: 65536, timeout: 12000 });
   const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  // DY-08: exact closed Daily refusal copy for the existing Timesheet authorisation notices.
+  function dailyHoursOnlyRefusal(value) {
+    const body = value?.json || value?.response || value;
+    const expected = 'BPAY_NEXT_DAILY_HOURS_ONLY_VIOLATION';
+    if (!record(body) || body.ok === true || body.success === true
+        || ![body.code, body.error_code, body.error].includes(expected)) return null;
+    return { code: expected, error_code: expected, retryable: false,
+      message: 'This Daily Timesheet must contain hours only; correct it before authorising.' };
+  }
   const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
   const integer = v => typeof v === 'string' && INT.test(v) && BigInt(v) <= 9223372036854775807n;
   const positive = v => integer(v) && v !== '0';
@@ -1559,5 +1568,5 @@ function field(v,type){
       const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();child.document.close();dates.formatAdvice(child.document);completed=true;
     }finally{win.clearTimeout(timer);controller.abort();controller.signal.removeEventListener('abort',abort);await reader?.cancel().catch(()=>{});reader?.releaseLock();if(!reader)await response?.body?.cancel().catch(()=>{});if(!completed&&!child.closed){child.document.write('<p style="color:#900">INCOMPLETE: advice could not be loaded. Do not use this as complete payment advice.</p>');child.document.close();}}
   }
-  return Object.freeze({ open, close, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, Failure, LIMITS });
+  return Object.freeze({ open, close, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, Failure, LIMITS });
 });

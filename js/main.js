@@ -5098,6 +5098,12 @@ async function weeklySourceQualifyAuthoriseRefusal(values, actor) {
   return SESSION?.user?.id === actor ? actor : null;
 }
 async function weeklySourceMapAuthoriseError(error, requestActor) {
+  const daily = bpayNextDailyHoursOnlyPresentation(error, requestActor);
+  if (daily) {
+    const mapped = Object.assign(new Error(daily.message, {cause: error}), error, daily);
+    mapped.message = daily.message;
+    return mapped;
+  }
   const actor = await weeklySourceQualifyAuthoriseRefusal([error], requestActor);
   const copy = weeklySourceAuthoriseRefusalPresentation(error, actor);
   if (!copy) return error;
@@ -5109,6 +5115,11 @@ async function weeklySourceMapAuthoriseError(error, requestActor) {
 function weeklySourcePresentAuthoriseResult(value, actor) {
   const copy = weeklySourceAuthoriseRefusalPresentation(value, actor);
   return copy ? {...value, reason: copy.message, message: copy.message, retryable: copy.retryable} : value;
+}
+// DY-08: qualify the existing Office refusal copy against the current actor.
+function bpayNextDailyHoursOnlyPresentation(value, actor) {
+  if (!actor || SESSION?.user?.id !== actor) return null;
+  return window.CloudTMSBpayNextOffice?.dailyHoursOnlyRefusal?.(value) || null;
 }
 // WB-01: a definite typed refusal uses the real Contract rates screen.
 function bpayNextMissingRatePresentation(value, actor) {
@@ -5123,7 +5134,7 @@ function bpayNextMissingRatePresentation(value, actor) {
     message: 'Pay rate missing for ' + (Object.prototype.hasOwnProperty.call(labels, body.bucket) ? labels[body.bucket] : body.bucket) + '; set the rate on the Contract, then authorise again.' };
 }
 function bpayNextPresentMissingRateResult(value, actor) {
-  const copy = bpayNextMissingRatePresentation(value, actor);
+  const copy = bpayNextDailyHoursOnlyPresentation(value, actor) || bpayNextMissingRatePresentation(value, actor);
   return copy ? { ...value, ...copy, reason: copy.message, retryable: false } : value;
 }
 async function bpayNextOpenMissingRateContract(refusal, actor, parentFrame) {
