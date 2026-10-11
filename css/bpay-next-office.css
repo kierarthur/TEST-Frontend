@@ -487,3 +487,45 @@
 @media(max-width:700px){#modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) #modalActions button {min-height:44px;}}
 
 @media(max-width:700px){#modal.ctms-kind-bpay-next-read .bpay-next-workbench-shell :is(.bpay-next-header-actions,.bpay-next-main-tabs) button {min-height:44px;box-sizing:border-box;}}
+/* DY05 captured Daily detail: the existing native dark window and fixed detail lists. */
+#modal.ctms-kind-bpay-next-read:has(.bpay-next-frozen-detail) {width:min(980px,calc(100vw - 48px));}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-detail {display:flex;flex-direction:column;gap:16px;min-width:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-tabs {display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--ctms-modal-line);padding-bottom:10px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-tabs [aria-selected=true] {border-color:var(--ctms-modal-accent);background:color-mix(in srgb,var(--ctms-modal-accent) 20%,var(--ctms-modal-panel));box-shadow:inset 0 -2px var(--ctms-modal-cyan);}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-subject {border:1px solid var(--ctms-modal-line);border-radius:12px;padding:12px 14px;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-detail small {display:block;color:var(--ctms-modal-sub);font-size:12px;margin-top:5px;line-height:1.5;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-caption {margin:0;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll {max-height:min(500px,52vh);overflow:auto;border:1px solid var(--ctms-modal-line);border-radius:12px;overscroll-behavior:contain;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll table {width:100%;border-collapse:collapse;table-layout:fixed;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll th {position:sticky;top:0;text-align:left;background:var(--ctms-modal-panel-raised);color:var(--ctms-modal-sub);font-size:11px;text-transform:uppercase;letter-spacing:.02em;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll :is(th,td) {padding:12px;vertical-align:middle;overflow-wrap:anywhere;border-bottom:1px solid var(--ctms-modal-line-soft);}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll tr:last-child td {border-bottom:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll tr[aria-selected=true] {background:var(--ctms-modal-panel-raised);box-shadow:inset 3px 0 var(--ctms-modal-accent-bright);}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll .btn {white-space:nowrap;}
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-detail label {color:var(--ctms-modal-sub);display:flex;align-items:center;gap:12px;}
+@media(max-width:700px){
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-frozen-detail) {width:calc(100vw - 12px);}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-detail .btn {min-height:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll :is(table,tbody,tr,td) {display:block;width:auto;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll thead {display:none;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll td {display:flex;justify-content:space-between;gap:12px;border:0;padding:6px 12px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll td::before {content:attr(data-label);color:var(--ctms-modal-sub);font-weight:600;flex:0 0 40%;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll tr {padding:10px 0;border-bottom:1px solid var(--ctms-modal-line);}
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-frozen-detail) #modalActions .btn {min-height:44px;}
+}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-frozen-detail) {width:min(980px,calc(100vw - 48px));}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-frozen-tabs button[aria-selected="true"] {border-color:var(--ctms-modal-accent);background:color-mix(in srgb,var(--ctms-modal-accent) 20%,var(--ctms-modal-panel));box-shadow:inset 0 -2px var(--ctms-modal-cyan);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll .bpay-next-frozen-number {text-align:right;font-variant-numeric:tabular-nums;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-frozen-detail) {width:calc(100vw - 12px);}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-tabs {flex-wrap:wrap;max-width:100%;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-tabs .btn {flex:0 0 auto;}
+}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalBody .bpay-next-frozen-tabs button[aria-selected="true"] {border-color:var(--ctms-modal-accent);background:color-mix(in srgb,var(--ctms-modal-accent) 20%,var(--ctms-modal-panel));box-shadow:inset 0 -2px var(--ctms-modal-cyan);}
+@media(max-width:700px){
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-tabs {gap:6px;overflow-x:visible;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-tabs .btn {font-size:13px;padding:10px;min-width:44px;min-height:44px;white-space:nowrap;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-scroll .bpay-next-frozen-number::before {text-align:left;}
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-frozen-detail) #btnCloseModal {min-height:44px;min-width:44px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-detail select {min-height:44px;min-width:44px;}
+}
