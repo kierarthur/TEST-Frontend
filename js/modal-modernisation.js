@@ -803,6 +803,26 @@
       });
     }
 
+    // DY-10: the native inline footer owner is retained when any action is present.
+    const dailyFooter=modal.querySelector('#modalActions');
+    if(dailyFooter){
+      const dailyRead=kindSlug==='timesheets' && !!body.querySelector('[data-daily-processing]');
+      const empty=dailyRead && !safeText(dailyFooter.querySelector('#modalHint')?.textContent)
+        && !Array.from(dailyFooter.querySelectorAll('button,input,select,a')).some(control=>{
+          for(let node=control;node && node!==dailyFooter;node=node.parentElement){
+            if(node.hidden || getComputedStyle(node).display==='none')return false;
+          }
+          return true;
+        });
+      if(empty){
+        if(!dailyFooter.hasAttribute('data-daily-empty-display'))dailyFooter.setAttribute('data-daily-empty-display',dailyFooter.style.display);
+        if(dailyFooter.style.display!=='none')dailyFooter.style.display='none';
+      }else if(dailyFooter.hasAttribute('data-daily-empty-display')){
+        dailyFooter.style.display=dailyFooter.getAttribute('data-daily-empty-display');
+        dailyFooter.removeAttribute('data-daily-empty-display');
+      }
+    }
+
     const primaryActionLabels = {
       'search-load': 'Load',
       'hr-weekly-client-picker': 'Select client',
@@ -822,7 +842,8 @@
       // Column-sort labels are controls, not actions; "Uploaded" must not be
       // promoted to the purple Upload action by the shared verb matcher.
       if (button.matches('[data-ws-sort]') ||
-          (kindSlug === 'bpay-next-read' && button.matches('[data-next-focus-key="candidate-export"]'))) {
+          (kindSlug === 'bpay-next-read' && button.matches('[data-next-focus-key="candidate-export"]')) ||
+          (kindSlug === 'timesheets' && body.querySelector('[data-daily-processing]') && button.matches('[data-ts-action="add-additional-manual"]'))) {
         button.classList.remove('ctms-action-danger', 'ctms-action-primary');
         return;
       }

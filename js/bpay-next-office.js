@@ -24,6 +24,94 @@
     return { code: expected, error_code: expected, retryable: false,
       message: 'This Daily Timesheet must contain hours only; correct it before authorising.' };
   }
+
+  // DY-10: native current-Daily evidence, never a payment calculation or approval.
+  function dailyProcessingState(details) {
+    const ts=details?.timesheet, tf=details?.tsfin, fact=details?.daily_processing;
+    if(!record(ts)||ts.sheet_scope!=='DAILY')return null;
+    const unavailable={key:'UNAVAILABLE',label:'Could not check this Daily Timesheet.',action:'Refresh',retry:false};
+    const version=ts.version;
+    if(!UUID.test(ts.timesheet_id||'')||ts.is_current!==true||!Number.isSafeInteger(version)||version<1
+      ||!same(details.current_timesheet_id,ts.timesheet_id)||Number(details.current_version)!==version||details.was_stale===true
+      ||!record(fact)||Object.keys(fact).sort().join(',')!=='current_version,status,timesheet_id'
+      ||!same(fact.timesheet_id,ts.timesheet_id)||fact.current_version!==version
+      ||!['NONE','PENDING','FAILED','UNAVAILABLE'].includes(fact.status))return unavailable;
+    const stamp=v=>typeof v==='string'&&v.trim()!==''&&Number.isFinite(Date.parse(v));
+    const exactTf=record(tf)&&same(tf.timesheet_id,ts.timesheet_id)&&tf.timesheet_version===version&&tf.is_current===true&&tf.is_stale===false;
+    const approved=exactTf&&stamp(ts.authorised_at_server)&&stamp(tf.authorised_at_utc);
+    if(stamp(ts.revoked_at)||ts.status==='REVOKED')return {key:'WITHDRAWN',label:'Authorisation withdrawn.',action:null,retry:false};
+    if(stamp(ts.archived_at_utc))return {key:'ARCHIVED',label:'This Daily Timesheet is archived.',action:null,retry:false};
+    if(fact.status==='UNAVAILABLE')return unavailable;
+    if(fact.status==='FAILED')return {key:'FAILED',label:'Pay for this Daily shift could not be worked out.',action:'Retry',retry:true,retainedApproval:approved};
+    if(fact.status==='PENDING')return {key:'PENDING',label:'Updating…',action:'Refresh',retry:false,retainedApproval:approved};
+    if(!record(tf)||Object.keys(tf).length===0)return {key:'UNPREPARED',label:'Pay for this Daily shift has not been worked out yet.',action:'Retry',retry:true};
+    if(!exactTf)return {key:'DAMAGED',label:'This Daily Timesheet needs to be checked.',action:'Refresh',retry:false};
+    const stages=['UNASSIGNED','CLIENT_UNRESOLVED','RATE_MISSING','PAY_CHANNEL_MISSING','READY_FOR_HR','READY_FOR_INVOICE','PENDING_AUTH','AWAITING_MANUAL_SIGNATURE','UNPROCESSED'];
+    if(!stages.includes(tf.processing_status))return {key:'DAMAGED',label:'This Daily Timesheet needs to be checked.',action:'Refresh',retry:false};
+    if(tf.has_rate_issue===true||tf.processing_status==='RATE_MISSING')return {key:'RATE_MISSING',label:'The rate needs to be set before authorisation.',action:null,retry:false};
+    if(tf.has_pay_channel_issue===true||tf.processing_status==='PAY_CHANNEL_MISSING')return {key:'PAY_CHANNEL_MISSING',label:'The pay channel needs to be set before authorisation.',action:null,retry:false};
+    if(!approved)return {key:'NOT_AUTHORISED',label:'Not authorised.',action:null,retry:false};
+    const hours=tf.total_hours;
+    if(!(typeof hours==='number'&&Number.isFinite(hours)&&hours>=0||typeof hours==='string'&&/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(hours)))return {key:'DAMAGED',label:'This Daily Timesheet needs to be checked.',action:'Refresh',retry:false};
+    const zero=hours===0||typeof hours==='string'&&/^0(?:\.0+)?$/.test(hours);
+    return {key:zero?'AUTHORISED_ZERO_HOURS':'AUTHORISED',label:zero?'Authorised · 0.00 hours':'Authorised.',action:null,retry:false};
+  }
+  function mountDailyProcessingNotice({document:doc,host,details,current,onRetry,onRefresh,requestState={}}) {
+    const state=dailyProcessingState(details);if(!state||!current())return null;
+    const pending=requestState;
+    pending.busy=pending.busy===true;pending.unknown=pending.unknown===true;
+    pending.result=typeof pending.result==='string'?pending.result:'';
+    const paint=()=>{
+      if(!current())return;
+      const line=doc.createElement('span');line.className='bpay-next-daily-status';line.textContent=state.label;
+      line.setAttribute('role',['FAILED','DAMAGED','UNAVAILABLE'].includes(state.key)?'alert':'status');
+      const nodes=[line];
+      const tone=state.key==='FAILED'?'danger':state.key==='PENDING'?'info':state.key.startsWith('AUTHORISED')?'success':null;
+      if(tone){
+        const badge=state.key==='FAILED'?doc.createElement('span'):line;
+        badge.className+=' mytms-status-badge mytms-status-badge--'+tone;
+        if(state.key==='FAILED'){badge.textContent='Failed';nodes.unshift(badge);}
+      }
+      if(['FAILED','UNPREPARED','DAMAGED','UNAVAILABLE'].includes(state.key)){
+        const amount=doc.createElement('span');amount.className='bpay-next-daily-amount';amount.textContent='—';
+        amount.setAttribute('aria-label','Pay amount unavailable');nodes.push(amount);
+      }
+      const action=pending.unknown?'Refresh':state.action;
+      if(action){
+        const button=doc.createElement('button');button.type='button';button.className='btn';
+        button.textContent=action;button.disabled=pending.busy;
+        button.onclick=async()=>{
+          if(pending.busy||!current())return;
+          pending.busy=true;pending.unknown=true;paint();
+          let acknowledged=false;
+          try{
+            if(action==='Retry'){
+              const reply=await onRetry();if(!current())return;
+              if(!record(reply)||reply.enqueued!==1)throw Error('Unconfirmed');
+              acknowledged=true;pending.result='Processing requested.';paint();
+            }
+            const refreshed=await onRefresh();
+            if(refreshed===false)throw Error('Refresh unavailable');
+          }catch{
+            pending.unknown=true;
+            pending.result=action==='Retry'&&!acknowledged
+              ?'Could not confirm the processing request; refresh before trying again.'
+              :'Could not refresh this Daily Timesheet.';
+          }finally{
+            pending.busy=false;pending.paint?.();
+          }
+        };
+        nodes.push(button);
+      }
+      if(pending.result){
+        const message=doc.createElement('span');message.className='bpay-next-daily-result';
+        message.setAttribute('role',pending.result.startsWith('Could not ')?'alert':'status');message.textContent=pending.result;nodes.push(message);
+      }
+      host.replaceChildren(...nodes);host.hidden=false;
+    };
+    pending.paint=paint;paint();return Object.freeze({state});
+  }
+
   const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
   const integer = v => typeof v === 'string' && INT.test(v) && BigInt(v) <= 9223372036854775807n;
   const positive = v => integer(v) && v !== '0';
@@ -1572,5 +1660,5 @@ function field(v,type){
       const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();child.document.close();dates.formatAdvice(child.document);completed=true;
     }finally{win.clearTimeout(timer);controller.abort();controller.signal.removeEventListener('abort',abort);await reader?.cancel().catch(()=>{});reader?.releaseLock();if(!reader)await response?.body?.cancel().catch(()=>{});if(!completed&&!child.closed){child.document.write('<p style="color:#900">INCOMPLETE: advice could not be loaded. Do not use this as complete payment advice.</p>');child.document.close();}}
   }
-  return Object.freeze({ open, close, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, Failure, LIMITS });
+  return Object.freeze({ open, close, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
 });

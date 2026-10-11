@@ -535,3 +535,20 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals dt {font-size:11px;text-transform:uppercase;font-weight:700;color:var(--ctms-modal-sub);}
 #modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals dd {margin:5px 0 0;font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
 @media(max-width:700px){#modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals {grid-template-columns:repeat(2,minmax(0,1fr));}}
+
+/* DY10: one native Timesheet result line, with an outline action. */
+#modal.ctms-modern-modal .bpay-next-daily-notice {display:flex;flex-wrap:wrap;align-items:center;gap:10px;min-width:0;}
+#modal.ctms-modern-modal .bpay-next-daily-notice .btn {min-width:44px;min-height:44px;background:transparent;border:1px solid var(--ctms-modal-line,#476179);color:inherit;}
+#modal.ctms-modern-modal .bpay-next-daily-status,#modal.ctms-modern-modal .bpay-next-daily-result {overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-daily-amount {font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-daily-result {flex-basis:100%;}
+
+#modal.ctms-modern-modal:has([data-daily-processing]) .ctms-tab-intro p {display:none;}
+#modal.ctms-modern-modal:has([data-daily-processing]) .controls > button {min-height:44px;}
+
+@media(max-width:700px){
+ #modal.ctms-modern-modal:has([data-daily-processing]) #modalTabs {flex-wrap:wrap;overflow-x:visible;white-space:normal;}
+ #modal.ctms-modern-modal:has([data-daily-processing]) #modalTabs button {min-width:44px;min-height:44px;}
+ #modal.ctms-modern-modal:has([data-daily-processing]) #btnCloseModal,#modal.ctms-modern-modal:has([data-daily-processing]) #btnPaymentHistory {min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal:has([data-daily-processing]) #modalBody button {min-height:44px;min-width:44px;}
+}

@@ -327264,6 +327264,8 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
   // before the workspace has a valid selection (or override its later state).
   // Its child confirmations/detail screens own the same gates. In particular,
   // opening a child must not enable an unconfirmed action or empty selection.
+  // The bounded Daily notice owns its actor/current identity and busy state.
+  if (el.closest?.('[data-daily-processing]')) return;
   if (!ro && el.closest?.('.ws-workspace[data-ws-contract="WEEKLY_SOURCE_IMPORT_WORKSPACE_V1"], .ws-child[data-wsa-screen]')) return;
   const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
 
@@ -329657,6 +329659,27 @@ const handleMoved = async (err, label) => {
 };
 
 const refreshAndRepaintOverview = ensureTsRefreshAndRepaintOverview();
+
+// DY-10: qualify the existing native owner and modal before a targeted Retry.
+const dailyHost=root.querySelector('[data-daily-processing]');
+if(dailyHost && mode==='view' && SESSION?.user?.role==='admin') {
+  const actor=SESSION.user.id, token=mc.openToken, nativeDetails=mc.timesheetDetails;
+  const nativeId=nativeDetails?.timesheet?.timesheet_id, version=nativeDetails?.timesheet?.version;
+  const owner=bankingNextOwnerClient();
+  const current=()=>dailyHost.isConnected && SESSION?.user?.id===actor && isActiveTimesheetModalToken(token)
+    && window.modalCtx?.timesheetDetails===nativeDetails && window.modalCtx?.timesheetDetails?.timesheet?.version===version
+    && String(tsNow()).toLowerCase()===String(tsId).toLowerCase() && owner?.peek()?.active_owner==='NEXT';
+  const requestKey=actor+':'+token+':'+tsId+':'+version;
+  if(mc._dailyProcessingRequestState?.key!==requestKey)mc._dailyProcessingRequestState={key:requestKey};
+  const requestState=mc._dailyProcessingRequestState;
+  const mount=()=>{if(!current())return;window.CloudTMSBpayNextOffice?.mountDailyProcessingNotice?.({document,host:dailyHost,details:nativeDetails,current,requestState,
+    onRetry:()=>{if(!current()||String(nativeId).toLowerCase()!==String(tsId).toLowerCase()||window.CloudTMSBpayNextOffice?.dailyProcessingState?.(nativeDetails)?.retry!==true)throw Error('Context changed');return apiPostJson('/api/tsfin/recompute',{timesheet_ids:[tsId]});},
+    onRefresh:async()=>{if(!current())return false;return await refreshTimesheetModalAfterLifecycleAction(token,{forceFullDetails:true,tabKey:'overview',timesheetId:tsId,source:'daily-processing'});}
+  });};
+  if(owner?.peek()?.active_owner==='NEXT')mount();
+
+}
+
 
 
 
@@ -333720,7 +333743,11 @@ top._updateButtons = ()=> {
     if (historyEligible && ownerClient && !top._bpayNextOwnerRequested) {
       top._bpayNextOwnerRequested = true;
       void ownerClient.qualify('record:' + top.entity + ':' + scopeId + ':' + crypto.randomUUID())
-        .catch(()=>{}).finally(()=>{if(currentFrame()===top && SESSION?.user?.id===historyActor)top._updateButtons?.();});
+        .catch(()=>{}).finally(()=>{if(currentFrame()===top && SESSION?.user?.id===historyActor){top._updateButtons?.();
+          if(top.entity==='timesheets' && top.mode==='view' && top.currentTabKey==='overview'
+            && window.modalCtx?.timesheetDetails?.timesheet?.sheet_scope==='DAILY' && ownerClient.peek()?.active_owner==='NEXT')
+            void safeRerenderTimesheetModal(window.modalCtx.openToken,'overview').catch(()=>{});
+        }});
     }
     const showHistory = historyEligible && ownerClient?.peek()?.active_owner === 'NEXT';
     paymentHistoryButton.style.display = showHistory ? '' : 'none';
@@ -359296,6 +359323,7 @@ async function fetchTimesheetDetails(timesheetId) {
     validations,
     shifts,
     segments,
+    daily_processing: json.daily_processing || null,
     invoiceBreakdown: ib,
     isSegmentsMode: isSegments,
     invoice_no_by_invoice_id,
@@ -359338,6 +359366,21 @@ async function fetchTimesheetDetails(timesheetId) {
     current_version,
     was_stale
   };
+
+  // A successful exact current status read clears only this native window's unknown Retry state.
+  const dailyRequest=window.modalCtx?._dailyProcessingRequestState;
+  if(dailyRequest && window.modalCtx?.entity==='timesheets'
+    && String(window.modalCtx?.data?.timesheet_id||'').toLowerCase()===String(timesheetId).toLowerCase()
+    && dailyRequest.key===SESSION?.user?.id+':'+window.modalCtx.openToken+':'+window.modalCtx.data.timesheet_id+':'+timesheet?.version
+    && window.CloudTMSBpayNextOffice?.dailyProcessingState?.(detail)?.key !== 'UNAVAILABLE'
+    && window.CloudTMSBpayNextOffice?.dailyProcessingState?.(detail)
+    && detail.daily_processing?.status!=='UNAVAILABLE'
+    && ['NONE','PENDING','FAILED'].includes(detail.daily_processing?.status)
+    && detail.timesheet?.is_current===true && detail.was_stale===false
+    && String(detail.current_timesheet_id).toLowerCase()===String(timesheetId).toLowerCase()){
+      dailyRequest.unknown=false;
+      if(dailyRequest.result?.startsWith('Could not '))dailyRequest.result='';
+    }
 
   L('parsed payload snapshot', {
     hasTimesheet: !!timesheet,
@@ -363790,6 +363833,8 @@ function renderTimesheetOverviewTab(ctx) {
 
   const ts    = details.timesheet || {};
   const tsfin = details.tsfin     || {};
+  const dailyStatusForOverview = SESSION?.user?.role==='admin' && bankingNextOwnerClient()?.peek()?.active_owner==='NEXT'
+    ? window.CloudTMSBpayNextOffice?.dailyProcessingState?.(details) : null;
   const cw    = details.contract_week || {};
   const rCand = related.candidate || {};
   const rCli  = related.client    || {};
@@ -364816,7 +364861,7 @@ function renderTimesheetOverviewTab(ctx) {
         ? 'This timesheet has been reset or currently has no valid hours recorded yet. Enter/submit hours to continue.'
         : 'This is a real timesheet row but it is currently unprocessed. Save/process hours to continue.'
     );
-  } else if (!hasTsfin && (!detailsLoading || hasExplicitLifecycleSummary || isPlannedOnly)) {
+  } else if (!hasTsfin && !dailyStatusForOverview && (!detailsLoading || hasExplicitLifecycleSummary || isPlannedOnly)) {
     addStage(
       'Unprocessed',
       'pill-info',
@@ -364959,7 +365004,7 @@ function renderTimesheetOverviewTab(ctx) {
     if (stageRaw !== 'PENDING_AUTH') addStage(stageRaw, 'pill-info');
   }
 
-  if (!stageBadges.length) {
+  if (!stageBadges.length && !dailyStatusForOverview) {
     if (detailsLoading) {
       addStage('Loading timesheet state…', 'pill-info', 'Canonical timesheet details are still loading. Lifecycle badges will update when the current details arrive.');
     } else {
@@ -365410,15 +365455,15 @@ function renderTimesheetOverviewTab(ctx) {
 
   const routeHtml = `
     <div class="card" style="margin-top:10px;">
-      <div class="row">
+      ${stageBadgesForDisplay.length ? `<div class="row">
         <label>Stage</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">
           ${stageBadgesForDisplay.join('')}
         </div>
-      </div>
+      </div>` : ''}
 
       <div class="row">
-        <label>Route</label>
+        <label>${dailyStatusForOverview ? 'Timesheet type' : 'Route'}</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
           ${deletePolicyBadgeHtmlForDisplay}
           <span class="pill ${routePillClass}" style="font-weight:600;" ${routeTitleForDisplay ? `title="${enc(routeTitleForDisplay)}"` : ''}>${enc(routeLabelForDisplay)}</span>
@@ -365426,6 +365471,7 @@ function renderTimesheetOverviewTab(ctx) {
         </div>
       </div>
 
+      ${dailyStatusForOverview ? '<div class="row" data-view-only="true"><label>Daily Timesheet</label><div class="controls bpay-next-daily-notice" data-daily-processing hidden></div></div>' : ''}
       ${candidateOverviewHtml ? `<div data-view-only="true">${candidateOverviewHtml}</div>` : ''}
 
       ${routeActionsRowHtml}
@@ -368008,7 +368054,12 @@ function makeTimesheetFastOpenRenderTab(openToken, baseRowArg) {
     const hydration = (mc.timesheetHydration && typeof mc.timesheetHydration === 'object') ? mc.timesheetHydration : {};
     const detailsError = String(hydration.detailsError || '').trim();
 
-    if (detailsError) {
+    // Keep the same Daily identity and Refresh-only result after an unknown read.
+    const retainedDailyStatus=key==='overview' && mc._dailyProcessingRequestState?.unknown===true
+      && mc._dailyProcessingRequestState.key===SESSION?.user?.id+':'+openToken+':'+mc.data?.timesheet_id+':'+mc.timesheetDetails?.timesheet?.version
+      && SESSION?.user?.role==='admin' && bankingNextOwnerClient()?.peek()?.active_owner==='NEXT'
+      && window.CloudTMSBpayNextOffice?.dailyProcessingState?.(mc.timesheetDetails);
+    if (detailsError && !retainedDailyStatus) {
       return renderTimesheetLoadingCard('Timesheet details', detailsError, baseRow.__bpayNextExactPhysicalId != null);
     }
 
