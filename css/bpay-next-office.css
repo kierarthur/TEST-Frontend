@@ -698,3 +698,8 @@
  #modal.ctms-modern-modal .bpay-next-channel-card tr{border-bottom:1px solid var(--ctms-modal-line);padding:6px 0;}
  #modal.ctms-modern-modal .bpay-next-channel-hint{max-width:100%;flex-basis:100%;}
 }
+
+#modal.ctms-modern-modal #modalBody .bpay-next-credit .bpay-next-advance-method small {font-size:12px;font-weight:400;}
+@media(max-width:480px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-advance) :is(#btnCloseModal,#modalActions button){min-height:44px;min-width:44px;}
+}

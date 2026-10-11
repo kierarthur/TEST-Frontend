@@ -71,10 +71,13 @@ function mount(options){
     for(const title of ['Weekly repayment','Last due']){const term=doc.createElement('dt'),value=doc.createElement('dd');term.textContent=title;value.textContent='—';empty.append(term,value);}
     if(shown){
       const label=doc.createElement('span');label.className='bpay-next-case-eyebrow';label.textContent='Preview';
-      const heading=doc.createElement('h3');heading.textContent=shown.weekly_due===null?money(shown.total)+' to pay':(options.weeklyLimitLabel?'Up to ':'')+money(shown.weekly_due)+' a week for '+shown.week_count+' weeks';
+      const credit=options.creditPresentation===true&&shownInput.case_kind==='CREDIT';
+      const heading=doc.createElement('h3');heading.textContent=credit?money(shown.total)+' credit':shown.weekly_due===null?money(shown.total)+' to pay':(options.weeklyLimitLabel?'Up to ':'')+money(shown.weekly_due)+' a week for '+shown.week_count+' weeks';
       const details=doc.createElement('dl');
       const rows=shown.weekly_due===null?[]:[['First due',due(shown.first_due_monday)],['Last due',due(shown.last_due_monday)]];
-      rows.push(['Total',money(shown.total)],['Minimum earnings threshold',shown.minimum_earnings_threshold===null?'None':money(shown.minimum_earnings_threshold)],
+      rows.push(['Total',money(shown.total)]);
+      if(credit)rows.push(['Tax',shownInput.tax_treatment==='TAXABLE'?'Taxable':'Not taxable']);
+      else rows.push(['Minimum earnings threshold',shown.minimum_earnings_threshold===null?'None':money(shown.minimum_earnings_threshold)],
         ['Take-home floor',shown.take_home_floor_override===null?'Candidate default':money(shown.effective_take_home_floor)]);
       for(const [title,text]of rows){const term=doc.createElement('dt'),value=doc.createElement('dd');term.textContent=title;value.textContent=text;details.append(term,value);}
       panel.append(label,heading,details);
