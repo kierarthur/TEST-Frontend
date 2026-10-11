@@ -31,7 +31,7 @@
   // Retain the existing Office stack, geometry, Close and Escape lifecycle.
   function createStandardWindowAdapter({document,window,showModal,closeModal}){
     if(typeof showModal!=='function'||typeof closeModal!=='function')throw new Error('Modal unavailable');
-    return function({title,content,footer,small=false,confirmation=false,onDismiss,onMount,beforeClose,canFocus=()=>true}){
+    return function({title,content,footer,headerDetail,small=false,confirmation=false,onDismiss,onMount,beforeClose,canFocus=()=>true}){
       let frame=null,closed=false,initialFocus=false,closeWait=null,settleClose=null;
       const settled=value=>{settleClose?.(value);settleClose=null;closeWait=null;};
       const active=()=>!closed&&frame!==null&&window.__modalStack?.at(-1)===frame;
@@ -51,13 +51,16 @@
         panel.setAttribute('aria-labelledby',question?.id??'modalTitle');
         document.getElementById('modalTabs').hidden=true;
         document.getElementById('modalTabs').style.display='none';
+        const titleHost=document.getElementById('modalTitle');
+        titleHost.parentElement.querySelectorAll('[data-next-window-header-detail]').forEach(node=>{if(node!==headerDetail)node.remove();});
+        if(headerDetail){headerDetail.dataset.nextWindowHeaderDetail='';titleHost.insertAdjacentElement('afterend',headerDetail);}
         document.getElementById('modalBody').replaceChildren(content);
         const actions=document.getElementById('modalActions');
         actions.querySelectorAll('[data-next-window-footer]').forEach(node=>node.remove());
         if(footer){footer.setAttribute('data-next-window-footer','');actions.append(footer);}
         window.queueMicrotask(()=>{if(!active())return;onMount?.();if(!initialFocus&&active()&&canFocus()){initialFocus=true;((confirmation&&footer?controls(footer)[0]:controls(content)[0])??document.getElementById('btnCloseModal')).focus();}});
       };
-      const dismissed=()=>{if(closed)return;closed=true;footer?.remove();const tabs=document.getElementById('modalTabs');tabs.hidden=false;tabs.style.display='';const panel=document.getElementById('modal');panel.classList.remove('bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');panel.setAttribute('role','dialog');panel.setAttribute('aria-labelledby','modalTitle');onDismiss?.();settled(true);};
+      const dismissed=()=>{if(closed)return;closed=true;footer?.remove();headerDetail?.remove();const tabs=document.getElementById('modalTabs');tabs.hidden=false;tabs.style.display='';const panel=document.getElementById('modal');panel.classList.remove('bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');panel.setAttribute('role','dialog');panel.setAttribute('aria-labelledby','modalTitle');onDismiss?.();settled(true);};
       showModal(title,[{key:'form',label:''}],()=>'',null,true,mount,{
         kind:'bpay-next-read',frameEntity:'banking',showSave:false,showApply:false,
         noParentGate:true,dirtyClosePolicy:'close',runOnRender:true,runAfterMount:true,onDismiss:dismissed,

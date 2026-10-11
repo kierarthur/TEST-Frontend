@@ -434,3 +434,48 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-choice-submit .ws-notice--danger {border-color:#813f5c;background:#342037;color:#f3c8d6;}
 @keyframes bpay-next-sending-spin {to{transform:rotate(360deg);}}
 @media(prefers-reduced-motion:reduce){#modal.ctms-kind-bpay-next-read .bpay-next-sending-spinner {animation:none;}}
+
+/* DR06 stored preparation facts in the existing medium, dark Office window. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-progress) {width:min(980px,calc(100vw - 48px));}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress {display:flex;flex-direction:column;gap:14px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress p {margin:0;line-height:1.5;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-subtitle,#modal.ctms-kind-bpay-next-read .bpay-next-progress-updated {color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-progress-subtitle) {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;}
+#modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-progress-subtitle) .spacer {display:none;}
+#modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-progress-subtitle) #modalTitle {grid-column:1;grid-row:1;}
+#modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-progress-subtitle) #btnCloseModal {grid-column:2;grid-row:1 / span 2;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-subtitle {display:block;grid-column:1;grid-row:2;line-height:1.5;font-weight:500;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-subtitle[hidden] {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress .ws-notice {border:1px solid var(--ctms-modal-line);border-left:4px solid var(--ctms-modal-cyan);border-radius:10px;padding:12px 14px;background:var(--ctms-modal-panel-raised);color:var(--ctms-modal-text);}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress .ws-notice p {color:var(--ctms-modal-sub);font-size:12px;margin-top:4px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress .ws-notice--danger {border-left-color:var(--ctms-modal-danger);background:color-mix(in srgb,var(--ctms-modal-danger) 10%,var(--ctms-modal-panel));}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress .bpay-next-result-success {border-left-color:var(--ctms-modal-success);background:color-mix(in srgb,var(--ctms-modal-success) 12%,var(--ctms-modal-panel));}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress .ws-notice .btn {margin-top:10px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-subject,#modal.ctms-kind-bpay-next-read .bpay-next-progress-totals {border:1px solid var(--ctms-modal-line);border-radius:12px;padding:14px;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-subject h3 {margin:0 0 4px;font-size:14px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-subject p {color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 8px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-heading span {color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress progress {appearance:none;display:block;width:100%;height:8px;border:0;border-radius:8px;overflow:hidden;background:var(--ctms-modal-line-soft);}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress progress::-webkit-progress-bar {background:var(--ctms-modal-line-soft);}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress progress::-webkit-progress-value {background:linear-gradient(90deg,var(--ctms-modal-accent),var(--ctms-modal-cyan));}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress progress::-moz-progress-bar {background:linear-gradient(90deg,var(--ctms-modal-accent),var(--ctms-modal-cyan));}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-totals {display:flex;gap:24px;margin:14px 0 10px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-totals dt {color:var(--ctms-modal-sub);text-transform:uppercase;font-size:11px;font-weight:700;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-totals dd {margin:4px 0 0;font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-figures.is-stale {opacity:.55;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-more {position:relative;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-more summary {display:flex;gap:8px;align-items:center;cursor:pointer;border:1px solid var(--ctms-modal-line);border-radius:10px;padding:10px 14px;background:var(--ctms-modal-panel-raised);font-weight:700;list-style:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-more summary::after {content:'▾';}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-more summary::-webkit-details-marker {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-more[open]>.btn {position:absolute;bottom:calc(100% + 8px);right:0;white-space:nowrap;z-index:2;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-more summary:focus-visible {outline:2px solid var(--ctms-modal-accent-bright);outline-offset:3px;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-progress) {width:calc(100vw - 12px);}
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-progress) :is(.btn,summary) {min-height:44px;box-sizing:border-box;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-progress-totals {gap:18px;}
+}
+
+#modal.ctms-kind-bpay-next-read .bpay-next-progress-footer-hint {align-self:center;margin:0 auto 0 0;font-size:12px;color:var(--ctms-modal-sub);}
+
+@media(max-width:700px){#modal.ctms-kind-bpay-next-read .bpay-next-progress-more[open]>.btn {left:0;right:auto;}}
