@@ -1,4 +1,35 @@
 /* NEXT presentation only: full tables scroll inside a fixed reachable header. */
+/* DR05 uses the native standard window and table tokens. */
+#modal.ctms-kind-bpay-next-read .bpay-next-review-tools {display:flex;justify-content:flex-end;margin-bottom:12px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-worker-review .bpay-next-result-success {border-color:var(--ctms-modal-success);background:color-mix(in srgb,var(--ctms-modal-success) 14%,var(--ctms-modal-panel));color:var(--ctms-modal-text);}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results {max-height:min(560px,55vh);overflow:auto;border:1px solid var(--ctms-modal-line);border-radius:10px;overscroll-behavior:contain;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results table {width:100%;border-collapse:collapse;table-layout:fixed;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results th {position:sticky;top:0;background:var(--ctms-modal-panel-raised);color:var(--ctms-modal-sub);text-align:left;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td) {padding:12px 14px;border:0;border-bottom:1px solid var(--ctms-modal-line-soft);vertical-align:top;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(1) {width:15%;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(2) {width:15%;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(3) {width:35%;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results .bpay-next-review-money {text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results small {display:block;color:var(--ctms-modal-sub);margin-top:6px;line-height:1.5;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-results tr[aria-selected=true] {background:var(--ctms-modal-panel-raised);box-shadow:inset 3px 0 var(--ctms-modal-accent-bright);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results table.ctms-universal-card-table > tbody > tr > td[hidden] {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions {display:flex;gap:6px;flex-wrap:wrap;}
+#modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions .btn {white-space:nowrap;}
+#modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-confirmation) #modalBody {padding:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-worker-confirmation h2 {display:flex;gap:12px;align-items:center;font-size:15px;margin:0;padding:16px 18px;border-bottom:1px solid var(--ctms-modal-line);}
+#modal.ctms-kind-bpay-next-read .bpay-next-worker-confirmation p {margin:16px 18px;line-height:1.6;}
+#modal.ctms-kind-bpay-next-read .bpay-next-worker-confirmation .bpay-next-question-icon {display:inline-flex;flex:0 0 30px;height:30px;justify-content:center;align-items:center;border-radius:50%;border:1px solid var(--ctms-modal-accent-bright);color:var(--ctms-modal-text);background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read .bpay-next-worker-confirmation.is-remove .bpay-next-question-icon {border-color:var(--ctms-modal-danger);color:var(--ctms-modal-danger);}
+@media(max-width:700px){
+ #modal.ctms-kind-bpay-next-read .bpay-next-review-results {border:0;max-height:52vh;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(table,tbody,tr,td) {display:block;width:auto;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-review-results thead {display:none;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-review-results tr {border:1px solid var(--ctms-modal-line);border-radius:10px;margin-bottom:10px;padding:8px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(n) {width:auto;border:0;padding:6px;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-review-results td[data-label="Gross ex VAT"]::before {content:"Gross ex VAT ";color:var(--ctms-modal-sub);}
+ #modal.ctms-kind-bpay-next-read .bpay-next-review-results .bpay-next-review-money {text-align:left;}
+ #modal.ctms-kind-bpay-next-read .bpay-next-worker-review .btn {min-height:44px;}
+}
 .bpay-next-office,#modal.ctms-kind-banking-pay-history {
   --next-bg:#18202f;--next-text:#f4f6fb;--next-line:#64748b;--next-raised:#263247;
   --next-input:#101625;--next-button:#654fc0;--next-button-text:#fff;--next-button-line:#ad9bff;
