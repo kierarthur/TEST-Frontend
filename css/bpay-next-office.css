@@ -1,4 +1,22 @@
 /* NEXT presentation only: full tables scroll inside a fixed reachable header. */
+/* EX-01 supplied SCR66: one credential step and one native footer action. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth {display:flex;flex-direction:column;gap:16px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-intro {border:1px solid var(--ctms-modal-line);border-radius:13px;background:var(--ctms-modal-panel-raised);padding:12px 14px;line-height:1.5;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-intro p {margin:4px 0 0;color:var(--ctms-modal-sub);font-size:12px;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-field {display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:600;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-field input {width:100%;min-height:42px;border:1px solid var(--ctms-modal-line);border-radius:10px;background:var(--ctms-modal-panel);color:var(--ctms-modal-text);padding:10px 12px;font:inherit;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-field input[aria-invalid=true] {border-color:var(--ctms-modal-danger);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth :is(.bpay-next-reauth-error,.bpay-next-reauth-result) {margin:0;line-height:1.5;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-error {display:flex;align-items:flex-start;gap:8px;color:#f4b0b8;font-size:12px;font-weight:600;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-error-icon {display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;height:16px;border-radius:50%;background:#532b3a;color:#ffe9ed;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-result {color:var(--ctms-modal-success);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-result.bpay-next-reauth-checking {color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth>button {align-self:flex-start;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth [hidden] {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-window-actions.bpay-next-reauth-destructive {width:100%;margin-left:0;justify-content:flex-start;}
+@media(max-width:720px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-reauth) :is(#btnCloseModal,#modalActions button,.bpay-next-reauth button,.bpay-next-reauth input){min-height:44px;min-width:44px;}
+}
 /* DR05 uses the native standard window and table tokens. */
 #modal.ctms-kind-bpay-next-read .bpay-next-review-tools {display:flex;justify-content:flex-end;margin-bottom:12px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-worker-review .bpay-next-result-success {border-color:var(--ctms-modal-success);background:color-mix(in srgb,var(--ctms-modal-success) 14%,var(--ctms-modal-panel));color:var(--ctms-modal-text);}

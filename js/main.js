@@ -7213,7 +7213,7 @@ function renderTopNav(){
                         || !window.__modalStack?.includes(parent)) throw new Error('Payment unavailable');
                   }
                 },
-                ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT',
+                ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT' && ownerClient.peek()?.owner_epoch === owner.owner_epoch,
                 onOwnerStale: (code) => ownerClient.invalidate(code)
               });
               return;

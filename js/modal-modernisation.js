@@ -843,6 +843,7 @@
       // promoted to the purple Upload action by the shared verb matcher.
       if (button.matches('[data-ws-sort]') ||
           (kindSlug === 'bpay-next-read' && button.matches('[data-next-focus-key="candidate-export"]')) ||
+          (kindSlug === 'bpay-next-read' && button.matches('.bpay-next-reauth [data-next-secondary]')) ||
           (kindSlug === 'timesheets' && body.querySelector('[data-daily-processing]') && button.matches('[data-ts-action="add-additional-manual"]'))) {
         button.classList.remove('ctms-action-danger', 'ctms-action-primary');
         return;

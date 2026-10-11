@@ -287,6 +287,7 @@ function validDiscardProgress(p){
     &&(p.discard_phase==='DISCARDED'?p.status==='CANCELLED'&&blocked===0n:p.status==='REVIEW'&&blocked>0n);
 }
 function field(v,type){
+    if(type==='reauthToken')return typeof v==='string' && v.length>0 && encoder.encode(v).byteLength<=1536 && /^[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$/.test(v);
     if(type==='discardReason')return typeof v==='string'&&v.trim().length>0&&!v.includes('\0')&&encoder.encode(v).byteLength<=500;
     if(type==='discardReceiptPhase')return ['EMPTY','CANCELLING','DISCARDED','PARTIAL'].includes(v);
     if(type==='discardPhase')return ['CANCELLING','DISCARDED','PARTIAL'].includes(v);
@@ -394,13 +395,19 @@ function field(v,type){
     return Object.freeze({...value});
   }
   const financial = action => ['PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
+  const reauthAction = action => ['CANCEL_REQUEST','CSV_ISSUE'].includes(action);
   function requestBody(action, args) {
     let schema = INPUT[action];
     if(action==='PREPARATION_DISCARD'&&Object.hasOwn(args||{},'reason'))schema={...schema,reason:'discardReason'};
     if (action === 'PAYE_NET' && Object.hasOwn(args || {}, 'expected_projection_revision')) schema = { ...schema, expected_projection_revision: 'projectionRevision' };
     if (action === 'CANCEL_REQUEST' && (Object.hasOwn(args || {}, 'run_id') || Object.hasOwn(args || {}, 'pay_channel'))) schema = {...schema,run_id:'uuid',pay_channel:'channel'};
+    // Historical tokenless journals remain readable, byte-for-byte. A new
+    // protected dispatch separately requires the completed helper below.
+    if(reauthAction(action) && Object.hasOwn(args || {},'reauth_token'))schema={...schema,reauth_token:'reauthToken'};
     if (!schema || !shape(args, schema) || (action==='EXCLUSION_PAGE'&&args.excluded_work_ids.length+args.excluded_candidate_ids.length>100) || (action === 'CASE_PAGE' && args.component_ids.length !== args.selected.length)) fail('REQUEST_INVALID');
-    return JSON.stringify({ action, ...args });
+    const bytes=JSON.stringify({ action, ...args });
+    if(financial(action) && encoder.encode(bytes).byteLength>2048)fail('REQUEST_INVALID');
+    return bytes;
   }
   function receipt(payload, action, args) {
     const schema=RECEIPT[action];
@@ -438,7 +445,7 @@ function field(v,type){
     if (action === 'REVIEW' && ((payload.phase === 'PREPARING') !== (payload.reason !== null))) fail();
     if (action === 'REVIEW' && payload.all_ready === true && !positive(payload.review_revision)) fail();
     if (action === 'CANCEL_REQUEST' && ((payload.phase === 'BLOCKED') !== (payload.blocked_code !== null))) fail();
-    if (action === 'CSV_ISSUE' && payload.payment_recorded !== false) fail();
+    if (action === 'CSV_ISSUE' && !payload.replay && payload.payment_recorded !== false) fail();
     return payload;
   }
   async function boundedJson(response, signal) {
@@ -492,6 +499,17 @@ function field(v,type){
     }
     return Object.freeze({
       async capabilities(){return capabilityReceipt(await call('/api/banking/capabilities?scope=NEXT',{method:'GET'},true),environment(options));},
+      async reauthPreview(action,args){
+        const bytes=requestBody(action,args);
+        if(!reauthAction(action) || Object.hasOwn(args,'reauth_token'))fail('REQUEST_INVALID');
+        const body=await call('/api/banking/pay/next/reauth-preview',{method:'POST',body:bytes},false,{action,args},8000);
+        if(!record(body)||Object.keys(body).length!==2||body.ok!==true||!shape(body.preview,
+          {action_kind:'label',action_label:'label',candidate_count:'numberPositive',candidate_name:'label',total_amount:'cash',amount_basis:'label',scope_sha256:'sha?',accepted:'boolean',second_factor_required:'boolean'})
+          ||body.preview.action_kind!==action||body.preview.candidate_count!==1
+          ||!['CASH','DRAFT_GROSS'].includes(body.preview.amount_basis)
+          ||(body.preview.scope_sha256===null&&!(action==='CSV_ISSUE'&&body.preview.accepted)))fail();
+        return Object.freeze({...body.preview});
+      },
       async mutation(action, bytes) {
         const body = JSON.parse(bytes), { action: saved, ...args } = body;
         if (saved !== action || requestBody(action, args) !== bytes) fail('REQUEST_INVALID');
@@ -990,7 +1008,10 @@ function field(v,type){
       } finally { busy = false; notify(); }
     }
     return Object.freeze({ snapshot, debug,
-      async mutate(action, args) { if (busy || state.pending !== null) fail('OUTCOME_UNKNOWN'); const bytes = requestBody(action, args);
+      async mutate(action, args) { if (busy || state.pending !== null) fail('OUTCOME_UNKNOWN');
+        if(reauthAction(action) && !Object.hasOwn(args||{},'reauth_token')
+          && !(action==='CSV_ISSUE'&&same(args.instruction_id,state.instruction_id)&&same(args.transfer_id,state.transfer_id)))fail('AUTH_REQUIRED');
+        const bytes = requestBody(action, args);
         if(action==='CANCEL_REQUEST'&&Object.hasOwn(args,'run_id')&&(!same(args.run_id,state.run_id)||args.pay_channel!==state.pay_channel||!same(args.run_worker_id,state.worker_id)))fail('REQUEST_INVALID');
         if(['CASE_PAGE','CASE_SEAL'].includes(action)&&(!same(args.run_id,state.run_id)||!same(args.candidate_id,state.candidate_id)||args.selection_revision!=='1'||state.case_sealed))fail('REQUEST_INVALID');
         if(action==='CASE_PAGE'&&(state.case_id===null||args.page_no!==String(BigInt(state.case_pages)+1n)))fail('REQUEST_INVALID');
@@ -1045,6 +1066,103 @@ function field(v,type){
     requireActor(options);
     return options.openCandidateRecord(candidateId);
   }
+  // EX-01: this native child owns credential fields only. The server supplies
+  // action/Candidate/amount; the existing caller owns the original command.
+  async function openBpayNextReauth(options,intent) {
+    requireActor(options);
+    if(!options || typeof options.showReadWindow!=='function' || typeof options.currentActorId!=='function'
+      || typeof options.ownerReady!=='function' || !record(intent) || !reauthAction(intent.action))fail('DEPENDENCY_UNAVAILABLE');
+    const {action,...args}=intent,bytes=requestBody(action,args);
+    if(Object.hasOwn(args,'reauth_token'))fail('REQUEST_INVALID');
+    const doc=options.document||document,win=options.window||window,transport=options.transport||createTransport(options);
+    const prefix=(win.__modalStack||[]).slice(),endpoint=options.api('/api/banking/pay/next/command');
+    const contextCurrent=()=>{try{requireActor(options);return options.api('/api/banking/pay/next/command')===endpoint
+      && prefix.every((f,i)=>win.__modalStack?.[i]===f) && (typeof options.reauthCurrent!=='function'||options.reauthCurrent()===true);}catch{return false;}};
+    const parentCurrent=()=>contextCurrent()&&(win.__modalStack?.length??0)===prefix.length;
+    const preview=await transport.reauthPreview(action,args);
+    if(!parentCurrent() || preview.accepted)fail('AUTH_REQUIRED');
+    const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+    const content=el('section',undefined,'bpay-next-reauth'),intro=el('div',undefined,'bpay-next-reauth-intro');
+    const title=el('strong',preview.action_label+' · '+preview.candidate_name);
+    const [whole,fraction='']=preview.total_amount.split('.');
+    const amount=el('p','£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0')+(preview.amount_basis==='DRAFT_GROSS'?' · Draft gross':''));
+    intro.append(title,amount);content.append(intro);
+    const fieldWrap=el('label',undefined,'bpay-next-reauth-field'),fieldTitle=el('span','Password'),input=el('input');
+    input.type='password';input.autocomplete='current-password';input.placeholder='Your CloudTMS password';input.dataset.nextFocusKey='reauth-password';fieldWrap.append(fieldTitle,input);
+    const error=el('p','', 'bpay-next-reauth-error'),result=el('p','', 'bpay-next-reauth-result');error.setAttribute('role','alert');result.setAttribute('role','status');
+    error.dataset.nextLiveCopy='';result.dataset.nextLiveCopy='';
+    const errorIcon=el('span','!','bpay-next-reauth-error-icon'),errorCopy=el('span');errorIcon.setAttribute('aria-hidden','true');errorCopy.dataset.nextLiveCopy='';error.append(errorIcon,errorCopy);
+    error.hidden=true;result.hidden=true;content.append(fieldWrap,error,result);
+    const resend=el('button','Send a new code','btn');resend.type='button';resend.dataset.nextSecondary='';resend.hidden=true;content.append(resend);
+    const footer=el('div',undefined,'bpay-next-window-actions'),submit=el('button',preview.second_factor_required?'Send code':preview.action_label,'btn primary');
+    submit.type='button';footer.append(submit);
+    function showActionButton(){
+      submit.textContent=preview.action_label;
+      const destructive=/^(?:Cancel |Write off )/.test(preview.action_label);
+      submit.classList.toggle('primary',!destructive);submit.classList.toggle('btn-warn',destructive);
+      footer.classList.toggle('bpay-next-reauth-destructive',destructive);
+    }
+    if(!preview.second_factor_required)showActionButton();
+    let frame,closed=false,busy=false,challenge=null,password='',token=null,ticket=0,activeRequest=null,settle;
+    const current=()=>!closed&&contextCurrent()&&(win.__modalStack?.length??0)===prefix.length+1&&frame?.active()===true;
+    const promise=new Promise(resolve=>{settle=resolve;});
+    function clearCredentials(){password='';input.value='';activeRequest?.abort();activeRequest=null;}
+    function paint(){submit.disabled=busy;resend.disabled=busy;input.disabled=busy;content.setAttribute('aria-busy',String(busy));
+      result.classList.toggle('bpay-next-reauth-checking',busy);
+      if(busy){result.textContent='Checking…';result.hidden=false;}else if(result.textContent==='Checking…')result.hidden=true;}
+    function message(text){errorCopy.textContent=text;error.hidden=false;input.setAttribute('aria-invalid','true');}
+    async function authRequest(path,payload){
+      const controller=new AbortController();activeRequest=controller;let timer;
+      const task=(async()=>{
+        const raw=await options.authFetch(options.api(path),{method:'POST',body:JSON.stringify(payload),signal:controller.signal,auth401Mode:'return',redirect:'error',
+          headers:{'content-type':'application/json',accept:'application/json','X-CloudTMS-Banking-Environment':environment(options)}});
+        const body=await boundedJson(raw,controller.signal);
+        if(controller.signal.aborted||!current())fail('ACTOR_CHANGED');
+        if(!raw.ok){const code=body?.error_code??body?.error??body?.message;
+          const problem=new Failure(code==='Invalid code'?'REAUTH_CODE_WRONG':['invalid_or_expired_code','max_attempts_exceeded'].includes(code)?'REAUTH_CODE_EXPIRED':code==='Invalid credentials'?'REAUTH_PASSWORD_WRONG':'AUTH_REQUIRED');throw problem;}
+        return body;
+      })();
+      try{return await Promise.race([task,new Promise((_,reject)=>{timer=win.setTimeout(()=>{controller.abort();reject(new Failure('TIMEOUT'));},LIMITS.timeout);})]);}
+      finally{win.clearTimeout(timer);if(activeRequest===controller)activeRequest=null;}
+    }
+    async function acceptToken(body,start){
+      const expected=start?{ok:'true',tfa_required:'false',purpose:'label',reauth_token:'reauthToken',expires_in:'numberPositive'}
+        :{ok:'true',purpose:'label',reauth_token:'reauthToken',expires_in:'numberPositive'};
+      if(!shape(body,expected)||body.purpose!=='BPAY_NEXT_ACTION'||body.expires_in>300||!current())fail();
+      requestBody(action,{...args,reauth_token:body.reauth_token});
+      token=body.reauth_token;clearCredentials();await frame.close();
+    }
+    async function start(){
+      const body=await authRequest('/auth/reauth/start',{purpose:'BPAY_NEXT_ACTION',password,intent:JSON.parse(bytes),expected_scope_sha256:preview.scope_sha256});
+      if(body.tfa_required!==preview.second_factor_required)fail('AUTH_REQUIRED');
+      if(body.tfa_required===false){await acceptToken(body,true);return;}
+      if(!shape(body,{ok:'true',tfa_required:'true',purpose:'label',challenge_id:'uuid',expires_in:'numberPositive'})||body.purpose!=='BPAY_NEXT_ACTION')fail();
+      challenge=body.challenge_id;input.value='';input.type='text';input.placeholder='Six-digit code';input.inputMode='numeric';input.autocomplete='one-time-code';input.maxLength=6;
+      input.dataset.nextFocusKey='reauth-code';fieldTitle.textContent='Email code';showActionButton();resend.hidden=false;
+    }
+    async function act(resending=false){
+      if(!current()||busy)return;const serial=++ticket;busy=true;error.hidden=true;input.removeAttribute('aria-invalid');result.hidden=true;paint();
+      try{
+        if(resending){await start();if(current()){result.textContent='A new code has been sent.';result.hidden=false;}}
+        else if(challenge===null){password=input.value;if(!password){message('Enter your password.');return;}await start();}
+        else {if(!/^\d{6}$/.test(input.value)){message('Enter the six-digit code.');return;}
+          await acceptToken(await authRequest('/auth/reauth/verify',{purpose:'BPAY_NEXT_ACTION',challenge_id:challenge,code:input.value}),false);}
+      }catch(e){if(current()&&ticket===serial)message(e?.code==='REAUTH_CODE_WRONG'?'That code is wrong; check the email and try again.'
+        :e?.code==='REAUTH_CODE_EXPIRED'?'That code has expired; send a new code.':e?.code==='REAUTH_PASSWORD_WRONG'?'That password is wrong; try again.'
+        :e?.code==='TIMEOUT'?'Could not confirm it is you; try again.':'Could not confirm it is you; close and try again.');}
+      finally{if(!closed&&ticket===serial){busy=false;paint();if(current())input.focus();}}
+    }
+    submit.addEventListener('click',()=>void act());resend.addEventListener('click',()=>void act(true));
+    input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();void act();}});
+    const changed=()=>{if(!current()){clearCredentials();token=null;if(frame?.active())void frame.close();}};
+    win.addEventListener('cloudtms:bpay-next-owner-changed',changed);
+    frame=options.showReadWindow({title:'Confirm it is you',content,footer,small:true,canFocus:current,
+      onDismiss:()=>{closed=true;ticket++;clearCredentials();win.removeEventListener('cloudtms:bpay-next-owner-changed',changed);
+        const accepted=parentCurrent()?token:null;token=null;settle(accepted);},onMount:()=>paint()});
+    return promise;
+  }
+  function openBpayNextPaymentIssueReauth(options,intent){return openBpayNextReauth(options,intent);}
+
   // SCR160: one explicit WB12 count read; cancellation never sends CREATE.
   function openCreateDraftConfirmation(options) {
     const doc=options.document||document,store=options.choiceStore,context=options.context;
@@ -1428,6 +1546,17 @@ function field(v,type){
     const input = (label, type, value) => { const wrap = el('label', label); const n = el('input'); n.type=type; n.setAttribute('data-next-focus-key','input:'+label); n.value=value || ''; wrap.append(n); return [wrap,n]; };
     let netInput, resumeInput,workbenchShell=null,issueLists=null,readyLists=null,issueWindow=null,candidateWindow=null,issueReadAvailable=false,readWindow=null,closed=false,started=false;
     const choiceStores=new Map();let submissionBusy=false;
+    async function protectedMutation(action,args){
+      const before=controller.snapshot();
+      const identity=JSON.stringify([before.run_id,before.worker_id,before.candidate_id,before.pay_channel,workbenchShell?.snapshot().context??null]);
+      const current=()=>{const now=controller.snapshot();return !closed&&readWindow?.alive()===true&&now.pending===null&&!now.busy
+        && JSON.stringify([now.run_id,now.worker_id,now.candidate_id,now.pay_channel,workbenchShell?.snapshot().context??null])===identity;};
+      const token=await openBpayNextReauth({...options,document:doc,window:win,transport,reauthCurrent:current},{action,...args});
+      if(token===null)return null;
+      requireActor(options);
+      if(!current())fail('ACTOR_CHANGED');
+      return controller.mutate(action,{...args,reauth_token:token});
+    }
     const dirtyChoices=()=>Array.from(choiceStores.values()).filter(store=>store.snapshot().dirty);
     const beforeUnload=event=>{if(!closed&&same(options.currentActorId(),options.actorId)&&dirtyChoices().length){event.preventDefault();event.returnValue='';}};
     async function beforeClose(){
@@ -1597,13 +1726,13 @@ function field(v,type){
         }
         if(draftActionsAllowed(h)&&(h.target_pay_channel==='PAYE'||(s.pay_channel==='UMBRELLA'&&h.worker_status==='READY'))){
           if(h.target_pay_channel==='UMBRELLA')body.append(el('p','Umbrella execution is not implemented here. Only the server can permit whole-Candidate cancellation of a no-case, pre-execution Draft.'));
-          body.append(button('Cancel this unpaid Candidate Draft',async()=>{const args={command_id:controller.newId(),run_worker_id:s.worker_id};if(s.pay_channel!==null){args.run_id=s.run_id;args.pay_channel=s.pay_channel;}await controller.mutate('CANCEL_REQUEST',args);await loadStatus();},locked));
+          body.append(button('Cancel this unpaid Candidate Draft',async()=>{const args={command_id:controller.newId(),run_worker_id:s.worker_id};if(s.pay_channel!==null){args.run_id=s.run_id;args.pay_channel=s.pay_channel;}const result=await protectedMutation('CANCEL_REQUEST',args);if(result!==null)await loadStatus();},locked));
         }
         if(h.worker_status==='CANCELLING')body.append(el('p','Whole-Candidate cancellation is in progress; released page counts are not a completed cancellation.'));
         body.append(el('h3','Current payment status'),el('p','Bank details are changed in the Candidate record, not in this payment view. Reopening this run retains its accepted state.'));
         if(typeof options.openCandidateRecord==='function')body.append(button('Open Candidate record for bank details',()=>openCandidateRecord(options,h.candidate_id,close),locked));
         body.append(button('Returned money in this batch',()=>loadReturnedCash(),locked));
-        body.append(table(['Transfer','State','Execution','Frozen cash','Remaining reservation','Actions'],status.rows.map(t=>{const actions=el('span');if(h.target_pay_channel==='PAYE'&&t.execution_kind==='BANK'&&t.original_transfer_id===null&&['MEMBERS_READY','DRAFT','SCHEDULED','ISSUED_CSV'].includes(t.status))actions.append(button(t.status==='ISSUED_CSV'?'Retrieve exact CSV':'Issue original CSV',async()=>{const id=s.transfer_id===t.transfer_id&&s.instruction_id?s.instruction_id:controller.newId();const result=await controller.mutate('CSV_ISSUE',{instruction_id:id,transfer_id:t.transfer_id});download(result);await loadStatus();},locked,false,'csv:'+t.transfer_id));if(t.execution_kind==='INTERNAL_ZERO')actions.append(el('span','No external cash file'));return[t.transfer_id,t.status,t.execution_kind,'£'+t.cash_amount,reservationDescription(t),actions];})));
+        body.append(table(['Transfer','State','Execution','Frozen cash','Remaining reservation','Actions'],status.rows.map(t=>{const actions=el('span');if(h.target_pay_channel==='PAYE'&&t.execution_kind==='BANK'&&t.original_transfer_id===null&&['MEMBERS_READY','DRAFT','SCHEDULED','ISSUED_CSV'].includes(t.status))actions.append(button(t.status==='ISSUED_CSV'?'Retrieve exact CSV':'Issue original CSV',async()=>{const retained=s.transfer_id===t.transfer_id&&s.instruction_id?s.instruction_id:null;if(t.status==='ISSUED_CSV'&&!retained){error='The original file is not available in this window.';return;}const args={instruction_id:retained??controller.newId(),transfer_id:t.transfer_id};const result=t.status==='ISSUED_CSV'?await controller.mutate('CSV_ISSUE',args):await protectedMutation('CSV_ISSUE',args);if(result!==null){download(result);await loadStatus();}},locked,false,'csv:'+t.transfer_id));if(t.execution_kind==='INTERNAL_ZERO')actions.append(el('span','No external cash file'));return[t.transfer_id,t.status,t.execution_kind,'£'+t.cash_amount,reservationDescription(t),actions];})));
         if(!status.complete)body.append(button('Next transfer page',()=>loadStatus(status.next_cursor),locked));
         if(returnedCash){
           body.append(el('h3','Returned money — this Candidate in this batch'),el('p','These are returned-cash records, not new earnings or a new payroll calculation. Available cash is not permission to send it: the destination still needs the existing bank safety approval.'));
@@ -1660,5 +1789,5 @@ function field(v,type){
       const rest=decoder.decode();child.document.write(rest);tail+=rest;if(!tail.includes('data-advice-state="complete"')||tail.includes('data-advice-state="failed"'))fail();child.document.close();dates.formatAdvice(child.document);completed=true;
     }finally{win.clearTimeout(timer);controller.abort();controller.signal.removeEventListener('abort',abort);await reader?.cancel().catch(()=>{});reader?.releaseLock();if(!reader)await response?.body?.cancel().catch(()=>{});if(!completed&&!child.closed){child.document.write('<p style="color:#900">INCOMPLETE: advice could not be loaded. Do not use this as complete payment advice.</p>');child.document.close();}}
   }
-  return Object.freeze({ open, close, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
+  return Object.freeze({ open, close, openBpayNextReauth, openBpayNextPaymentIssueReauth, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
 });
