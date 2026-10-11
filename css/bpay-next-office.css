@@ -369,3 +369,36 @@
  #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form label:has(input[type=checkbox]) {min-height:44px;}
  #modal.ctms-kind-bpay-next-read .bpay-next-inline-snooze {margin-left:0;}
 }
+
+/* DR02 one primary action and the supplied SCR160 confirmation. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalActions button[data-next-secondary],
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalBody button[data-next-secondary] {background:transparent;color:var(--ctms-modal-text);box-shadow:none;border-color:#385576;}
+#modal.ctms-kind-bpay-next-read:has(.bpay-next-create-confirmation) #modalBody {padding:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-create-confirmation h2 {display:flex;align-items:center;gap:12px;margin:0;padding:16px 18px;font-size:15px;border-bottom:1px solid #31445e;}
+#modal.ctms-kind-bpay-next-read .bpay-next-create-confirmation .bpay-next-question-icon {display:inline-flex;align-items:center;justify-content:center;flex:0 0 30px;height:30px;border:1px solid #446eaa;border-radius:50%;background:#20395f;color:#cbdcff;}
+#modal.ctms-kind-bpay-next-read .bpay-next-create-confirmation p {padding:0 18px;line-height:1.6;margin:16px 0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-create-confirmation .bpay-next-confirm-values {font-weight:700;}
+#modal.ctms-kind-bpay-next-read .bpay-next-create-confirmation.is-failed .bpay-next-question-icon {background:#59252c;border-color:#a75b63;color:#ffd7da;}
+
+#modal.ctms-kind-bpay-next-read .bpay-next-create-reason {align-self:center;color:var(--ctms-modal-sub);margin-right:auto;}
+
+@media(max-width:720px){
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-workbench-shell) #modalActions button,
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-choice-submit) :is(#btnCloseModal,#modalActions button),
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-preparation-started) :is(#btnCloseModal,#modalActions button){min-height:44px;min-width:44px;}
+}
+
+#modal.ctms-kind-bpay-next-read .bpay-next-create-confirmation p.ws-notice--danger {
+ margin:16px 18px;padding:10px 12px;border:1px solid #813f5c;border-radius:7px;
+ background:#342037;color:#f3c8d6;font-size:12px;line-height:1.5;
+}
+
+/* DR02 supplied small sending window: factual status and inline result. */
+#modal.ctms-kind-bpay-next-read .bpay-next-choice-submit [hidden] {display:none;}
+#modal.ctms-kind-bpay-next-read .bpay-next-sending-status {display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid #31445e;border-radius:7px;background:#101d30;}
+#modal.ctms-kind-bpay-next-read .bpay-next-sending-status p {margin:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-sending-spinner {width:16px;height:16px;flex:0 0 16px;border:2px solid #385576;border-top-color:#7dd3fc;border-radius:50%;animation:bpay-next-sending-spin .8s linear infinite;}
+#modal.ctms-kind-bpay-next-read .bpay-next-choice-submit .ws-notice {padding:10px 12px;border:1px solid #2d6074;border-radius:7px;background:#162e39;color:#bce8f8;}
+#modal.ctms-kind-bpay-next-read .bpay-next-choice-submit .ws-notice--danger {border-color:#813f5c;background:#342037;color:#f3c8d6;}
+@keyframes bpay-next-sending-spin {to{transform:rotate(360deg);}}
+@media(prefers-reduced-motion:reduce){#modal.ctms-kind-bpay-next-read .bpay-next-sending-spinner {animation:none;}}
