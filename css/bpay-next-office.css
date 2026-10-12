@@ -1050,3 +1050,8 @@
  #modal.ctms-modern-modal .bpay-next-case-balance-meta{width:100%}
  #modal.ctms-modern-modal .bpay-next-case-balance-meta dt{min-width:0;overflow-wrap:normal;word-break:normal}
 }
+
+/* DR17: keep the actual review caret target above the native card button rule. */
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worker-review table.ctms-universal-card-table .bpay-next-review-caret{width:44px;height:44px;min-height:44px;padding:0;flex-shrink:0}
+}
