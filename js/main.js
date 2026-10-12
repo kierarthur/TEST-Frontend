@@ -179006,7 +179006,7 @@ function setWeeklySourceApprovedHoursStatus(root, message, tone) {
     : '';
 }
 
-async function refreshSimpleWeeklySourcePresentation() {
+async function refreshSimpleWeeklySourcePresentation(callerCurrent = () => true) {
   const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
     ? window.modalCtx
     : null;
@@ -179024,6 +179024,7 @@ async function refreshSimpleWeeklySourcePresentation() {
 
   const openToken = mc.openToken;
   const freshDetails = await fetchTimesheetDetails(timesheetId);
+  if (!callerCurrent()) return false;
   if (!freshDetails || typeof freshDetails !== 'object') return false;
   if (!window.modalCtx || window.modalCtx !== mc || String(mc.entity || '').trim().toLowerCase() !== 'timesheets') return false;
 
@@ -179054,7 +179055,7 @@ async function refreshSimpleWeeklySourcePresentation() {
   return true;
 }
 
-async function refreshBulkWeeklySourcePresentation(state) {
+async function refreshBulkWeeklySourcePresentation(state, callerCurrent = () => true) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st || typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
   const refreshed = await refreshBulkAuthoriseActiveContext(st, {
@@ -179067,6 +179068,7 @@ async function refreshBulkWeeklySourcePresentation(state) {
     authoritative: true,
     rerender: false
   });
+  if (!callerCurrent()) return false;
   if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
     await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][WEEKLY-SOURCE-APPROVED-HOURS]');
   }
@@ -179339,12 +179341,121 @@ function weeklySourceCommandRefusalMessage(response) {
 // Gate 10.  The two Office decisions.  One delegated listener serves the Simple
 // Timesheet and the Bulk right pane, because the buttons are rendered by the
 // same owner on both.  The buttons exist only where `proposal.decision` is
-// non-null; this handler re-reads the live view model before posting, so a
-// decision that has since been withdrawn server-side cannot be sent.
+// non-null. A new decision uses its live descriptor; an unknown decision always
+// retries its original frozen request before any fresh decision is admitted.
 function bindWeeklySourceLaterChangeDecisions() {
   if (typeof document === 'undefined') return false;
   if (document.documentElement?.dataset?.boundWeeklySourceDecisions === '1') return false;
   if (document.documentElement?.dataset) document.documentElement.dataset.boundWeeklySourceDecisions = '1';
+  const retained = new WeakMap();
+  const actor = () => String(SESSION?.user?.id || '').trim();
+  const rootOf = (vm) => String(vm?.proposal?.decision?.command_payload?.root_timesheet_id
+    || vm?.proposal?.members?.find((member) => member.is_requested_root)?.root_timesheet_id || '').trim();
+  const subjectOf = (context, bulk) => String(bulk
+    ? bulk.active_row?.current_timesheet_id || bulk.active_row?.timesheet_id
+      || bulk.active_details?.current_timesheet_id || bulk.active_details?.timesheet?.timesheet_id || ''
+    : context.data?.current_timesheet_id || context.data?.timesheet_id
+      || context.timesheetDetails?.current_timesheet_id || context.timesheetDetails?.timesheet?.timesheet_id || '').trim();
+  const namespace = (surface, vm) => {
+    const context = window.modalCtx;
+    const stack = Array.from(window.__modalStack || []);
+    const frame = stack[stack.length - 1];
+    const bulk = surface === 'BULK_AUTHORISE' ? resolveWeeklySourceBulkState() : null;
+    const row = bulk ? String(bulk.active_row_key || bulk.active_row_id
+      || bulk.active_row?.row_key || bulk.active_row?.timesheet_id || '').trim() : null;
+    const root = rootOf(vm);
+    const subject = context ? subjectOf(context, bulk) : '';
+    const existing = retained.get(context)?.find((entry) => entry.ns.actor === actor()
+      && entry.ns.frame === frame && entry.ns.surface === surface && entry.ns.bulk === bulk
+      && entry.ns.row === row && entry.ns.subject === subject);
+    if (!actor() || !context || !frame || !subject || (!root && !existing) || (bulk && !row)) return null;
+    return { actor: actor(), context, frame, stack, bulk, row, subject, root: root || existing.ns.root, surface };
+  };
+  const current = (ns) => {
+    if (actor() !== ns.actor || window.modalCtx !== ns.context) return false;
+    const stack = window.__modalStack || [];
+    if (stack.length !== ns.stack.length || !ns.stack.every((frame, i) => stack[i] === frame)) return false;
+    if (ns.bulk) {
+      const bulk = resolveWeeklySourceBulkState();
+      if (bulk !== ns.bulk || String(bulk.active_row_key || bulk.active_row_id
+          || bulk.active_row?.row_key || bulk.active_row?.timesheet_id || '').trim() !== ns.row) return false;
+    }
+    if (subjectOf(ns.context, ns.bulk) !== ns.subject) return false;
+    const root = rootOf(resolveWeeklySourceSurfaceViewModel(ns.surface));
+    return !root || root === ns.root;
+  };
+  const hostFor = (ns) => {
+    if (!current(ns)) return null;
+    const body = document.getElementById('modalBody');
+    if (!body) return null;
+    const existing = Array.from(body.querySelectorAll('[data-weekly-source-later-change]'))
+      .find((host) => host.getAttribute('data-weekly-source-surface') === ns.surface);
+    if (existing) return existing;
+    const parent = body.querySelector(ns.bulk ? '[data-weekly-source-right-pane]' : '[data-weekly-source-simple-lines]')
+      || body.querySelector('[data-weekly-source-informational="NEXT"]');
+    if (!parent) return null;
+    // KEEP can remove its proposal while its original reply is unknown. This
+    // notice is still that retained decision, not a new proposal or decision.
+    const retry = document.createElement('section'); retry.className = 'weekly-source-v1__notice is-waiting';
+    retry.setAttribute('data-weekly-source-later-change', 'RETAINED_REPLY');
+    retry.setAttribute('data-weekly-source-surface', ns.surface); parent.append(retry);
+    return retry;
+  };
+  const paint = (record) => {
+    const host = hostFor(record.ns);
+    if (!host) return;
+    let status = host.querySelector('[data-weekly-source-decision-status]');
+    if (!status) {
+      status = document.createElement('p');
+      status.setAttribute('data-weekly-source-decision-status', '');
+      status.setAttribute('data-next-live-copy', '');
+      status.setAttribute('role', 'status');
+      host.append(status);
+    }
+    if (status.textContent !== record.message) status.textContent = record.message;
+    status.setAttribute('role', record.error ? 'alert' : 'status');
+    if (!record.command) return;
+    if (!record.settled && !Array.from(host.querySelectorAll('[data-weekly-source-decision]'))
+        .some((control) => control.getAttribute('data-weekly-source-decision') === record.command.body.payload.decision)) {
+      let actions = host.querySelector('[data-weekly-source-decision-actions]');
+      if (!actions) {
+        actions = document.createElement('div'); actions.className = 'weekly-source-v1__later-change-actions';
+        actions.setAttribute('data-weekly-source-decision-actions', '1'); host.insertBefore(actions, status);
+      }
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'btn btn-outline';
+      retry.setAttribute('data-weekly-source-decision', record.command.body.payload.decision);
+      retry.setAttribute('data-weekly-source-surface', record.ns.surface); retry.textContent = 'Try again';
+      actions.append(retry);
+    }
+    for (const control of host.querySelectorAll('[data-weekly-source-decision]')) {
+      const chosen = control.getAttribute('data-weekly-source-decision') === record.command.body.payload.decision;
+      control.disabled = record.busy || record.settled || !chosen;
+      if (chosen && !record.busy && !record.settled && control.textContent !== 'Try again') control.textContent = 'Try again';
+    }
+  };
+  const accepted = (response, record) => {
+    const p = record.command.body.payload;
+    return response?.ok === true && typeof response.idempotent_replay === 'boolean'
+      && response.decision === p.decision && response.decision_bundle_id === p.decision_bundle_id
+      && ((p.decision === 'KEEP_CURRENTLY_APPROVED_HOURS' && response.retained === true
+          && response.published === false && response.bundle_revision === p.bundle_revision)
+        || (response.retained === false && typeof response.published === 'boolean'
+          && response.reviewed_bundle_revision === p.bundle_revision
+          && response.bundle_revision === p.bundle_revision + 1));
+  };
+  const definiteRefusal = (body) => body?.ok === false && body.published === false
+    && ((body.retryable === false && ['WEEKLY_SOURCE_ROOT_INTEGRITY_FAILURE',
+      'WEEKLY_SOURCE_DECISION_BUNDLE_NOT_FOUND', 'WEEKLY_SOURCE_DECISION_BUNDLE_NOT_PROPOSED']
+      .includes(body.code)) || (body.sqlstate === '55000' && [
+        'WEEKLY_SOURCE_LATER_CHANGE_SCOPE_UNAVAILABLE', 'WEEKLY_SOURCE_LATER_CHANGE_SCOPE_STALE',
+        'WEEKLY_SOURCE_LATER_CHANGE_REVIEW_STALE', 'WEEKLY_SOURCE_LATER_CHANGE_ACCEPTANCE_FAILED',
+        'WEEKLY_SOURCE_LATER_CHANGE_PUBLICATION_REFUSED'].includes(body.error_code)));
+  // Native remount can replace these controls while a reply is lost. Retain
+  // the same in-closure record, bound to the actual parent; never adopt a new one.
+  new MutationObserver(() => {
+    const nsContext = window.modalCtx;
+    for (const record of retained.get(nsContext) || []) paint(record);
+  }).observe(document.body, { childList: true, subtree: true });
   document.addEventListener('click', async (event) => {
     const button = event.target?.closest?.('[data-weekly-source-decision]');
     if (!button || button.disabled) return;
@@ -179355,44 +179466,60 @@ function bindWeeklySourceLaterChangeDecisions() {
     const decision = String(button.getAttribute('data-weekly-source-decision') || '').trim().toUpperCase();
     const vm = resolveWeeklySourceSurfaceViewModel(surface);
     if (!vm || vm.mount !== true) return;
-    const actorUserId = String(
-      window.currentUser?.id || window.CURRENT_USER?.id || window.__currentUserId || ''
-    ).trim();
-    let command;
+    const ns = namespace(surface, vm);
+    if (!ns) return;
+    const records = retained.get(ns.context) || [];
+    let record = records.find((entry) => entry.ns.actor === ns.actor && entry.ns.frame === ns.frame
+      && entry.ns.surface === ns.surface && entry.ns.root === ns.root && entry.ns.bulk === ns.bulk
+      && entry.ns.row === ns.row && entry.ns.subject === ns.subject);
+    if (record?.busy || record?.settled) return;
+    if (record && record.command.body.payload.decision !== decision) { paint(record); return; }
     try {
-      command = presentationApi.buildLaterChangeDecisionCommand(vm, {
-        decision,
-        actor_user_id: actorUserId || 'server-resolved',
-        idempotency_key: makeWeeklySourceCommandIdempotencyKey()
-      });
+      if (!record) {
+        const command = presentationApi.buildLaterChangeDecisionCommand(vm, {
+          decision, actor_user_id: ns.actor, idempotency_key: makeWeeklySourceCommandIdempotencyKey()
+        });
+        record = { ns, command, bytes: JSON.stringify(command.body), busy: false,
+          settled: false, message: '' };
+        records.push(record); retained.set(ns.context, records);
+      }
+      if (record.command.endpoint !== '/api/weekly-source/v1/commands'
+          || JSON.stringify(record.command.body) !== record.bytes || !current(record.ns)) return;
     } catch (error) {
-      try { toastWarn(error?.message || 'That decision is no longer available.'); } catch {}
+      paint({ ns, error: true, message: 'This decision is no longer available; close and reopen the Timesheet.' });
       return;
     }
-    const controls = Array.from(document.querySelectorAll('[data-weekly-source-decision]'));
-    controls.forEach((control) => { control.disabled = true; });
+    record.busy = true; record.error = false; record.message = 'Saving decision…'; paint(record);
     try {
-      // The payload is the server's `command_payload`, posted unchanged, plus
-      // the actor and the chosen decision (WP-11b N3.4).
-      const response = await apiPostJson(command.endpoint, command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
-      if (!response || response.ok !== true) {
-        const refusal = weeklySourceCommandRefusalMessage(response);
-        const failure = new Error(refusal || 'DECISION_FAILED');
-        failure.weeklySourceRefusalShown = !!refusal;
-        throw failure;
+      const response = await apiPostJson(record.command.endpoint, record.command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
+      if (!accepted(response, record)) {
+        const failure = new Error(); failure.json = response; throw failure;
       }
-      if (surface === 'BULK_AUTHORISE') await refreshBulkWeeklySourcePresentation(resolveWeeklySourceBulkState());
-      else await refreshSimpleWeeklySourcePresentation();
-      try { toast('Decision recorded.'); } catch {}
+      record.settled = true; record.busy = false; record.message = 'Decision saved.';
+      retained.set(ns.context, (retained.get(ns.context) || []).filter((entry) => entry !== record));
+      if (!current(record.ns)) return;
+      paint(record);
+      try {
+        const callerCurrent = () => current(record.ns);
+        const refreshed = record.ns.bulk
+          ? await refreshBulkWeeklySourcePresentation(record.ns.bulk, callerCurrent)
+          : await refreshSimpleWeeklySourcePresentation(callerCurrent);
+        if (!current(record.ns)) return;
+        if (!refreshed) { record.message = 'Decision saved; close and reopen the Timesheet.'; paint(record); }
+      } catch {
+        record.message = 'Decision saved; close and reopen the Timesheet.'; paint(record);
+      }
     } catch (error) {
-      controls.forEach((control) => { control.disabled = false; });
-      // A refusal the server wrote is shown verbatim; only a refusal it did not
-      // explain gets a sentence of ours.
-      const spoken = error?.weeklySourceRefusalShown === true
-        ? String(error.message)
-        : (weeklySourceCommandRefusalMessage(error?.json || error?.response)
-          || 'The decision could not be saved. Refresh and try again.');
-      try { toastWarn(spoken); } catch {}
+      record.busy = false;
+      if (definiteRefusal(error?.json)) {
+        record.settled = true; record.error = true; record.message = 'This decision was not saved; close and reopen the Timesheet.';
+        if (current(record.ns)) paint(record);
+        retained.set(ns.context, (retained.get(ns.context) || []).filter((entry) => entry !== record));
+      } else {
+        record.error = true;
+        record.message = 'The decision could not be confirmed; try again to check the same decision.';
+        paint(record);
+      }
     }
   });
   return true;

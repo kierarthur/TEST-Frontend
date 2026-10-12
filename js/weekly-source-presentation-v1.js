@@ -1718,9 +1718,9 @@
           <thead><tr><th>Day and date</th><th>Currently approved</th><th>Proposed</th></tr></thead>
           <tbody>${changed.map((entry) => `
             <tr data-row-key="${escapeHtml(entry.component_id || entry.work_date || '')}">
-              <td>${escapeHtml(entry.work_date || '—')}</td>
-              <td>${escapeHtml(entry.currently_approved_total_hours || '—')}</td>
-              <td>${escapeHtml(entry.proposed_total_hours || '—')}</td>
+              <td data-weekly-source-label="Day and date">${escapeHtml(entry.work_date || '—')}</td>
+              <td data-weekly-source-label="Currently approved">${escapeHtml(entry.currently_approved_total_hours || '—')}</td>
+              <td data-weekly-source-label="Proposed">${escapeHtml(entry.proposed_total_hours || '—')}</td>
             </tr>`).join('')}</tbody>
         </table>
       </div>`;
@@ -1732,9 +1732,14 @@
     const sourceChange = isObject(reason.source_change) ? reason.source_change : null;
     const currentPosition = isObject(reason.current_position) ? reason.current_position : null;
     const parts = [];
-    if (sourceChange && trim(sourceChange.reason)) parts.push(trim(sourceChange.reason));
+    const sourceReason = sourceChange ? trim(sourceChange.reason) : '';
+    if (/\s/.test(sourceReason) && !/^[A-Z0-9_ ]+$/.test(sourceReason)) parts.push(sourceReason);
     if (currentPosition && trim(currentPosition.committed_at_utc)) {
-      parts.push(`Current position recorded ${trim(currentPosition.committed_at_utc)}.`);
+      const recorded = new Date(currentPosition.committed_at_utc);
+      if (Number.isFinite(recorded.getTime())) parts.push(`Approved hours recorded on ${recorded.toLocaleString('en-GB', {
+        timeZone: 'Europe/London', hour12: false, day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      }).replace(',', '')}.`);
     }
     if (!parts.length) return '';
     return `<div class="weekly-source-v1__notice is-ready" data-weekly-source-decision-reason="1"><strong>Why these hours differ</strong><span>${escapeHtml(parts.join(' '))}</span></div>`;
@@ -1830,13 +1835,9 @@
       const roleLabel = crossContract
         ? (member.root_ordinal === 1 ? 'Old root' : 'New root')
         : '';
-      const contractCaption = member.contract_id
-        ? `<p class="weekly-source-v1__member-contract" data-weekly-source-member-contract="${escapeHtml(member.contract_id)}">Contract ${escapeHtml(member.contract_id)}</p>`
-        : '';
       return `
         <section class="weekly-source-v1__member" data-weekly-source-member="${escapeHtml(String(member.root_ordinal))}"${member.is_requested_root ? ' data-weekly-source-member-requested="1"' : ''}>
           ${roleLabel ? `<h4 class="weekly-source-v1__member-role">${escapeHtml(roleLabel)}</h4>` : ''}
-          ${contractCaption}
           <div class="weekly-source-v1__later-change-grid">
             ${/* These two captions are structural labels for the side-by-side
                   comparison, deliberately NOT lifecycle headings: the phase
@@ -1898,10 +1899,11 @@
         ${renderProposalDecisionReason(proposal)}
         ${proposal.pending_state ? `<div class="weekly-source-v1__notice is-waiting" data-weekly-source-pending-state="${escapeHtml(proposal.pending_state)}"><strong>Decision saved</strong><span>This decision has been recorded and is waiting for the existing payment process to finish.</span></div>` : ''}
         ${buttons ? `<div class="weekly-source-v1__later-change-actions" data-weekly-source-decision-actions="1">${buttons}</div>` : ''}
+        ${buttons ? '<p data-weekly-source-decision-status data-next-live-copy role="status"></p>' : ''}
       </section>`;
   };
 
-  // Post `command_payload` unchanged, plus the actor and the chosen decision.
+  // Retain the server descriptor; the Worker supplies the authenticated actor.
   const buildLaterChangeDecisionCommand = (viewModel, request) => {
     const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
     const req = isObject(request) ? request : {};
@@ -1917,9 +1919,13 @@
     }
     const actor = trim(req.actor_user_id);
     if (!actor) throw new Error('This change could not be safely prepared. Please try again.');
-    const body = { ...decision.command_payload, actor_user_id: actor, decision: action };
     const idempotencyKey = trim(req.idempotency_key);
-    if (idempotencyKey) body.idempotency_key = idempotencyKey;
+    if (idempotencyKey.length < 16 || idempotencyKey.length > 200) {
+      throw new Error('This change could not be safely prepared. Please try again.');
+    }
+    const body = { action: 'LATER_CHANGE_DECISION', payload: {
+      ...decision.command_payload, decision: action, idempotency_key: idempotencyKey
+    } };
     return deepFreeze({ endpoint: decision.endpoint, body });
   };
 
