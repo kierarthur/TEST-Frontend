@@ -1055,3 +1055,15 @@
 @media(max-width:700px){
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worker-review table.ctms-universal-card-table .bpay-next-review-caret{width:44px;height:44px;min-height:44px;padding:0;flex-shrink:0}
 }
+
+/* DR18: original confirmation question and factual one/two-channel result. */
+#modal.ctms-modern-modal .bpay-next-draft-confirm h2{display:flex;align-items:center;gap:12px;margin:0 0 18px;font-size:17px}
+#modal.ctms-modern-modal .bpay-next-draft-confirm .bpay-next-question-icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;height:32px;border:1px solid var(--ctms-modal-accent-bright);border-radius:50%;color:var(--ctms-modal-accent-bright)}
+#modal.ctms-modern-modal .bpay-next-draft-confirm-summary{font-weight:700;line-height:1.55}
+#modal.ctms-modern-modal .bpay-next-draft-created table{width:100%}
+#modal.ctms-modern-modal .bpay-next-draft-created [hidden]{display:none}
+#modal.ctms-modern-modal .bpay-next-draft-created td small{display:block;margin-top:4px;color:var(--ctms-modal-muted)}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-draft-created) button{min-height:44px}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-draft-confirm) button{min-height:44px}
+}
