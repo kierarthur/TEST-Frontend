@@ -1063,6 +1063,10 @@
 #modal.ctms-modern-modal .bpay-next-draft-created table{width:100%}
 #modal.ctms-modern-modal .bpay-next-draft-created [hidden]{display:none}
 #modal.ctms-modern-modal .bpay-next-draft-created td small{display:block;margin-top:4px;color:var(--ctms-modal-muted)}
+@media(min-width:701px){
+ #modal.ctms-modern-modal .bpay-next-draft-created-table{border:1px solid var(--ctms-modal-line);border-radius:13px;overflow:hidden}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-draft-created table :is(th,td):is(:nth-child(2),:nth-child(3)){text-align:right;font-variant-numeric:tabular-nums}
+}
 @media(max-width:700px){
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-draft-created) button{min-height:44px}
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-draft-confirm) button{min-height:44px}

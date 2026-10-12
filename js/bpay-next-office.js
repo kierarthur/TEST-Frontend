@@ -2052,7 +2052,7 @@ function caseListResult(payload,call,bad){
     const navigationCurrent=()=>same(options.currentActorId(),options.actorId)&&options.ownerReady()===true
       &&(!navigationScope||!options.progressCurrentNamespace||preparationScope(options.progressCurrentNamespace())===navigationScope);
     let frame,busy=false,closed=false,selected=null;const active=()=>!closed&&current();
-    const buttons=[],act=async fn=>{if(busy||!active())return;busy=true;buttons.forEach(b=>b.disabled=true);notice.hidden=true;try{await fn();}catch{if(active()){notice.textContent='Could not open this window; try again.';notice.hidden=false;}}finally{busy=false;if(active())buttons.forEach(b=>b.disabled=false);}};
+    const buttons=[],act=async(fn,label)=>{if(busy||!active())return;busy=true;buttons.forEach(b=>b.disabled=true);notice.className='ws-notice';notice.setAttribute('role','status');notice.textContent=label;notice.hidden=false;let failed=false;try{await fn();}catch{failed=true;if(active()){notice.className='ws-notice ws-notice--danger';notice.setAttribute('role','alert');notice.textContent='Could not open this window; try again.';notice.hidden=false;}}finally{busy=false;if(active()){buttons.forEach(b=>b.disabled=false);if(!failed)notice.hidden=true;}}};
     for(const address of receipt.drafts){
       const facts=totals?.channels?.find(r=>r.pay_channel===address.pay_channel),label=address.pay_channel==='PAYE'?'PAYE Draft':'Umbrella Draft',row=el('tr');row.tabIndex=0;row.dataset.channel=address.pay_channel;row.setAttribute('aria-selected','false');
       const openRow=()=>act(async()=>{if(frame?.active()!==true)return;requireActor(options);if(!active())return;
@@ -2063,14 +2063,14 @@ function caseListResult(payload,call,bad){
           if(typeof options.onCreatedDraftOpen==='function'&&await options.onCreatedDraftOpen()!==true)return;
         }
         requireActor(options);if(!navigationCurrent()||sheet!==target)fail('ACTOR_CHANGED');target.focus();
-      });
+      },'Opening Draft…');
       row.addEventListener('click',e=>{if(e.target.closest('button'))return;selected=address.pay_channel;for(const r of body.children)r.setAttribute('aria-selected',String(r.dataset.channel===selected));});row.addEventListener('dblclick',e=>{if(!e.target.closest('button'))void openRow();});row.addEventListener('keydown',e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void openRow();}});
       for(const [i,text]of [label,facts?.candidate_count?.replace(/\B(?=(\d{3})+(?!\d))/g,',')??'—',formatCapturedMoney(address.pay_channel==='PAYE'?facts?.gross_ex_vat:facts?.gross_inc_vat)].entries()){
         const cell=el('td');cell.dataset.label=['Draft','Candidates','Amount'][i];if(i===0)cell.append(el('strong',text));else if(i===1){cell.textContent=text;cell.className='bpay-next-review-money';}else{cell.className='bpay-next-review-money';cell.dataset.nextFormattedMoney='';const amount=el('div',undefined,'bpay-next-draft-amount');amount.append(el('span',text),el('small',address.pay_channel==='PAYE'?'Gross':'Inc VAT'));cell.append(amount);}row.append(cell);
       }
       const actions=el('td'),button=el('button','Open '+label,'btn');actions.dataset.label='Actions';button.type='button';button.dataset.nextSecondary='';button.addEventListener('click',()=>void openRow());buttons.push(button);actions.append(button);row.append(actions);body.append(row);
     }
-    table.append(head,body);content.append(table);const go=el('button','Go to Payment Batches','btn primary');go.type='button';buttons.push(go);go.addEventListener('click',()=>void act(async()=>{requireActor(options);if(!active()||frame?.active()!==true)return;if(typeof options.openPaymentBatches!=='function')fail('DEPENDENCY_UNAVAILABLE');await options.openPaymentBatches({run_id:receipt.run_id,drafts:receipt.drafts});}));footer.append(go);
+    table.append(head,body);const tableHost=el('div',undefined,'bpay-next-draft-created-table');tableHost.append(table);content.append(tableHost);const go=el('button','Go to Payment Batches','btn primary');go.type='button';buttons.push(go);go.addEventListener('click',()=>void act(async()=>{requireActor(options);if(!active()||frame?.active()!==true)return;if(typeof options.openPaymentBatches!=='function')fail('DEPENDENCY_UNAVAILABLE');await options.openPaymentBatches({run_id:receipt.run_id,drafts:receipt.drafts});},'Opening Payment Batches…'));footer.append(go);
     frame=options.showReadWindow({title:'Payment Draft created',content,footer,small:true,canFocus:active,onDismiss:()=>{closed=true;}});return frame;
   }
 
