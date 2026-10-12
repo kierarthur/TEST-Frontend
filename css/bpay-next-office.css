@@ -155,6 +155,7 @@
 #modal.ctms-modern-modal .bpay-next-picker-list small {display:block;color:var(--ctms-modal-sub);font-size:12px;margin-top:4px;}
 #modal.ctms-modern-modal .bpay-next-phone-open {display:none;}
 @media(max-width:700px) {
+ #modal.ctms-modern-modal:has(.bpay-next-case-list,.bpay-next-case-list-filters,.bpay-next-snooze-window) :is(button,summary,select,#btnCloseModal) { min-height:44px; min-width:44px; height:auto; }
  #modal.ctms-modern-modal .bpay-next-main-tabs {gap:2px;}
  #modal.ctms-modern-modal .bpay-next-main-tabs button {padding:8px 6px;font-size:12px;margin:0;}
  #modal.ctms-modern-modal .bpay-next-header-strip {padding:12px 0;gap:12px;}
@@ -820,3 +821,76 @@
 }
 
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-finance-scroll:focus-visible {outline:2px solid #86b9ed;outline-offset:2px;}
+
+/* FC-02 scoped dark Office windows. No global/theme/legacy table selectors. */
+#modal.ctms-modern-modal .bpay-next-case-list { color:var(--text,#edf1f7); display:flex; flex-direction:column; gap:14px; min-width:0; }
+#modal.ctms-modern-modal .bpay-next-case-list-tabs { display:flex; gap:0; border-bottom:1px solid #354156; }
+#modal.ctms-modern-modal .bpay-next-case-list-tabs .btn { border:0; border-radius:0; background:transparent; min-height:44px; padding:10px 18px; color:#aebbd0; }
+#modal.ctms-modern-modal .bpay-next-case-list-tabs .btn.selected { border-bottom:3px solid #5c9af8; color:#f1f5fb; }
+#modal.ctms-modern-modal .bpay-next-case-list-strip { display:flex; flex-direction:column; gap:14px; }
+#modal.ctms-modern-modal .bpay-next-case-list-counts { display:flex; flex-wrap:wrap; gap:12px 24px; margin:0; }
+#modal.ctms-modern-modal .bpay-next-case-list-counts > div { min-width:100px; }
+#modal.ctms-modern-modal .bpay-next-case-list-counts dt { color:#aab8cb; font-size:10px; font-weight:760; text-transform:uppercase; }
+#modal.ctms-modern-modal .bpay-next-case-list-counts dd { margin:4px 0 0; font-size:14px; font-weight:740; font-variant-numeric:tabular-nums; }
+#modal.ctms-modern-modal .bpay-next-case-list-tools { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+#modal.ctms-modern-modal .bpay-next-case-list-tools > span { color:#adb9cc; font-size:12px; }
+#modal.ctms-modern-modal .bpay-next-case-list-tools label { display:flex; align-items:center; gap:6px; }
+#modal.ctms-modern-modal .bpay-next-case-list-scroll { max-height:600px; overflow:auto; border:1px solid #354156; border-radius:8px; }
+#modal.ctms-modern-modal .bpay-next-case-list table { width:100%; border-collapse:collapse; font-size:13px; }
+#modal.ctms-modern-modal .bpay-next-case-list th { background:#1d2838; padding:8px 10px; text-align:left; position:sticky; top:0; z-index:1; }
+#modal.ctms-modern-modal .bpay-next-case-list th .btn { background:transparent; border:0; padding:0; min-height:32px; text-align:left; font-size:11px; font-weight:760; text-transform:uppercase; white-space:nowrap; }
+#modal.ctms-modern-modal .bpay-next-case-list td { padding:13px 10px; border-top:1px solid #303c4e; vertical-align:top; }
+#modal.ctms-modern-modal .bpay-next-case-list td strong { display:block; font-weight:500; }
+#modal.ctms-modern-modal .bpay-next-case-list td:has(.bpay-next-case-list-money) { text-align:right; }
+#modal.ctms-modern-modal .bpay-next-case-list-money { text-align:right; font-variant-numeric:tabular-nums; }
+#modal.ctms-modern-modal .bpay-next-case-list td small { display:block; color:#a5b3c8; margin-top:5px; line-height:1.4; overflow-wrap:anywhere; }
+#modal.ctms-modern-modal .bpay-next-case-list td:nth-last-child(4),
+#modal.ctms-modern-modal .bpay-next-case-list td:nth-last-child(3),
+#modal.ctms-modern-modal .bpay-next-case-list td:nth-last-child(2) { font-variant-numeric:tabular-nums; }
+#modal.ctms-modern-modal .bpay-next-case-list tr.selected { background:#233b59; }
+#modal.ctms-modern-modal .bpay-next-case-list tr:focus-visible { outline:2px solid #79b3ff; outline-offset:-2px; }
+#modal.ctms-modern-modal .bpay-next-case-list-row-actions { display:flex; align-items:center; flex-wrap:nowrap; gap:6px; }
+#modal.ctms-modern-modal .bpay-next-case-list-row-actions .btn { padding:5px 9px; font-size:13px; font-weight:680; white-space:nowrap; }
+#modal.ctms-modern-modal .bpay-next-case-list-menu { position:relative; }
+#modal.ctms-modern-modal .bpay-next-case-list-menu summary { list-style:none; cursor:pointer; }
+#modal.ctms-modern-modal .bpay-next-case-list-menu-items { position:fixed; inset:auto; margin:0; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); overflow:auto; min-width:210px; z-index:5; display:flex; flex-direction:column; background:#1d293a; padding:8px; border:1px solid #52627a; border-radius:7px; box-shadow:0 8px 22px #0008; }
+#modal.ctms-modern-modal .bpay-next-case-list-menu-items:not(:popover-open) { display:none; }
+#modal.ctms-modern-modal .bpay-next-case-list-menu-items .btn { text-align:left; width:100%; }
+#modal.ctms-modern-modal .bpay-next-case-list-menu-items small { display:block; padding:3px 8px; color:#adb9cb; }
+#modal.ctms-modern-modal .bpay-next-case-list .ws-notice { margin:0; padding:10px 12px; }
+#modal.ctms-modern-modal .bpay-next-case-list .ws-notice--danger { border-color:var(--ctms-modal-danger); background:color-mix(in srgb,var(--ctms-modal-danger) 10%,var(--ctms-modal-panel)); color:var(--ctms-modal-text); }
+#modal.ctms-modern-modal .bpay-next-case-list .ws-notice[hidden] { display:none; }
+#modal.ctms-modern-modal .bpay-next-case-list .ws-notice .btn { margin-left:12px; }
+#modal.ctms-modern-modal .bpay-next-case-list .stale { opacity:.55; }
+#modal.ctms-modern-modal .bpay-next-case-list-total { margin:0; color:#a9b7cb; font-size:12px; }
+#modal.ctms-modern-modal .bpay-next-case-list-filters { display:flex; flex-direction:column; gap:16px; }
+#modal.ctms-modern-modal .bpay-next-case-list-filters label,
+#modal.ctms-modern-modal .bpay-next-case-list-filters > div { display:flex; flex-direction:column; gap:7px; }
+#modal.ctms-modern-modal .bpay-next-case-list-filters label:has(input[type=checkbox]) { flex-direction:row; align-items:center; min-height:44px; }
+#modal.ctms-modern-modal .bpay-next-case-list-caret { display:inline-block; margin-right:5px; width:26px; padding:0; border:0; background:transparent; }
+#modal.ctms-modern-modal .bpay-next-case-list-component { display:flex; gap:24px; padding:13px 22px; background:#172131; border-top:1px solid #334055; }
+#modal.ctms-modern-modal .bpay-next-case-list-phone-open,
+#modal.ctms-modern-modal .bpay-next-case-list-phone-sort,
+#modal.ctms-modern-modal .bpay-next-case-list-tools .bpay-next-case-list-phone-sort { display:none; }
+@media(max-width:700px) {
+ #modal.ctms-modern-modal .bpay-next-case-list th { display:none; }
+ #modal.ctms-modern-modal .bpay-next-case-list thead { display:none; }
+ #modal.ctms-modern-modal .bpay-next-case-list table,
+ #modal.ctms-modern-modal .bpay-next-case-list tbody,
+ #modal.ctms-modern-modal .bpay-next-case-list tr { display:block; width:100%; }
+ #modal.ctms-modern-modal .bpay-next-case-list tr { border-bottom:1px solid #53617a; padding:10px 0; }
+ #modal.ctms-modern-modal .bpay-next-case-list td { display:flex; gap:12px; width:auto; border:0; padding:6px 12px; overflow-wrap:anywhere; }
+ #modal.ctms-modern-modal .bpay-next-case-list td::before { content:attr(data-label); min-width:100px; width:100px; color:#aab8ce; flex-shrink:0; }
+ #modal.ctms-modern-modal .bpay-next-case-list td:last-child { flex-wrap:wrap; }
+ #modal.ctms-modern-modal .bpay-next-case-list-row-actions { flex-wrap:wrap; }
+ #modal.ctms-modern-modal .bpay-next-case-list .btn,
+ #modal.ctms-modern-modal .bpay-next-case-list select { min-height:44px; }
+ #modal.ctms-modern-modal .bpay-next-case-list-phone-open,
+ #modal.ctms-modern-modal .bpay-next-case-list-phone-sort,
+ #modal.ctms-modern-modal .bpay-next-case-list-tools .bpay-next-case-list-phone-sort { display:flex; }
+ #modal.ctms-modern-modal .bpay-next-case-list-counts { gap:12px; }
+ #modal.ctms-modern-modal .bpay-next-case-list-counts > div { min-width:95px; }
+ #modal.ctms-modern-modal .bpay-next-case-list-component { flex-wrap:wrap; padding:12px; }
+ #modal.ctms-modern-modal .bpay-next-case-list-tools > span { width:100%; }
+ #modal.ctms-modern-modal .bpay-next-case-list-tabs .btn { padding:10px; }
+}

@@ -519,6 +519,177 @@ function field(v,type){
     } catch (e) { await reader.cancel().catch(() => {}); throw e instanceof Failure ? e : new Failure('RESPONSE_INVALID'); }
     finally { signal.removeEventListener('abort', abort); reader.releaseLock(); }
   }
+const CASE_LIST_FILTERS={candidate_id:'uuid?',client_id:'uuid?',case_subtype:'caseListSubtype',view:'caseListView',snooze:'caseListSnooze',hide_completed:'boolean'};
+const CASE_LIST_DEFAULT_FILTERS=Object.freeze({candidate_id:null,client_id:null,case_subtype:'ALL',view:'ALL',snooze:'ALL',hide_completed:true});
+const CASE_LIST_CONTEXT={agency_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',local_date:'date',official_pay_date:'date',pay_week_start:'date',workbench_revision:'integer',adoption_revision:'integer',valuation_policy_id:'uuid?'};
+const CASE_LIST_LAST={case_id:'uuid',created_at_utc:'timestamp?',sort_value:'label?'};
+const CASE_LIST_CURSOR_LAST={case_id:'uuid',created_at_utc:'timestamp?',sort_value:'caseListEncodedSort?'};
+const CASE_LIST_COUNTS=['payment_advances_active_count','overpayments_active_count','underpayments_active_count',
+  'manual_debt_adjustments_active_count','manual_credit_adjustments_count','mixed_finance_cases_count',
+  'unresolved_finance_cases_count','stale_finance_cases_count','finance_cases_with_active_snooze_count'];
+const CASE_LIST_ROW={case_id:'uuid',candidate_id:'uuid',candidate_name:'label',candidate_reference:'label?',
+  client_id:'uuid?',client_name:'label?',client_association:'caseListClient',case_kind:'issue',case_subtype:'issue?',case_type_label:'label',original_liability_reference:'caseReference?',
+  tax_treatment:'issue',tax_label:'label',status:'caseListStatus',created_at_utc:'timestamp?',case_revision:'positive',
+  principal_approved:'money',principal_funded:'money',principal_recovered:'money',principal_written_off:'money',
+  outstanding:'money',pending_payout:'money?',amount_due:'money?',recoverable_this_run:'null',active_hold_amount:'money',
+  active_hold_explanation:'label?',protected_run_id:'uuid?',protected_channel:'channel?',input_pending:'boolean',
+  due_date:'date?',weekly_due:'money?',schedule_start_monday:'date?',next_due_monday:'date?',schedule_week_count:'positive?',
+  minimum_earnings_threshold:'money?',take_home_floor:'money?',has_active_snooze:'boolean?',active_snooze_count:'integer?',
+  indefinite_snooze_count:'integer?',snooze_until_date:'date?',stale_snooze_count:'integer?',is_mixed_case:'boolean?',
+  unresolved_taxable:'boolean?',resolution_stale:'boolean?',gap_code:'issue?',sort_key:'caseListLast'};
+function caseListField(value,type){
+  if(type.endsWith('?'))return value===null||caseListField(value,type.slice(0,-1));
+  if(type==='caseListEncodedSort'){
+    if(typeof value!=='string'||value.length>11000||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))return false;
+    try{const raw=atob(value),decoded=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Uint8Array.from(raw,c=>c.charCodeAt(0)));
+      return btoa(raw)===value&&!decoded.includes('\0')&&encoder.encode(decoded).byteLength<=8192;
+    }catch{return false;}
+  }
+  const enums={caseListSubtype:['ALL','LOAN','PAYMENT_ADVANCE','OVERPAYMENT','UNDERPAYMENT','MANUAL_CREDIT','MANUAL_DEBT','UNMAPPED'],
+    caseListView:['ALL','ACTIVE','SNOOZED','HISTORY'],caseListSnooze:['ALL','FINITE','INDEFINITE'],
+    caseListSort:['CREATED_ASC','CREATED_DESC','CANDIDATE_ASC','CANDIDATE_DESC','TYPE_ASC','TYPE_DESC','STATUS_ASC','STATUS_DESC','ORIGINAL_ASC','ORIGINAL_DESC','OUTSTANDING_ASC','OUTSTANDING_DESC','WEEKLY_ASC','WEEKLY_DESC','FUNDED_ASC','FUNDED_DESC','RECOVERED_ASC','RECOVERED_DESC','WRITTEN_OFF_ASC','WRITTEN_OFF_DESC'],
+    caseListStatus:['OPEN','PAUSED','CLOSED','WRITTEN_OFF'],caseListClient:['FROZEN','UNASSOCIATED','UNKNOWN']};
+  if(Object.hasOwn(enums,type))return enums[type].includes(value);
+  if(type==='caseListLast')return caseListExact(value,CASE_LIST_LAST);
+  if(type==='issue')return typeof value==='string'&&/^[A-Z][A-Z0-9_]{0,119}$/.test(value);
+  if(type==='label')return typeof value==='string'&&!value.includes('\0')&&encoder.encode(value).byteLength<=8192;
+  return field(value,type);
+}
+function caseListExact(value,schema){
+  return record(value)&&Object.keys(value).length===Object.keys(schema).length
+    &&Object.entries(schema).every(([key,type])=>Object.hasOwn(value,key)&&caseListField(value[key],type));
+}
+function caseListSame(a,b){
+  if(a===b)return true;
+  if(!record(a)||!record(b)||Object.keys(a).length!==Object.keys(b).length)return false;
+  return Object.keys(a).every(key=>Object.hasOwn(b,key)&&caseListSame(a[key],b[key]));
+}
+function caseListCursor(cursor,kind,filters,sort){
+  if(!record(cursor)||Object.keys(cursor).sort().join()!=='context,filters,last,sort'
+    ||!caseListExact(cursor.context,CASE_LIST_CONTEXT)||!caseListExact(cursor.filters,CASE_LIST_FILTERS)
+    ||!caseListSame(cursor.filters,filters)||cursor.sort!==(kind==='CASE_SUMMARY'?'CASE_ID_ASC':sort)
+    ||!caseListExact(cursor.last,CASE_LIST_CURSOR_LAST)||encoder.encode(JSON.stringify(cursor)).byteLength>16384)return false;
+  return kind==='CASE_SUMMARY'?cursor.last.created_at_utc===null&&cursor.last.sort_value===null:
+    sort.startsWith('CREATED_')?cursor.last.sort_value===null:cursor.last.sort_value!==null;
+}
+function caseListCall(kind,params){
+  const bad=()=>{throw new Failure('REQUEST_INVALID');};
+  const parse=(key,fallback)=>{const raw=params.get(key);if(raw===null)return fallback;
+    if(encoder.encode(raw).byteLength>32768)bad();try{return JSON.parse(raw);}catch{bad();}};
+  const supplied=parse('filters',{});
+  if(!record(supplied)||Object.keys(supplied).some(key=>!Object.hasOwn(CASE_LIST_FILTERS,key)))bad();
+  const filters={...CASE_LIST_DEFAULT_FILTERS,...supplied};
+  if(!caseListExact(filters,CASE_LIST_FILTERS))bad();
+  const sort=params.get('sort')??'CREATED_DESC';
+  const after=parse('after',null);
+  if(kind==='CASE_LIST'&&!caseListField(sort,'caseListSort'))bad();
+  if(after!==null&&!caseListCursor(after,kind,filters,sort))bad();
+  const args={filters:normalizeAccepted(filters),after:normalizeAccepted(after)};
+  if(kind==='CASE_LIST'){
+    const raw=params.get('limit')??'10';if(!['5','10','20','50'].includes(raw))bad();
+    args.sort=sort;args.limit=Number(raw);
+  }
+  if(encoder.encode(JSON.stringify(args)).byteLength>32768)bad();
+  return {kind,args:Object.freeze(args)};
+}
+// PostgreSQL C collation compares UTF-8 bytes. JS UTF-16 order and millisecond
+// timestamps would lose valid server tie-breaks.
+function caseListTextCompare(a,b){
+  const x=encoder.encode(a),y=encoder.encode(b);
+  for(let i=0;i<Math.min(x.length,y.length);i++)if(x[i]!==y[i])return x[i]<y[i]?-1:1;
+  return x.length===y.length?0:x.length<y.length?-1:1;
+}
+function caseListTime(value){
+  const fraction=value.match(/\.(\d{1,6})/)?.[1]??'';
+  return BigInt(Date.parse(value))*1000n+BigInt(fraction.padEnd(6,'0').slice(3));
+}
+function caseListCompare(a,b,sort){
+  if(sort==='CASE_ID_ASC')return caseListTextCompare(a.case_id,b.case_id);
+  if(!sort.startsWith('CREATED_')){
+    let key;
+    if(/^(ORIGINAL|OUTSTANDING|WEEKLY|FUNDED|RECOVERED|WRITTEN_OFF)_/.test(sort)){
+      if((a.sort_value==='~')!==(b.sort_value==='~'))return a.sort_value==='~'?1:-1;
+      const scaled=value=>{if(value==='~')return 0n;if(!/^-?\d{1,24}(?:\.\d{1,6})?$/.test(value))throw new Failure('RESPONSE_INVALID');
+        const [whole,part='']=value.replace(/^-/,'').split('.');return BigInt(whole+part.padEnd(6,'0'))*(value.startsWith('-')?-1n:1n);};
+      const x=scaled(a.sort_value),y=scaled(b.sort_value);key=x===y?0:x<y?-1:1;
+    }else key=caseListTextCompare(a.sort_value,b.sort_value);
+    if(key)return sort.endsWith('_DESC')?-key:key;
+  }
+  if((a.created_at_utc===null)!==(b.created_at_utc===null))return a.created_at_utc===null?1:-1;
+  if(a.created_at_utc!==null){
+    const x=caseListTime(a.created_at_utc),y=caseListTime(b.created_at_utc);
+    if(x!==y){const direction=sort==='CREATED_ASC'?1:-1;return x<y?-direction:direction;}
+  }
+  return caseListTextCompare(a.case_id,b.case_id);
+}
+function caseListDecodedLast(cursor){
+  if(cursor===null)return null;
+  const raw=cursor.last.sort_value;
+  return {...cursor.last,sort_value:raw===null?null:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Uint8Array.from(atob(raw),c=>c.charCodeAt(0)))};
+}
+function caseListResult(payload,call,bad){
+  const summary=call.kind==='CASE_SUMMARY',limit=summary?100:call.args.limit,sort=summary?'CASE_ID_ASC':call.args.sort;
+  const shape=summary?['context','filters','counts','scanned_count','matched_count','gap_case_count','complete','next_cursor']:
+    ['context','filters','sort','rows','scanned_count','complete','next_cursor'];
+  if(!record(payload)||Object.keys(payload).length!==shape.length||shape.some(key=>!Object.hasOwn(payload,key))
+    ||!caseListExact(payload.context,CASE_LIST_CONTEXT)||payload.context.actor_user_id!==call.actorUserId
+    ||!caseListSame(payload.filters,call.args.filters)||!field(payload.scanned_count,'integer')
+    ||BigInt(payload.scanned_count)>BigInt(limit)||typeof payload.complete!=='boolean'
+    ||call.args.after!==null&&!caseListSame(call.args.after.context,payload.context))bad();
+  const next=payload.next_cursor;
+  if(payload.complete?next!==null:!caseListCursor(next,call.kind,call.args.filters,call.args.sort)
+    ||!caseListSame(next.context,payload.context)||payload.scanned_count==='0'
+    ||call.args.after!==null&&caseListCompare(caseListDecodedLast(next),caseListDecodedLast(call.args.after),sort)<=0)bad();
+  if(summary){
+    const counts=Object.fromEntries(CASE_LIST_COUNTS.map((key,index)=>[key,index>=5?'integer?':'integer']));
+    if(!caseListExact(payload.counts,counts)||!field(payload.matched_count,'integer')||!field(payload.gap_case_count,'integer')
+      ||BigInt(payload.matched_count)>BigInt(payload.scanned_count)||BigInt(payload.gap_case_count)>BigInt(payload.matched_count)
+      ||Object.values(payload.counts).some(value=>value===null)&&payload.gap_case_count==='0'
+      ||Object.values(payload.counts).some(value=>value!==null&&BigInt(value)>BigInt(payload.matched_count))
+      ||CASE_LIST_COUNTS.slice(0,5).reduce((total,key)=>total+BigInt(payload.counts[key]),0n)>BigInt(payload.matched_count))bad();
+  }else{
+    if(payload.sort!==sort||!Array.isArray(payload.rows)||payload.rows.length>limit
+      ||BigInt(payload.rows.length)>BigInt(payload.scanned_count))bad();
+    let previous=caseListDecodedLast(call.args.after);
+    for(const row of payload.rows){
+      if(!caseListExact(row,CASE_LIST_ROW)||encoder.encode(JSON.stringify(row)).byteLength>90000
+        ||row.original_liability_reference!==null&&(row.case_kind!=='MANUAL_DEBT'||row.case_subtype!=='MANUAL_DEBT')
+        ||row.sort_key.case_id!==row.case_id||row.sort_key.created_at_utc!==row.created_at_utc
+        ||sort.startsWith('CREATED_')&&row.sort_key.sort_value!==null
+        ||sort.startsWith('TYPE_')&&row.sort_key.sort_value!==row.case_type_label
+        ||sort.startsWith('STATUS_')&&row.sort_key.sort_value!==row.status
+        ||/^(ORIGINAL|OUTSTANDING|WEEKLY|FUNDED|RECOVERED|WRITTEN_OFF)_/.test(sort)&&caseListCompare({...row.sort_key,case_id:row.case_id},
+          {...row.sort_key,sort_value:(sort.startsWith('ORIGINAL_')?row.principal_approved:sort.startsWith('OUTSTANDING_')?row.outstanding:sort.startsWith('FUNDED_')?row.principal_funded:sort.startsWith('RECOVERED_')?row.principal_recovered:sort.startsWith('WRITTEN_OFF_')?row.principal_written_off:row.weekly_due)??'~'},sort)!==0
+        ||sort.startsWith('CANDIDATE_')&&row.sort_key.sort_value===null
+        ||previous!==null&&caseListCompare(row.sort_key,previous,sort)<=0
+        ||next!==null&&caseListCompare(row.sort_key,caseListDecodedLast(next),sort)>0
+        ||(row.client_association==='FROZEN')!==(row.client_id!==null)
+        ||(row.protected_run_id===null)!==(row.protected_channel===null)
+        ||row.input_pending&&row.protected_run_id===null
+        ||[row.resolution_stale,row.has_active_snooze,row.is_mixed_case,row.unresolved_taxable,row.pending_payout].some(value=>value===null)&&row.gap_code===null)bad();
+      const membership=[row.pending_payout,row.is_mixed_case,row.unresolved_taxable,row.has_active_snooze];
+      if(membership.some(value=>value===null)&&(!membership.every(value=>value===null)
+        ||row.amount_due!==null||row.resolution_stale!==null||row.gap_code===null))bad();
+      if(row.has_active_snooze===null){
+        if([row.active_snooze_count,row.indefinite_snooze_count,row.stale_snooze_count,row.snooze_until_date].some(value=>value!==null)||row.gap_code===null)bad();
+      }else if([row.active_snooze_count,row.indefinite_snooze_count,row.stale_snooze_count].some(value=>value===null)
+        ||row.has_active_snooze!==(row.active_snooze_count!=='0')
+        ||BigInt(row.indefinite_snooze_count)>BigInt(row.active_snooze_count)
+        ||(BigInt(row.active_snooze_count)>BigInt(row.indefinite_snooze_count))!==(row.snooze_until_date!==null))bad();
+      const f=call.args.filters,subtype=row.case_subtype,known=['LOAN','PAYMENT_ADVANCE','OVERPAYMENT','UNDERPAYMENT','MANUAL_CREDIT','MANUAL_DEBT'].includes(subtype);
+      if(f.candidate_id!==null&&row.candidate_id!==f.candidate_id||f.client_id!==null&&row.client_id!==f.client_id
+        ||f.case_subtype!=='ALL'&&!(f.case_subtype===subtype||f.case_subtype==='PAYMENT_ADVANCE'&&['LOAN','PAYMENT_ADVANCE'].includes(subtype)||f.case_subtype==='UNMAPPED'&&!known)
+        ||!known&&(row.gap_code===null||row.tax_label!=='Tax treatment unavailable')
+        ||f.hide_completed&&['CLOSED','WRITTEN_OFF'].includes(row.status)
+        ||f.view==='ACTIVE'&&(!['OPEN','PAUSED'].includes(row.status)||row.has_active_snooze!==false)||f.view==='HISTORY'&&!['CLOSED','WRITTEN_OFF'].includes(row.status)
+        ||f.view==='SNOOZED'&&row.has_active_snooze!==true||f.snooze==='FINITE'&&(row.active_snooze_count===null||BigInt(row.active_snooze_count)<=BigInt(row.indefinite_snooze_count))
+        ||f.snooze==='INDEFINITE'&&(row.indefinite_snooze_count===null||row.indefinite_snooze_count==='0'))bad();
+      previous=row.sort_key;
+    }
+  }
+  return payload;
+}
+
   function createTransport(options) {
     if (typeof options?.api !== 'function' || typeof options.authFetch !== 'function') fail('DEPENDENCY_UNAVAILABLE');
     async function call(path, init, frozenRead = false, context = null, timeoutMs = options.timeoutMs ?? LIMITS.timeout) {
@@ -603,6 +774,15 @@ function field(v,type){
         return body;
       },
       async page(kind, args) {
+        if(['CASE_LIST','CASE_SUMMARY'].includes(kind)){
+          if(!record(args)||Object.keys(args).some(key=>!['filters','after',...(kind==='CASE_LIST'?['sort','limit']:[])].includes(key)))fail('REQUEST_INVALID');
+          const query=new URLSearchParams({kind});for(const [key,value]of Object.entries(args))query.set(key,['filters','after'].includes(key)?JSON.stringify(value):String(value));
+          const callArgs=caseListCall(kind,query);if(encoder.encode(query.toString()).byteLength>32768)fail('REQUEST_INVALID');
+          const body=await call('/api/banking/pay/next/preparation-page?'+query.toString(),{method:'GET'},false,null,2000);
+          if(!record(body)||body.ok!==true||body.kind!==kind)fail();
+          const {ok,kind:returnedKind,...payload}=body;caseListResult(payload,{...callArgs,actorUserId:options.actorId.toLowerCase()},()=>fail());return body;
+        }
+
         if(['CASE_AUDIT','CANDIDATE_CASE_REPORT'].includes(kind)){
           const contract=globalThis.CloudTMSBpayNextCaseAuditContract;if(!contract?.caseFinanceInput(kind,args))fail('REQUEST_INVALID');
           const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))query.set(key,['after','limit','active_only','include_count'].includes(key)?JSON.stringify(value):value);

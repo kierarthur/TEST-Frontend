@@ -7116,6 +7116,7 @@ function renderTopNav(){
         menu.setAttribute('aria-label', 'Banking destinations');
         menu.innerHTML = `
           <button type="button" role="menuitem" data-banking-destination="pay_next" hidden disabled>Banking Pay NEXT</button>
+          <button type="button" role="menuitem" data-banking-destination="cases_next" hidden disabled>Payment Advances / Snoozes</button>
           <button type="button" role="menuitem" data-banking-destination="advance_next" hidden disabled>New Payment Advance</button>
           <button type="button" role="menuitem" data-banking-destination="credit_next" hidden disabled>New Manual Credit</button>
           <button type="button" role="menuitem" data-banking-destination="debt_next" hidden disabled>New Manual Debt</button>
@@ -7139,11 +7140,12 @@ function renderTopNav(){
           ownerNotice.textContent = bankingNextOwnerMessage(status);
           const nextItem=menu.querySelector('[data-banking-destination="pay_next"]');
           nextItem.hidden=status.active_owner!=='NEXT'; nextItem.disabled=status.active_owner!=='NEXT';
+          const casesItem=menu.querySelector('[data-banking-destination="cases_next"]');casesItem.hidden=status.active_owner!=='NEXT';casesItem.disabled=status.active_owner!=='NEXT';
           const advanceItem=menu.querySelector('[data-banking-destination="advance_next"]');advanceItem.hidden=status.active_owner!=='NEXT';advanceItem.disabled=status.active_owner!=='NEXT';
           const creditItem=menu.querySelector('[data-banking-destination="credit_next"]');creditItem.hidden=status.active_owner!=='NEXT';creditItem.disabled=status.active_owner!=='NEXT';
           const debtItem=menu.querySelector('[data-banking-destination="debt_next"]');debtItem.hidden=status.active_owner!=='NEXT';debtItem.disabled=status.active_owner!=='NEXT';
           for(const item of menu.querySelectorAll('[data-banking-destination]')) {
-            if(!['id','pay_next','advance_next','credit_next','debt_next'].includes(item.dataset.bankingDestination)) item.disabled=status.active_owner==='DISABLED';
+            if(!['id','pay_next','cases_next','advance_next','credit_next','debt_next'].includes(item.dataset.bankingDestination)) item.disabled=status.active_owner==='DISABLED';
           }
         }).catch(()=>{if(menu.isConnected && SESSION?.user?.id===ownerActor)ownerNotice.textContent=bankingNextOwnerMessage(null);});
         const rect = b.getBoundingClientRect();
@@ -7165,9 +7167,10 @@ function renderTopNav(){
           try {
             const ownerClient = bankingNextOwnerClient();
             const owner = ownerClient?.peek() || null;
-            if (destination !== 'id' && (!['pay_next','advance_next','credit_next','debt_next'].includes(destination) || owner?.active_owner !== 'NEXT')) {
+            if (destination !== 'id' && (!['pay_next','cases_next','advance_next','credit_next','debt_next'].includes(destination) || owner?.active_owner !== 'NEXT')) {
               alert(bankingNextOwnerMessage(owner, destination !== 'pay_next')); return;
             }
+            if(destination==='cases_next'){await openBankingNextCases();return;}
             if(destination==='advance_next'){await openBankingPaymentAdvanceModal({});return;}
             if(destination==='credit_next'){await openBankingManualCreditAdjustmentModal({});return;}
             if(destination==='debt_next'){await openBankingManualDebtAdjustmentModal({});return;}
@@ -12989,6 +12992,27 @@ async function bankingExportSnoozesPdf(filters = {}) {
   }
 }
 
+
+async function openBankingNextCases(){
+ const actor=String(SESSION?.user?.id??'').toLowerCase(),parent=currentFrame(),prefix=window.__modalStack?.slice()??[],client=bankingNextOwnerClient();
+ const current=()=>String(SESSION?.user?.id??'').toLowerCase()===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame);
+ try{const owner=await client.begin('case-list:'+crypto.randomUUID());if(!current()||currentFrame()!==parent||owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextCaseList)throw Error();
+  const options={document,window,actorId:actor,api:API,authFetch,currentActorId:()=>String(SESSION?.user?.id??'').toLowerCase(),current,
+   ownerReady:()=>client.peek()?.active_owner==='NEXT'&&client.peek()?.owner_epoch===owner.owner_epoch,
+   showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
+   pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),pickClient:onPick=>openClientPicker(onPick)};
+  options.openSnoozedTimesheet=async(row,bound)=>{
+   const caller=currentFrame(),callerContext=caller?._ctxRef,qualified=()=>current()&&bound.current()&&options.ownerReady()===true&&window.__modalStack?.includes(caller)&&caller._ctxRef===callerContext;
+   if(!qualified()||caller.kind!=='bpay-next-read')throw Error('Timesheet unavailable');const reader=window.CloudTMSBpayNextWorkbench.createWorkbenchClient(bound),point=await reader.loadWorkbenchPage('SNOOZES',{snooze_id:row.snooze_id,limit:1});
+   if(!qualified()||currentFrame()!==caller||point.rows.length!==1||point.rows[0].candidate_id!==row.candidate_id||point.rows[0].work_id!==row.work_id||!point.rows[0].physical_timesheet_id)throw Error('Timesheet unavailable');
+   const item=point.rows[0],footer=document.querySelector('[data-next-window-footer]'),opening=openTimesheet({timesheet_id:item.physical_timesheet_id,__bpayNextExactPhysicalId:item.physical_timesheet_id,candidate_id:item.candidate_id,reference_number:item.timesheet_reference??null});
+   const child=currentFrame();if(!child||child===caller||child.kind!=='timesheets'){await opening;throw Error('Timesheet unavailable');}
+   child._bpayNextEvidenceNavigation=true;document.getElementById('modal').classList.add('bpay-next-timesheet-evidence');footer?.remove();const tabs=document.getElementById('modalTabs');tabs.hidden=false;tabs.style.display='';document.getElementById('modal').classList.remove('ctms-kind-bpay-next-read','bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');
+   const dismissed=new Promise(resolve=>{const previous=child._onDismiss;child._onDismiss=function(...args){try{previous?.apply(this,args);}finally{document.getElementById('modal')?.classList.remove('bpay-next-timesheet-evidence');resolve();}};});await opening;await dismissed;if(!qualified()||currentFrame()!==caller)throw Error('Timesheet unavailable');
+  };
+  return window.CloudTMSBpayNextCaseList.open(options);
+ }catch{if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'Payment Advances / Snoozes',message:'Could not open the payments list; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-cases-notice'});return null;}
+}
 
 async function openBankingPaymentAdvanceModal(seed = {}) {
   { // FC09 qualifies both create and edit before any legacy reader.
