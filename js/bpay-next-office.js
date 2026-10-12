@@ -238,6 +238,7 @@ function worksheetResult(p,args,actor,base,shape,bad){
   // CONFIRM freezes the parent Draft; its prepared worker remains READY.
   function draftActionsAllowed(h) { return h.run_status === 'DRAFT' && ['READY', 'DRAFT'].includes(h.worker_status); }
   const INPUT = {
+    WRITE_OFF:{command_id:'uuid',case_component_id:'uuid',expected_component_revision:'positive',scope:'writeOffScope',reason:'writeOffReason'},
     CASE_CREATE:{command_id:'uuid',...cases.CASE_INPUT_SCHEMA,preview_token:'caseToken'},
     CASE_PAUSE:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',reason:'pauseReason'},
     CASE_RESUME:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',reason:'pauseReason'},
@@ -264,6 +265,7 @@ function worksheetResult(p,args,actor,base,shape,bad){
     CSV_ISSUE: { instruction_id: 'uuid', transfer_id: 'uuid' }
   };
   const RECEIPT = {
+    WRITE_OFF:{command_id:'uuid',case_id:'uuid',case_component_id:'uuid',sequence:'positive',phase:'writeOffPhase',requested_scope:'writeOffScope',applied_amount:'writeOffMoney?',remaining_amount:'writeOffMoney?',protected_amount:'writeOffMoney?',event_id:'uuid?',issue_code:'writeOffIssue?',replay:'boolean'},
     CASE_CREATE:{case_id:'uuid',command_id:'uuid',sequence:'positive',phase:'caseCreatePhase',replay:'boolean'},
     CASE_PAUSE:{case_id:'uuid',candidate_id:'uuid',command_id:'uuid',action:'pauseAction',sequence:'positive',expected_case_revision:'positive',phase:'pauseAdmissionPhase',replay:'boolean'},
     CASE_RESUME:{case_id:'uuid',candidate_id:'uuid',command_id:'uuid',action:'pauseAction',sequence:'positive',expected_case_revision:'positive',phase:'pauseAdmissionPhase',replay:'boolean'},
@@ -594,6 +596,12 @@ function field(v,type){
     if(type==='pauseReason')return cases.pauseReason(v);
     if(type==='pauseAction')return ['CASE_PAUSE','CASE_RESUME'].includes(v);
     if(type==='pauseAdmissionPhase')return v==='ACCEPTED_PENDING_STATUS';
+    if(type==='writeOffScope')return ['ALL','AMOUNT'].includes(v);
+    if(type==='writeOffPhase')return ['REQUESTED','WRITTEN_OFF','BLOCKED','REVIEW'].includes(v);
+    if(type==='writeOffMoney')return typeof v==='string'&&/^(0|[1-9][0-9]*)([.][0-9]{1,2})?$/.test(v)&&encoder.encode(v).byteLength<=1024;
+    if(type==='writeOffAmount')return field(v,'writeOffMoney')&&/[1-9]/.test(v);
+    if(type==='writeOffReason')return typeof v==='string'&&!v.includes('\0')&&v.trim()!==''&&encoder.encode(v).byteLength<=1024;
+    if(type==='writeOffIssue')return ['BPAY_NEXT_WRITE_OFF_INPUT_PENDING','BPAY_NEXT_WRITE_OFF_PROTECTED_CAPACITY','BPAY_NEXT_WRITE_OFF_AMOUNT_EXCEEDS_BALANCE','BPAY_NEXT_WRITE_OFF_COMPONENT_CHANGED','BPAY_NEXT_WRITE_OFF_ORIGIN_UNBOUND','BPAY_NEXT_WRITE_OFF_NO_BALANCE'].includes(v);
     if(type==='casePauseState')return cases.casePauseState(v);
     if(type==='casePauseReceipt')return cases.casePauseReceipt(v);
     if(type==='caseEditToken')return cases.caseEditToken(v);
@@ -723,8 +731,8 @@ function field(v,type){
       ||value.provider_status!=='DISABLED'||value.funding_status!=='UNAVAILABLE'||value.csv_available!==value.environment_ready)fail();
     return Object.freeze({...value});
   }
-  const financial = action => ['CASE_CREATE','CASE_EDIT','CASE_PAUSE','CASE_RESUME','PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
-  const reauthAction = action => ['CANCEL_REQUEST','CSV_ISSUE','PAYE_SAME_WEEK_OVERRIDE'].includes(action);
+  const financial = action => ['WRITE_OFF','CASE_CREATE','CASE_EDIT','CASE_PAUSE','CASE_RESUME','PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
+  const reauthAction = action => ['WRITE_OFF','CANCEL_REQUEST','CSV_ISSUE','PAYE_SAME_WEEK_OVERRIDE'].includes(action);
   function reauthIntentBody(action,args){
     if(action!=='PAYE_SAME_WEEK_OVERRIDE')return requestBody(action,args);
     const {reauth_token,...intent}=args||{};
@@ -736,6 +744,7 @@ function field(v,type){
   }
   function requestBody(action, args) {
     let schema = INPUT[action];
+    if(action==='WRITE_OFF'&&args?.scope==='AMOUNT')schema={...schema,amount:'writeOffAmount'};
     if(action==='PREPARATION_DISCARD'&&Object.hasOwn(args||{},'reason'))schema={...schema,reason:'discardReason'};
     if (action === 'PAYE_NET' && Object.hasOwn(args || {}, 'expected_projection_revision')) schema = { ...schema, expected_projection_revision: 'projectionRevision' };
     if (action === 'CANCEL_REQUEST' && (Object.hasOwn(args || {}, 'run_id') || Object.hasOwn(args || {}, 'pay_channel'))) schema = {...schema,run_id:'uuid',pay_channel:'channel'};
@@ -766,6 +775,14 @@ function validCaseNetReceipt(p,command){
     const schema=caseNet?{...RECEIPT[action],phase:'caseNetReceiptPhase',replacement_id:'uuid?',replacement_stage:'netReplacementStage?',projection_id:'uuid?',issue_code:'netRefusal?'}:RECEIPT[action];
     if (!shape(payload, schema)||caseNet&&!validCaseNetReceipt(payload,args.command_id)) fail();
     for (const k of ['run_id', 'run_worker_id', 'candidate_id', 'work_id', 'expected_revision_id', 'command_id', 'transfer_id', 'instruction_id']) if (Object.hasOwn(args, k) && !(action==='CANCEL_REQUEST'&&k==='run_id') && !(['CASE_CREATE','CASE_EDIT'].includes(action)&&k==='candidate_id') && !same(payload[k], args[k])) fail();
+    if(action==='WRITE_OFF'){
+      if(!same(payload.case_component_id,args.case_component_id)||payload.requested_scope!==args.scope)fail();
+      const penny=v=>BigInt(v.split('.')[0])*100n+BigInt((v.split('.')[1]??'').padEnd(2,'0'));
+      if(payload.phase==='REQUESTED'){if(['applied_amount','remaining_amount','protected_amount','event_id','issue_code'].some(k=>payload[k]!==null))fail();}
+      else if(payload.applied_amount===null||payload.remaining_amount===null||payload.protected_amount===null||penny(payload.protected_amount)>penny(payload.remaining_amount))fail();
+      else if(payload.phase==='WRITTEN_OFF'){if(penny(payload.applied_amount)<=0n||!same(payload.event_id,args.command_id)||payload.issue_code!==null||args.scope==='ALL'&&penny(payload.remaining_amount)!==0n||args.scope==='AMOUNT'&&penny(payload.applied_amount)!==penny(args.amount))fail();}
+      else if(penny(payload.applied_amount)!==0n||payload.event_id!==null||payload.issue_code===null||(payload.phase==='REVIEW')!==['BPAY_NEXT_WRITE_OFF_COMPONENT_CHANGED','BPAY_NEXT_WRITE_OFF_ORIGIN_UNBOUND'].includes(payload.issue_code))fail();
+    }
     if(action==='CASE_CREATE'&&!same(payload.case_id,args.command_id))fail();
     if(['CASE_PAUSE','CASE_RESUME'].includes(action)&&(payload.action!==action||!same(payload.case_id,args.case_id)||payload.expected_case_revision!==args.expected_case_revision))fail();
     if(action==='CASE_EDIT'&&(!same(payload.case_id,args.case_id)||!same(payload.rule_id,args.command_id)
@@ -1034,9 +1051,9 @@ function caseListResult(payload,call,bad){
         if(!reauthAction(action) || Object.hasOwn(args,'reauth_token'))fail('REQUEST_INVALID');
         const body=await call('/api/banking/pay/next/reauth-preview',{method:'POST',body:bytes},false,{action,args},8000);
         if(!record(body)||Object.keys(body).length!==2||body.ok!==true||!shape(body.preview,
-          {action_kind:'label',action_label:'label',candidate_count:action==='PAYE_SAME_WEEK_OVERRIDE'?'null':'numberPositive',candidate_name:'label',total_amount:action==='PAYE_SAME_WEEK_OVERRIDE'?'null':'cash',amount_basis:'label',scope_sha256:'sha?',accepted:'boolean',second_factor_required:'boolean'})
+          {action_kind:'label',action_label:'label',candidate_count:action==='PAYE_SAME_WEEK_OVERRIDE'?'null':'numberPositive',candidate_name:'label',total_amount:action==='PAYE_SAME_WEEK_OVERRIDE'?'null':action==='WRITE_OFF'?'writeOffMoney':'cash',amount_basis:'label',scope_sha256:'sha?',accepted:'boolean',second_factor_required:'boolean'})
           ||body.preview.action_kind!==action||(action==='PAYE_SAME_WEEK_OVERRIDE'?body.preview.candidate_count!==null:body.preview.candidate_count!==1)
-          ||(action==='PAYE_SAME_WEEK_OVERRIDE'?body.preview.amount_basis!=='PAYE_POLICY':!['CASH','DRAFT_GROSS'].includes(body.preview.amount_basis))
+          ||(action==='PAYE_SAME_WEEK_OVERRIDE'?body.preview.amount_basis!=='PAYE_POLICY':(action==='WRITE_OFF'?body.preview.amount_basis!=='SOURCE_DEBT':!['CASH','DRAFT_GROSS'].includes(body.preview.amount_basis)))
           ||(body.preview.scope_sha256===null&&!(action==='CSV_ISSUE'&&body.preview.accepted)))fail();
         return Object.freeze({...body.preview});
       },
@@ -1753,7 +1770,7 @@ function caseListResult(payload,call,bad){
     const title=el('strong',preview.action_label+' · '+preview.candidate_name);
     intro.append(title);
     if(preview.total_amount!==null){const [whole,fraction='']=preview.total_amount.split('.');
-      intro.append(el('p','£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0')+(preview.amount_basis==='DRAFT_GROSS'?' · Draft gross':'')));}
+      intro.append(el('p','£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0')+(preview.amount_basis==='DRAFT_GROSS'?' · Draft gross':preview.amount_basis==='SOURCE_DEBT'?' · Amount to write off':'')));}
     content.append(intro);
     const fieldWrap=el('label',undefined,'bpay-next-reauth-field'),fieldTitle=el('span','Password'),input=el('input');
     input.type='password';input.autocomplete='current-password';input.placeholder='Your CloudTMS password';input.dataset.nextFocusKey='reauth-password';fieldWrap.append(fieldTitle,input);

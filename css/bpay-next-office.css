@@ -1136,3 +1136,29 @@
  #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='descending'] .bpay-next-worksheet-sort:after{content:' ▼';color:var(--ctms-modal-cyan);font-size:10px}
 }
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worksheet) #modalActions:has([data-next-window-footer][hidden]):not(:has([data-next-window-footer]:not([hidden]))){display:none}
+/* FC-11 supplied small write-off window, with the native EX-01 child challenge. */
+#modal.ctms-modern-modal .bpay-next-write-off {display:flex;flex-direction:column;gap:16px;color:var(--ctms-modal-text,#edf3ff);}
+#modal.ctms-modern-modal .bpay-next-write-off p {margin:0;}
+#modal.ctms-modern-modal .bpay-next-write-off-subtitle {color:var(--ctms-modal-sub,#b3bfd1);font-size:13px;}
+#modal.ctms-modern-modal .bpay-next-write-off-warning {padding:12px 14px;border:1px solid #334459;border-left:4px solid #ffb020;border-radius:10px;background:#101d30;font-weight:700;}
+#modal.ctms-modern-modal .bpay-next-write-off-facts {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:14px;margin:0;}
+#modal.ctms-modern-modal .bpay-next-write-off-facts dt {color:var(--ctms-modal-sub,#b3bfd1);font-size:12px;font-weight:680;}
+#modal.ctms-modern-modal .bpay-next-write-off-facts dd {margin:0;font-weight:700;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-write-off-form {display:flex;flex-direction:column;gap:10px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-write-off-form fieldset {border:0;padding:0;margin:0 0 6px;display:flex;flex-direction:column;gap:10px;background:transparent;box-shadow:none;}
+#modal.ctms-modern-modal .bpay-next-write-off-form legend,#modal.ctms-modern-modal .bpay-next-write-off-form>label {font-size:12px;color:var(--ctms-modal-sub,#b3bfd1);font-weight:680;}
+#modal.ctms-modern-modal .bpay-next-write-off-form fieldset label {display:flex;align-items:center;gap:8px;min-height:28px;font-size:12px;font-weight:680;}
+#modal.ctms-modern-modal .bpay-next-write-off-form input:not([type=radio]),#modal.ctms-modern-modal .bpay-next-write-off-form textarea {width:100%;box-sizing:border-box;background:#071220;color:#edf3ff;border:1px solid #3c526e;border-radius:10px;padding:12px;min-height:44px;}
+#modal.ctms-modern-modal .bpay-next-write-off-auth {padding:12px 14px;border:1px solid #2c405a;border-radius:10px;background:#101d30;font-weight:700;}
+#modal.ctms-modern-modal .bpay-next-write-off-draft {display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-window-actions .btn.primary.bpay-next-write-off-destructive {background:#5b202a;border:1px solid #d85667;color:#ffe7ea;box-shadow:none;}
+#modal.ctms-modern-modal:has(.bpay-next-write-off) .bpay-next-window-actions {width:100%;margin-left:0;}
+#modal.ctms-modern-modal:has(.bpay-next-write-off) .bpay-next-window-actions .bpay-next-write-off-destructive {order:-1;margin-right:auto;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-write-off [hidden],#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-write-off .ctms-money-field:has(> input[hidden]) {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-write-off .ws-notice.is-success {border-color:#2e725c;border-left:4px solid #43c997;background:#102b24;}
+#modal.ctms-modern-modal:has(.bpay-next-write-off) #modalDrag {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;}
+#modal.ctms-modern-modal:has(.bpay-next-write-off) #modalTitle {grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal:has(.bpay-next-write-off) .bpay-next-write-off-subtitle {grid-column:1;grid-row:2;margin:0;}
+#modal.ctms-modern-modal:has(.bpay-next-write-off) #btnCloseModal {grid-column:2;grid-row:1 / span 2;}
+#modal.ctms-modern-modal:has(.bpay-next-write-off) #modalDrag>.spacer {display:none;}
+@media(max-width:600px){#modal.ctms-modern-modal .bpay-next-write-off-form fieldset label {min-height:44px;}#modal.ctms-modern-modal .bpay-next-write-off-facts {grid-template-columns:minmax(0,1fr) minmax(0,1fr);}#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-write-off) button {min-height:44px;}}
