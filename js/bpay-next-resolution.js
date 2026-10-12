@@ -73,6 +73,80 @@ function quote(v,policy,position,saved=null){
     &&(saved===null||v.decision_id===saved.decision_id&&v.decision_version===saved.decision_version);
 }
 const pair=v=>exact(v,['decision_id','decision_version'])&&id(v.decision_id)&&integer(v.decision_version,true);
+const commandContextKeys=['agency_id','actor_user_id','candidate_id','owner_epoch','metadata_version','financial_view_revision','workbench_revision','adoption_revision','last_command_sequence','target_pay_channel','target_umbrella_id','target_umbrella_vat_chargeable','target_umbrella_enabled','official_pay_date'];
+const commandContext=c=>exact(c,commandContextKeys)&&encoder.encode(JSON.stringify(c)).length<=4096&&['agency_id','actor_user_id','candidate_id'].every(k=>id(c[k]))
+  &&['owner_epoch','metadata_version'].every(k=>integer(c[k],true))&&['financial_view_revision','workbench_revision','adoption_revision','last_command_sequence'].every(k=>integer(c[k]))
+  &&target(c)&&c.target_umbrella_enabled===(c.target_pay_channel==='UMBRELLA'?true:null)&&date(c.official_pay_date);
+function resolutionWriteContext(validatedContext){
+  if(!exact(validatedContext,[...commandContextKeys,'works']))throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);
+  const value=Object.fromEntries(commandContextKeys.map(k=>[k,validatedContext[k]]));
+  if(!commandContext(value))throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);return value;
+}
+function normalizeResolutionCommand(action,args,actorId=null){
+  const bad=()=>{throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);};
+  if(!['RESOLUTION_SAVE','RESOLUTION_CLEAR'].includes(action)||!exact(args,['request_id','candidate_id','context','works','reason','zero_confirmed'])
+    ||!id(args.request_id)||!id(args.candidate_id)||!commandContext(args.context)||args.context.candidate_id!==args.candidate_id
+    ||actorId!==null&&args.context.actor_user_id!==actorId||!reason(args.reason)||typeof args.zero_confirmed!=='boolean'
+    ||!Array.isArray(args.works)||!args.works.length||args.works.length>100)bad();
+  const works=new Set(),owners=new Set();let count=0;
+  for(const w of args.works){
+    if(!exact(w,['work_id','expected_revision_id','rows'])||!id(w.work_id)||!id(w.expected_revision_id)||!Array.isArray(w.rows)||!w.rows.length||w.rows.length>100)bad();
+    if(works.has(w.work_id))throw fault('BPAY_NEXT_RESOLUTION_DUPLICATE_SCOPE',400);works.add(w.work_id);const identities=new Set();
+    for(const r of w.rows){
+      if(++count>100)throw fault('BPAY_NEXT_RESOLUTION_SCOPE_TOO_LARGE',413);
+      if(!exact(r,['approved_line_id','rate_family','rate_code','intent','expected_decision_id','expected_decision_version'])||!identity(r)
+        ||(r.expected_decision_id===null)!==(r.expected_decision_version===null)||!nullable(r.expected_decision_id,id)||!nullable(r.expected_decision_version,x=>integer(x,true))
+        ||(action==='RESOLUTION_SAVE'?!intent(r.intent,args.reason):r.intent!==null||r.expected_decision_id===null))bad();
+      const key=action==='RESOLUTION_CLEAR'?r.expected_decision_id:identityKey(r);
+      if(identities.has(key)||action==='RESOLUTION_CLEAR'&&owners.has(key))throw fault('BPAY_NEXT_RESOLUTION_DUPLICATE_SCOPE',400);
+      identities.add(key);if(action==='RESOLUTION_CLEAR')owners.add(key);
+    }
+  }
+  if(encoder.encode(JSON.stringify({actor_user_id:actorId??args.context.actor_user_id,action,args,readback:false})).length>32768)throw fault('BPAY_NEXT_RESOLUTION_SCOPE_TOO_LARGE',413);
+  return args;
+}
+function validateResolutionCommandReceipt(receipt,action,args){
+  normalizeResolutionCommand(action,args);const bad=()=>{throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');};
+  if(!exact(receipt,['request_id','candidate_id','received','replay','result'])||receipt.request_id!==args.request_id||receipt.candidate_id!==args.candidate_id
+    ||typeof receipt.received!=='boolean'||typeof receipt.replay!=='boolean'||encoder.encode(JSON.stringify(receipt)).length>131072)bad();
+  if(!receipt.received){if(receipt.replay||receipt.result!==null)bad();return receipt;}
+  const result=receipt.result;
+  if(!exact(result,['action','candidate_id','owner_epoch','works','processing','adoption'])||result.action!==action||result.candidate_id!==args.candidate_id
+    ||result.owner_epoch!==args.context.owner_epoch||result.processing!==true||!Array.isArray(result.works)||result.works.length!==args.works.length
+    ||encoder.encode(JSON.stringify(result)).length>65536||!exact(result.adoption,['workbench_revision','adoption_revision','adoption_state'])
+    ||!['workbench_revision','adoption_revision'].every(k=>integer(result.adoption[k]))||!['UNSEEDED','SEEDING','CURRENT','ERROR'].includes(result.adoption.adoption_state))bad();
+  const requests=new Map(args.works.map(w=>[w.work_id,w])),commands=new Set(),revisions=new Set(),newOwners=new Set(),oldOwners=new Set();
+  let previousWork=null,previousSequence=null,carryCount=0;
+  for(const w of result.works){
+    const requested=requests.get(w?.work_id);
+    if(!exact(w,['work_id','based_on_revision_id','published_revision_id','command_id','agency_sequence','changes','carried_decisions'])||!requested
+      ||previousWork!==null&&w.work_id<=previousWork||w.based_on_revision_id!==requested.expected_revision_id||!id(w.published_revision_id)||w.published_revision_id===w.based_on_revision_id
+      ||!id(w.command_id)||commands.has(w.command_id)||revisions.has(w.published_revision_id)||!integer(w.agency_sequence,true)
+      ||previousSequence!==null&&BigInt(w.agency_sequence)<=previousSequence||!Array.isArray(w.changes)||w.changes.length!==requested.rows.length
+      ||!Array.isArray(w.carried_decisions)||w.carried_decisions.length>100)bad();
+    previousWork=w.work_id;previousSequence=BigInt(w.agency_sequence);commands.add(w.command_id);revisions.add(w.published_revision_id);
+    const pending=[...requested.rows],replaced=new Set(requested.rows.filter(r=>r.expected_decision_id!==null).map(r=>r.expected_decision_id));
+    for(const change of w.changes){
+      if(!exact(change,['approved_line_id','rate_family','rate_code','decision_id','decision_version'])||!identity(change)||!id(change.decision_id)||!integer(change.decision_version,true))bad();
+      const n=pending.findIndex(r=>identityKey(r)===identityKey(change)&&(action==='RESOLUTION_SAVE'||r.expected_decision_id===change.decision_id&&r.expected_decision_version===change.decision_version));
+      if(n<0)bad();const source=pending.splice(n,1)[0];
+      if(action==='RESOLUTION_SAVE'){
+        if(change.decision_id===source.expected_decision_id||newOwners.has(change.decision_id)||BigInt(change.decision_version)!==(source.expected_decision_version===null?1n:BigInt(source.expected_decision_version)+1n))bad();
+        newOwners.add(change.decision_id);
+      }
+    }
+    for(const carry of w.carried_decisions){
+      if(++carryCount>100||!exact(carry,['previous_decision_id','previous_decision_version','decision_id','decision_version'])
+        ||!id(carry.previous_decision_id)||!id(carry.decision_id)||!integer(carry.previous_decision_version,true)||!integer(carry.decision_version,true)
+        ||carry.previous_decision_id===carry.decision_id||replaced.has(carry.previous_decision_id)||oldOwners.has(carry.previous_decision_id)||newOwners.has(carry.decision_id)
+        ||BigInt(carry.decision_version)!==BigInt(carry.previous_decision_version)+1n)bad();
+      oldOwners.add(carry.previous_decision_id);newOwners.add(carry.decision_id);
+    }
+  }
+  const originalOwners=new Set(args.works.flatMap(w=>w.rows.map(r=>r.expected_decision_id).filter(x=>x!==null)));
+  if([...newOwners].some(x=>oldOwners.has(x)||originalOwners.has(x))||[...oldOwners].some(x=>originalOwners.has(x)))bad();
+  return receipt;
+}
 const unavailable=v=>v===null||rowCodes.includes(v);
 const quoteOrCode=(q,c)=>unavailable(c)&&((q===null)!==(c===null));
 function manualEcho(q,choice){
@@ -140,6 +214,21 @@ errors('55000','MODULE_NOT_ACTIVE',409);
 errors('55000','WORKBENCH_DATE_UNAVAILABLE RESOLUTION_CONTEXT_UNAVAILABLE',503,true);
 errors('23514','RESOLUTION_STALE RESOLUTION_POSITION_BASIS_CHANGED RESOLUTION_BASIS_CHANGED DAILY_REVISION_EVIDENCE_REQUIRED RESOLUTION_PUBLICATION_INCOMPATIBLE RESOLUTION_POSITION_INCOMPATIBLE',409,false,true);
 errors('23514','RESOLUTION_IDENTITY_INVALID RESOLUTION_BUCKET_MISSING RESOLUTION_COMPATIBILITY_AMBIGUOUS RESOLUTION_SOURCE_BASIS_UNAVAILABLE RESOLUTION_MODE_INVALID RESOLUTION_POLICY_WINDOW_MISSING RESOLUTION_QUOTE_RANGE_INVALID TARGET_POLICY_WINDOW_AMBIGUOUS RESOLUTION_VERSION_MISSING',409);
+const commandPairs=new Map(nativePairs);
+function commandErrors(state,names,status,retryable=false){for(const name of names.split(' '))commandPairs.set(state+':BPAY_NEXT_'+name,{status,retryable});}
+commandErrors('22023','WORKBENCH_COMMAND_INPUT_INVALID SOURCE_BOOK_SEED_ID_REQUIRED',400);
+commandErrors('23514','RESOLUTION_REPLAY_CONFLICT RESOLUTION_DUPLICATE_SCOPE RESOLUTION_ZERO_CONFIRMATION_REQUIRED RESOLUTION_RESIDUAL_AMBIGUOUS SOURCE_BOOK_PAID_WITNESS_MISMATCH SOURCE_BOOK_HELD_WITNESS_MISMATCH SOURCE_BOOK_COMPONENT_MISMATCH SOURCE_BOOK_SEED_REPLAY_CONFLICT',409);
+commandErrors('42501','COMMAND_FORBIDDEN',403);
+commandErrors('55000','BINDING_NEXT_REQUIRED SOURCE_BOOK_CONTROL_REQUIRED SOURCE_BOOK_SEED_BASIS_UNAVAILABLE SOURCE_BOOK_SIGNED_SEED_UNAVAILABLE SOURCE_BOOK_TYPED_WITNESS_REQUIRED SOURCE_BOOK_ZERO_BASIS_UNAVAILABLE SOURCE_BOOK_ZERO_COMPONENT_UNAVAILABLE',409);
+commandErrors('55P03','CANDIDATE_FINANCIAL_FENCE_BUSY',409,true);
+function resolutionCommandNativeFault(payload){const rule=commandPairs.get(payload?.code+':'+payload?.message);return rule?fault(payload.message,rule.status,rule.retryable):null;}
+function validateResolutionCommandFault(value){
+  if(!exact(value,['ok','error_code','retryable','outcome_unknown'])||value.ok!==false||typeof value.outcome_unknown!=='boolean'||typeof value.retryable!=='boolean')throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+  const rules=[...commandPairs].filter(([key])=>key.slice(6)===value.error_code).map(([,rule])=>rule);
+  const generic={BPAY_NEXT_WORKBENCH_UNAVAILABLE:true,BPAY_NEXT_WORKBENCH_RESPONSE_INVALID:false,BPAY_NEXT_WORKBENCH_REQUEST_INVALID:false,BPAY_NEXT_WORKBENCH_FORBIDDEN:false,BPAY_NEXT_WORKBENCH_UNAUTHORIZED:false,BPAY_NEXT_WORKBENCH_METHOD_NOT_ALLOWED:false};
+  if(rules.length?value.outcome_unknown||!rules.some(r=>r.retryable===value.retryable):!Object.hasOwn(generic,value.error_code)||generic[value.error_code]!==value.retryable)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+  return value;
+}
 const BPAY_NEXT_RESOLUTION_REFUSALS=Object.freeze([...new Set([...nativePairs.keys()].map(k=>k.slice(6)))]);
 function resolutionNativeFault(payload){const rule=nativePairs.get(payload?.code+':'+payload?.message);return rule?fault(payload.message,rule.status,rule.retryable,rule.reload):fault('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true);}
 function validateResolutionFault(payload){
@@ -153,5 +242,72 @@ function validateResolutionFault(payload){
   if(!rules.some(rule=>rule&&payload.retryable===rule.retryable&&payload.reload_required===rule.reload))throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');return payload;
 }
 
-return Object.freeze({normalizeResolutionInput,validateResolutionResponse,BPAY_NEXT_RESOLUTION_REFUSALS,resolutionNativeFault,validateResolutionFault});
+// Original request recovery for the owning rate window; no valuation or auto-send.
+function createResolutionCommandController(options,context){
+  if(!commandContext(context)||typeof options.authFetch!=='function'||typeof options.api!=='function'||typeof options.current!=='function'||typeof options.currentActorId!=='function')throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);
+  const namespace={agency_id:context.agency_id,actor_user_id:context.actor_user_id,candidate_id:context.candidate_id};
+  const key='cloudtms.bpay-next.resolution-command.v1.'+JSON.stringify(namespace);
+  let storage;try{storage=options.storage??options.window?.localStorage;}catch{}
+  if(!storage)throw fault('BPAY_NEXT_WORKBENCH_UNAVAILABLE');
+  let retained=null,busy=false,absent=false;
+  const saved=storage.getItem(key);
+  if(saved!==null){
+    try{
+      if(encoder.encode(saved).length>65536)throw Error();const record=JSON.parse(saved);
+      if(!exact(record,['version','namespace','body'])||record.version!==1||!exact(record.namespace,[...Object.keys(namespace),'owner_epoch'])||!Object.entries(namespace).every(([k,v])=>record.namespace[k]===v)||!text(record.body))throw Error();
+      const body=JSON.parse(record.body);if(!exact(body,['action','args','readback'])||body.readback!==false)throw Error();
+      normalizeResolutionCommand(body.action,body.args,namespace.actor_user_id);
+      if(body.args.candidate_id!==namespace.candidate_id||body.args.context.agency_id!==namespace.agency_id||body.args.context.owner_epoch!==record.namespace.owner_epoch||encoder.encode(record.body).length>32768)throw Error();
+      retained=record.body;
+    }catch{throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);}
+  }
+  function authority(){if(!options.current()||String(options.currentActorId()||'').toLowerCase()!==namespace.actor_user_id)throw fault('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED',409);}
+  function settle(){storage.removeItem(key);retained=null;absent=false;}
+  async function send(readback){
+    authority();const original=JSON.parse(retained),controller=new AbortController();let timer;
+    const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(fault('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true));},12000);});
+    try{return await Promise.race([(async()=>{
+      const response=await options.authFetch(options.api('/api/banking/pay/next/workbench-command'),{method:'POST',redirect:'error',auth401Mode:'return',signal:controller.signal,
+        headers:{'content-type':'application/json',accept:'application/json','X-CloudTMS-Banking-Environment':options.environment??'TEST'},
+        body:readback?JSON.stringify({...original,readback:true}):retained});
+      if(!(response instanceof Response)||!response.body)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+      const reader=response.body.getReader(),chunks=[];let size=0;
+      try{while(true){const {value,done}=await reader.read();if(done)break;size+=value.byteLength;if(size>131072||controller.signal.aborted)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');chunks.push(value);}}
+      catch(e){await reader.cancel().catch(()=>{});throw e;}finally{reader.releaseLock();}
+      if(controller.signal.aborted)throw fault('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true);
+      const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+      let value;try{value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
+      authority();
+      if(!response.ok||value?.ok!==true){validateResolutionCommandFault(value);const e=fault(value.error_code,response.status,value.retryable);e.definite=!value.outcome_unknown;throw e;}
+      if(!exact(value,['ok','action','receipt'])||value.ok!==true||value.action!==original.action)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+      const receipt=validateResolutionCommandReceipt(value.receipt,original.action,original.args);
+      if(!readback&&!receipt.received)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');return receipt;
+    })(),deadline]);}finally{clearTimeout(timer);controller.abort();}
+  }
+  async function mutate(){
+    absent=false;
+    try{const receipt=await send(false);settle();return receipt;}
+    catch(e){if(e?.definite&&e.code!=='BPAY_NEXT_RESOLUTION_REPLAY_CONFLICT')settle();throw e;}
+  }
+  return Object.freeze({pending:()=>retained!==null,busy:()=>busy,canRetry:()=>retained!==null&&absent,
+    async recover(){
+      if(busy||!retained)return null;busy=true;absent=false;
+      try{const receipt=await send(true);if(receipt.received)settle();else absent=true;return receipt;}finally{busy=false;}
+    },
+    async execute(action,args){
+      if(busy)return null;authority();if(retained)throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);
+      normalizeResolutionCommand(action,args,namespace.actor_user_id);
+      if(args.candidate_id!==namespace.candidate_id||args.context.agency_id!==namespace.agency_id||!same(args.context,context))throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);
+      const body=JSON.stringify({action,args,readback:false});if(encoder.encode(body).length>32768)throw fault('BPAY_NEXT_RESOLUTION_SCOPE_TOO_LARGE',413);
+      storage.setItem(key,JSON.stringify({version:1,namespace:{...namespace,owner_epoch:args.context.owner_epoch},body}));retained=body;busy=true;
+      try{return await mutate();}finally{busy=false;}
+    },
+    async retry(){
+      if(busy)return null;authority();if(!retained||!absent)throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);busy=true;
+      try{return await mutate();}finally{busy=false;}
+    }
+  });
+}
+
+return Object.freeze({normalizeResolutionInput,validateResolutionResponse,BPAY_NEXT_RESOLUTION_REFUSALS,resolutionNativeFault,validateResolutionFault,resolutionWriteContext,normalizeResolutionCommand,validateResolutionCommandReceipt,resolutionCommandNativeFault,validateResolutionCommandFault,createResolutionCommandController});
 });

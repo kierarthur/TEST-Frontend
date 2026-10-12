@@ -71,7 +71,7 @@ function normaliseBpayNextSnoozeAction(action,args){
       if(args.scope_kind==='EXPENSES_ALL'&&canonical!=='DO_NOT_PAY')invalid();
     }
     if(mutation&&(typeof args.worker_pay_basis!=='string'||!/^[0-9a-f]{64}$/.test(args.worker_pay_basis)
-      ||(action==='SNOOZE_SET'&&args.phase==='PRE_OPEN')))invalid();
+      ||(['SNOOZE_SET','SNOOZE_WARNING_ACK_ISSUE'].includes(action)&&args.phase==='PRE_OPEN')))invalid();
     if(args.acknowledgement_token!==undefined&&!uuid(args.acknowledgement_token))invalid();
     args={...args,snooze_kind:canonical};
   }
@@ -106,9 +106,11 @@ function validateBpayNextSnoozeContext(value,args,acknowledgement=false){
   if(!exact(warning,['phase','until_date','business_date','next_official_pay_date','configuration_fingerprint','warning_code','warning_required'])
     ||!['PRE_OPEN','PRE_SAVE'].includes(warning.phase)||!date(warning.business_date)||!date(warning.next_official_pay_date)
     ||warning.until_date!==null&&!date(warning.until_date)||!text(warning.configuration_fingerprint,256)
-    ||![null,'SNOOZE_DATE_BEFORE_NEXT_PAY_RUN','SNOOZE_INCLUDES_NEXT_PAY_RUN'].includes(warning.warning_code)
+    ||warning.phase!==(args.phase??'PRE_SAVE')||warning.business_date!==value.business_date
+    ||!(warning.phase==='PRE_OPEN'?[null,'RATE_RESOLUTION_REQUIRES_REVIEW_AFTER_UNSNOOZE']:[null,'SNOOZE_DATE_BEFORE_NEXT_PAY_RUN','SNOOZE_INCLUDES_NEXT_PAY_RUN']).includes(warning.warning_code)
+    ||warning.warning_code==='RATE_RESOLUTION_REQUIRES_REVIEW_AFTER_UNSNOOZE'&&(!['WHOLE_TIMESHEET','SEGMENT'].includes(value.scope_kind)||!uuid(value.work_id)||!uuid(value.expected_revision_id))
     ||typeof warning.warning_required!=='boolean'||warning.warning_required!==(warning.warning_code!==null)
-    ||acknowledgement&&(!uuid(value.acknowledgement_token)||typeof value.acknowledgement_expires_at_utc!=='string'
+    ||acknowledgement&&(warning.phase!=='PRE_SAVE'||!uuid(value.acknowledgement_token)||typeof value.acknowledgement_expires_at_utc!=='string'
       ||value.acknowledgement_expires_at_utc.length>40||!Number.isFinite(Date.parse(value.acknowledgement_expires_at_utc))))responseInvalid();
   return value;
 }
@@ -232,29 +234,33 @@ function validateBpayNextSnoozeManyReceipt(r,args){
   const button=(label,fn,primary=false)=>{const b=el('button',label,'btn'+(primary?' primary':''));b.type='button';b.addEventListener('click',fn);return b;};
   const body=el('section',undefined,'bpay-next-snooze-window'),fact=el('div',undefined,'bpay-next-snooze-subject'),form=el('div',undefined,'bpay-next-snooze-form');
   const heading=el('h2'),consequence=el('p'),indefinite=el('input'),dateInput=el('input'),note=el('textarea'),result=el('p','','ws-notice'),footer=el('div',undefined,'bpay-next-window-actions');
-  const warning=el('div',undefined,'bpay-next-snooze-warning'),warningText=el('p'),consentLabel=el('label'),consent=el('input');consent.type='checkbox';consentLabel.append(consent,doc.createTextNode(' I understand'));warning.append(warningText,consentLabel);warning.hidden=true;
+  const warning=el('div',undefined,'bpay-next-snooze-warning'),warningText=el('p'),openingText=el('p'),warningHint=el('small',undefined,'bpay-next-snooze-warning-hint'),consentLabel=el('label'),consent=el('input');consent.type='checkbox';consentLabel.append(consent,doc.createTextNode(' I understand'));warning.append(openingText,warningText);warning.hidden=true;
+  openingText.hidden=true;openingText.setAttribute('role','status');openingText.setAttribute('data-next-live-copy','');warningHint.textContent='Tick I understand.';
   warningText.setAttribute('data-next-live-copy','');consequence.setAttribute('data-next-live-copy','');
   indefinite.type='checkbox';dateInput.type='text';dateInput.inputMode='numeric';dateInput.placeholder='DD/MM/YYYY';dateInput.autocomplete='off';note.rows=2;note.maxLength=500;note.placeholder='Optional';
   const indefiniteLabel=el('label'),dateLabel=el('label','Snooze until'),dateHint=el('small'),dateError=el('small',undefined,'bpay-next-snooze-field-error'),noteLabel=el('label','Note');
   dateError.setAttribute('role','status');indefiniteLabel.append(indefinite,doc.createTextNode(' Snooze indefinitely'));dateLabel.append(dateInput,dateHint,dateError);noteLabel.append(note);
   for(const [control,key,label]of [[indefinite,'snooze-indefinite','Snooze indefinitely'],[dateInput,'snooze-until','Snooze until'],[note,'snooze-note','Note'],[consent,'snooze-consent','I understand']]){control.setAttribute('data-next-focus-key',key);control.setAttribute('aria-label',label);}
-  const subjectLine=el('div',undefined,'bpay-next-snooze-subject-line');subjectLine.append(el('strong',[subject.candidateLabel,subject.label??'Timesheet payment'].filter(Boolean).join(' · ')));fact.append(subjectLine);
-  const subjectDetail=[subject.clientLabel,subject.dateLabel].filter(Boolean);if(subjectDetail.length)fact.append(el('span',subjectDetail.join(' · ')));
-  if(subject.amount!==undefined){const value=el('strong',win.CloudTMSBpayNextWorkbench.displayPounds(subject.amount));value.setAttribute('data-next-formatted-money','');subjectLine.append(value);}
-  result.setAttribute('role','status');result.setAttribute('data-next-live-copy','');form.append(indefiniteLabel,dateLabel,noteLabel);body.append(heading,consequence,warning,result,fact,form);
-  let frame,context=null,busy=true,closed=false,accepted=null,original='',pending=null,journalKey=null,namespace=null,progress=null,pageBlocks=[],resultList=null,question=null,warningCheck=null,warningInput=null;
+  const subjectLine=el('div',undefined,'bpay-next-snooze-subject-line');subjectLine.append(el('strong',[subject.label??'Timesheet payment',subject.dateLabel].filter(Boolean).join(' · ')));fact.append(subjectLine);
+  const subjectDetail=[subject.candidateLabel,subject.clientLabel].filter(Boolean),detail=el('span',subjectDetail.join(' · '));
+  if(subject.amount!==undefined){const value=el('span',win.CloudTMSBpayNextWorkbench.displayPounds(subject.amount));value.setAttribute('data-next-formatted-money','');detail.append(doc.createTextNode(subjectDetail.length?' · ':''),value);}fact.append(detail);
+  result.setAttribute('role','status');result.setAttribute('data-next-live-copy','');form.append(consentLabel,indefiniteLabel,dateLabel,noteLabel);body.append(heading,consequence,warning,result,fact,form);
+  let frame,context=null,busy=true,closed=false,accepted=null,original='',pending=null,journalKey=null,namespace=null,progress=null,pageBlocks=[],resultList=null,question=null,warningCheck=null,warningInput=null,openingWarning=false,openingAccepted=false;
   let finish;const done=new Promise(resolve=>{finish=resolve;});
   const current=()=>{try{return !closed&&frame?.alive()===true&&options.ownerReady()===true&&String(options.currentActorId()??'').toLowerCase()===actor;}catch{return false;}};
   const live=()=>current()&&frame.active(),storage=options.storage??win.localStorage,snapshot=()=>JSON.stringify([indefinite.checked,dateInput.value,note.value]);
-  const cancel=button('Cancel',()=>void frame.close()),cancelSnooze=button('Cancel snooze',()=>void clear()),apply=button('Apply snooze',()=>void save(),true);footer.append(cancel,cancelSnooze,apply);
+  const cancel=button('Cancel',()=>void frame.close()),cancelSnooze=button('Cancel snooze',()=>void clear()),apply=button('Apply snooze',()=>void save(),true);footer.append(warningHint,cancel,cancelSnooze,apply);
   cancelSnooze.classList.add('btn-warn');cancelSnooze.setAttribute('data-next-destructive','');
   function inputDate(){const m=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dateInput.value.trim());return m?m[3]+'-'+m[2]+'-'+m[1]:null;}
   function render(){const ready=current()&&!busy&&context!==null;body.setAttribute('aria-busy',String(busy));
+   const localConsent=openingWarning&&!subject.clear&&!openingAccepted;
+   warning.hidden=progress!==null||!openingWarning&&warningCheck===null;openingText.hidden=!openingWarning;warningText.hidden=warningCheck===null;consentLabel.hidden=subject.clear===true||warning.hidden;
+   warningHint.hidden=subject.clear===true||pending!==null||progress!==null||!localConsent&&(warningCheck===null||consent.checked);
    for(const n of [indefinite,dateInput,note,consent])n.disabled=!ready||pending!==null||progress!==null;dateInput.disabled=dateInput.disabled||indefinite.checked;
    cancel.hidden=progress!==null||!subject.clear&&!subject.many;cancel.textContent=subject.clear?'Keep snoozed':'Cancel';cancel.disabled=busy;
    resultList?.querySelectorAll('button').forEach(control=>{control.disabled=!ready||pending!==null;});
    const invalidDate=!subject.clear&&!indefinite.checked&&(!date(inputDate())||context&&inputDate()<context.business_date);dateInput.setAttribute('aria-invalid',String(invalidDate&&dateInput.value!==''));dateError.textContent=invalidDate&&dateInput.value!==''?(date(inputDate())?'Choose today or a later date.':'Enter a date as DD/MM/YYYY.'):'';dateError.hidden=!dateError.textContent;
-   cancelSnooze.hidden=!context?.active||subject.clear||subject.many===true||progress!==null;cancelSnooze.disabled=!ready||pending!==null;apply.disabled=!ready||retainedOnly&&!pending&&!progress||!pending&&!progress&&(invalidDate||!subject.clear&&context?.conflict!==null||subject.clear&&!subject.many&&!context?.active||warningCheck!==null&&!consent.checked);
+   cancelSnooze.hidden=!context?.active||subject.clear||subject.many===true||progress!==null;cancelSnooze.disabled=!ready||pending!==null;apply.disabled=!ready||retainedOnly&&!pending&&!progress||!pending&&!progress&&(invalidDate||localConsent||!subject.clear&&context?.conflict!==null||subject.clear&&!subject.many&&!context?.active||warningCheck!==null&&!consent.checked);
    apply.hidden=progress?.complete===true&&pending===null;footer.hidden=apply.hidden;
    apply.textContent=pending?'Try again':progress?(progress.complete?'Close':'Continue'):subject.clear?(subject.many?'Unsnooze all':'Unsnooze'):subject.many?'Snooze all':context?.active?'Save changes':'Apply snooze';
    result.hidden=!result.textContent;result.classList.toggle('ws-notice--danger',result.getAttribute('role')==='alert');result.classList.toggle('bpay-next-snooze-partial',progress!==null&&progress.summary.failed_count!=='0');
@@ -315,6 +321,7 @@ function validateBpayNextSnoozeManyReceipt(r,args){
    busy=true;notice('Saving…');try{await adopted(await execute('SNOOZE_CLEAR',{request_id:win.crypto.randomUUID(),candidate_id:context.candidate_id,snooze_id:context.snooze_id,expected_version:context.expected_version}));}catch(e){if(current())notice(pending?'Could not confirm the result; try again.':copy(e.code),true);}finally{busy=false;if(current())render();}
   }
   async function save(){if(!live()||busy)return;
+   if(!subject.clear&&!pending&&!progress&&openingWarning&&!openingAccepted){notice('Tick I understand.');return;}
    if(progress?.complete&&!pending){void frame.close();return;}busy=true;let pageAdopted=false;notice('Checking…');try{
     if(pending){let value=await execute();if(value.action.endsWith('_MANY')){await receiveBulk(value);pageAdopted=true;return;}
      if(value.action==='SNOOZE_WARNING_ACK_ISSUE'){clearPending();value=await execute('SNOOZE_SET',{...value.args,request_id:win.crypto.randomUUID(),acknowledgement_token:value.receipt.result.acknowledgement_token});}await adopted(value);return;}
@@ -367,7 +374,7 @@ function validateBpayNextSnoozeManyReceipt(r,args){
   frame=options.showReadWindow({title:subject.many?'Snooze all expenses':subject.clear?'Unsnooze':'Snooze payment',content:body,footer,small:true,confirmation:subject.many===true||subject.clear===true,canFocus:current,
    beforeClose:async()=>{if(busy)return false;if(!accepted&&context&&snapshot()!==original&&!pending)return await confirm('Discard changes?','Your snooze changes have not been saved.','Discard changes');return true;},
    onDismiss:()=>{closed=true;void(async()=>{if(accepted){try{await options.onAccepted?.(accepted);}catch{accepted={...accepted,message:'Saved; could not refresh.'};}win.dispatchEvent(new win.CustomEvent('cloudtms:bpay-next:snooze-changed',{detail:{candidate_id:context.candidate_id,work_id:context.work_id,message:accepted.message}}));}finish(accepted);})();}});
-  for(const control of [indefinite,dateInput,note])control.addEventListener('input',()=>{warning.hidden=true;warningCheck=null;warningInput=null;consent.checked=false;render();});consent.addEventListener('input',render);render();notice('Loading…');
+  for(const control of [indefinite,dateInput,note])control.addEventListener('input',()=>{warningCheck=null;warningInput=null;consent.checked=openingAccepted;render();});consent.addEventListener('input',()=>{if(warningCheck===null)openingAccepted=consent.checked;render();});render();notice('Loading…');
   void(async()=>{try{context=Object.freeze(retainedOnly?subject.retainedMany:subject.management?managementContext(subject.management,subject.scope):await check(base));if(!current())return;namespace={environment:'TEST',agency_id:context.agency_id,owner_epoch:context.module_epoch,actor_user_id:actor,scope_kind:context.scope_kind,scope_identity:context.scope_identity};journalKey='cloudtms.bpay-next.snooze.v1.'+JSON.stringify(namespace);
     const saved=storage.getItem(journalKey);if(saved!==null){if(encoder.encode(saved).byteLength>32768)invalid();const entry=JSON.parse(saved);if(!exact(entry,['version','namespace','pending','progress'])||entry.version!==2||JSON.stringify(entry.namespace)!==JSON.stringify(namespace))invalid();
      if(entry.pending!==null){if(typeof entry.pending!=='string'||encoder.encode(entry.pending).byteLength>32768)invalid();const retained=JSON.parse(entry.pending);if(!exact(retained,['action','readback','args'])||retained.readback!==false||retained.action==='SNOOZE_CHECK'||retainedOnly&&retained.action!=='SNOOZE_CLEAR_MANY')invalid();boundArgs(retained.action,retained.args,true);if(subject.management&&retained.args.snooze_id!==context.snooze_id)invalid();pending=entry.pending;}
@@ -375,6 +382,7 @@ function validateBpayNextSnoozeManyReceipt(r,args){
      if(pending!==null&&progress!==null){const retained=JSON.parse(pending),immutable=args=>Object.fromEntries(Object.entries(args).filter(([key])=>!['page_no','after_line_no','retry_line_nos'].includes(key)).sort(([a],[b])=>a.localeCompare(b)));if(retained.action!==progress.action||JSON.stringify(immutable(retained.args))!==JSON.stringify(immutable(progress.next)))invalid();}
     }
     if(retainedOnly&&!pending&&!progress)invalid();
+    openingWarning=context.warning_context?.warning_code==='RATE_RESOLUTION_REQUIRES_REVIEW_AFTER_UNSNOOZE';openingText.textContent=openingWarning?'This shift/timesheet has a saved rate decision. It stays in place after you unsnooze; review it if it is paid in a different pay week.':'';
     const inputs=pending?JSON.parse(pending).args:progress?.next;indefinite.checked=inputs?.indefinite??(context.active&&context.until_date===null);dateInput.value=(inputs?.until_date??context.until_date)?displayDate(inputs?.until_date??context.until_date):'';note.value=inputs?.note??context.note??'';dateHint.hidden=retainedOnly;if(!retainedOnly)dateHint.textContent='Choose a date from '+displayDate(context.business_date)+' or snooze indefinitely.';original=snapshot();
     if(progress){ensureResults();notice('Scroll to see the results.');if(BigInt(progress.next.page_no)>1n){pageBlocks=[{page_no:progress.next.page_no,rows:[]}];busy=false;await oldPage('back');}accepted={ok:true,next:true,candidate_id:context.candidate_id,work_id:context.work_id,message:bulkMessage(progress)};}
     notice(pending?'A previous request needs its result checked.':progress&&!progress.complete?'Continue the saved operation.':context.conflict?copy(context.conflict):subject.clear&&!subject.many&&!context.active?'There is no snooze to remove.':'',!retainedOnly&&context.conflict!==null);

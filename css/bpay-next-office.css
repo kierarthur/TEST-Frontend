@@ -407,6 +407,7 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form label {display:grid;gap:7px;font-size:13px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form label:has(input[type=checkbox]),
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning label {display:flex;align-items:center;gap:8px;min-height:32px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-form label[hidden]:has(input[type=checkbox]) {display:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form input[type=text],
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form textarea {box-sizing:border-box;width:100%;padding:10px 12px;color:#eef4fc;background:#0b1422;border:1px solid #385576;border-radius:7px;font:inherit;}
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form small {color:#b8c6d9;}
@@ -418,7 +419,9 @@
 #modal.ctms-kind-bpay-next-read #modalActions:has(> .bpay-next-window-actions[hidden]) {display:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-form input[type=checkbox],
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning input[type=checkbox] {width:18px;height:18px;accent-color:var(--ctms-modal-accent);}
-#modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning {padding:12px 14px;border:1px solid #8e6b35;border-radius:8px;background:#302819;color:#ffe7b6;}
+#modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning {display:grid;gap:5px;padding:12px 14px;border:1px solid #31445e;border-left:4px solid #ffb300;border-radius:8px;background:#101d30;color:#eef4fc;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning-hint {align-self:center;margin-right:auto;color:#b8c6d9;font-size:12px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-snooze-warning-hint[hidden] {display:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-partial {border-color:#8e6b35;background:#302819;color:#ffe7b6;}
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-window [hidden] {display:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-snooze-results {max-height:40vh;overflow:auto;}
