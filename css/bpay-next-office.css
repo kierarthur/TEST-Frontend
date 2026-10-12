@@ -1057,6 +1057,17 @@
 }
 
 /* DR18: original confirmation question and factual one/two-channel result. */
+/* DR07: notices above the existing totals, with bounded continuous scrolling. */
+#modal.ctms-modern-modal .bpay-next-preparation-banner-scroll{max-height:220px;overflow:auto;overscroll-behavior:contain}
+#modal.ctms-modern-modal .bpay-next-preparation-banners [hidden]{display:none}
+#modal.ctms-modern-modal .bpay-next-preparation-banners:not([hidden]){margin-top:20px}
+#modal.ctms-modern-modal .bpay-next-preparation-banner{display:flex;flex-direction:row;align-items:center;justify-content:space-between;text-align:left;gap:16px;margin:0 0 8px;background:var(--ctms-modal-panel-raised)}
+#modal.ctms-modern-modal .bpay-next-preparation-banner>strong{min-width:0;overflow-wrap:anywhere}
+#modal.ctms-modern-modal .bpay-next-preparation-banner .btn{flex-shrink:0;white-space:nowrap}
+@media(max-width:700px){
+ #modal.ctms-modern-modal .bpay-next-preparation-banner{align-items:flex-start;flex-wrap:wrap;gap:10px}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-preparation-banners button{min-height:44px}
+}
 #modal.ctms-modern-modal .bpay-next-draft-confirm h2{display:flex;align-items:center;gap:12px;margin:0 0 18px;font-size:17px}
 #modal.ctms-modern-modal .bpay-next-draft-confirm .bpay-next-question-icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;height:32px;border:1px solid var(--ctms-modal-accent-bright);border-radius:50%;color:var(--ctms-modal-accent-bright)}
 #modal.ctms-modern-modal .bpay-next-draft-confirm-summary{font-weight:700;line-height:1.55}
