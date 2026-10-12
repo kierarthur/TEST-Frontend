@@ -983,7 +983,7 @@
 #modal.ctms-modern-modal .bpay-next-progress-waiting-table th{position:sticky;top:0;z-index:1}#modal.ctms-modern-modal .bpay-next-progress-waiting-table th[aria-sort=ascending] button::after{content:' ▲';color:var(--ctms-modal-cyan);font-size:10px}#modal.ctms-modern-modal .bpay-next-progress-waiting-table th[aria-sort=descending] button::after{content:' ▼';color:var(--ctms-modal-cyan);font-size:10px}
 
 /* DR16 existing Draft review: frozen summary and useful Case details. */
-#modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals{grid-template-columns:repeat(3,minmax(0,1fr))}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals{grid-template-columns:repeat(3,minmax(0,1fr))}
 #modal.ctms-modern-modal:has(.bpay-next-worker-review){width:min(1320px,calc(100vw - 32px))}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) .modal-h{flex:0 0 auto;height:auto}
 #modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results :is(th,td):nth-child(n){width:auto}
@@ -1025,7 +1025,7 @@
 #modal.ctms-modern-modal .bpay-next-draft-totals.is-stale,#modal.ctms-modern-modal .has-read-error .bpay-next-review-results{opacity:.6}
 #modal.ctms-modern-modal:has(.bpay-next-worker-review) .bpay-next-window-actions{justify-content:space-between}
 @media(max-width:700px){
- #modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals{grid-template-columns:repeat(2,minmax(0,1fr))}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals{grid-template-columns:repeat(2,minmax(0,1fr))}
  #modal.ctms-modern-modal:has(.bpay-next-worker-review){width:calc(100vw - 12px)}
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) .modal-h .bpay-next-progress-subtitle{white-space:normal;overflow:visible;text-overflow:clip;max-height:none;grid-column:1 / -1;padding-right:0}
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) .modal-h #btnCloseModal{grid-row:1}
