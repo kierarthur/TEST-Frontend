@@ -16965,7 +16965,25 @@ function bankingPayCandidatePreviewMatchesFinanceCaseTransitionV1(candidatePrevi
     });
 }
 
+async function openBankingNextCaseRestructure(seed){
+  const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+  const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+  const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)&&(!parent||parent._ctxRef===boundContext);
+  try{const owner=await ownerClient.begin('case-restructure:'+crypto.randomUUID());
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return {handled:true,result:null};
+    if(owner.active_owner==='LEGACY')return {handled:false};
+    if(owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextCaseRestructure)throw Error();
+    const contextPage=await window.CloudTMSBpayNextOffice.createTransport({actorId:actor,currentActorId:()=>SESSION?.user?.id??null,api:API,authFetch}).page('CASE_LIST',
+      {filters:{candidate_id:seed.candidate_id,client_id:null,case_subtype:'ALL',view:'ALL',snooze:'ALL',hide_completed:false},sort:'CASE_ID_ASC',after:null,limit:5});
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext||contextPage.context.owner_epoch!==owner.owner_epoch)throw Error();
+    const result=await window.CloudTMSBpayNextCaseRestructure.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+      restructureNamespace:{agency_id:contextPage.context.agency_id,owner_epoch:contextPage.context.owner_epoch},ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+      showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseChanged:seed?.onCaseChanged},seed);
+    return {handled:true,result};
+  }catch{if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'Restructure',message:'Could not open this arrangement; refresh and try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-case-restructure-notice'});return {handled:true,result:null};}
+}
 async function openBankingFinanceCaseRestructureModal(seed = {}) {
+  const next=await openBankingNextCaseRestructure(seed);if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({

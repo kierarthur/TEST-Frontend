@@ -1136,6 +1136,29 @@
  #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='descending'] .bpay-next-worksheet-sort:after{content:' ▼';color:var(--ctms-modal-cyan);font-size:10px}
 }
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worksheet) #modalActions:has([data-next-window-footer][hidden]):not(:has([data-next-window-footer]:not([hidden]))){display:none}
+/* FC-12 supplied small future repayment arrangement window. */
+#modal.ctms-modern-modal .bpay-next-case-restructure {display:flex;flex-direction:column;gap:16px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal .bpay-next-case-restructure p {margin:0;}
+#modal.ctms-modern-modal .bpay-next-restructure-form {display:flex;flex-direction:column;gap:18px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-restructure-form fieldset {border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;background:transparent;box-shadow:none;}
+#modal.ctms-modern-modal .bpay-next-restructure-form legend,#modal.ctms-modern-modal .bpay-next-restructure-field>label {font-size:12px;font-weight:680;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-restructure-form fieldset label {display:flex;gap:8px;align-items:center;min-height:28px;font-size:12px;font-weight:680;}
+#modal.ctms-modern-modal .bpay-next-restructure-field {display:flex;flex-direction:column;gap:8px;}
+#modal.ctms-modern-modal .bpay-next-restructure-field input,#modal.ctms-modern-modal .bpay-next-restructure-field textarea {width:100%;box-sizing:border-box;min-height:44px;background:var(--ctms-modal-input);color:var(--ctms-modal-text);border:1px solid var(--ctms-modal-line);border-radius:10px;padding:12px;font-size:13px;}
+#modal.ctms-modern-modal .bpay-next-restructure-field small {font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-restructure-money {position:relative;}
+#modal.ctms-modern-modal .bpay-next-restructure-money>span {position:absolute;left:12px;top:13px;color:var(--ctms-modal-text);pointer-events:none;}
+#modal.ctms-modern-modal .bpay-next-restructure-money input {padding-left:25px;}
+#modal.ctms-modern-modal .bpay-next-restructure-compare {table-layout:fixed;width:100%;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-restructure-compare :is(th,td):not(:first-child) {text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-restructure-compare td:last-child {font-weight:700;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-restructure [hidden],#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-restructure .ctms-money-field:has(>input[hidden]) {display:none;}
+#modal.ctms-modern-modal:has(.bpay-next-case-restructure) #modalDrag {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;}
+#modal.ctms-modern-modal:has(.bpay-next-case-restructure) #modalTitle {grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal:has(.bpay-next-case-restructure) #modalDrag>p {grid-column:1;grid-row:2;margin:0;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal:has(.bpay-next-case-restructure) #btnCloseModal {grid-column:2;grid-row:1 / span 2;}
+#modal.ctms-modern-modal:has(.bpay-next-case-restructure) #modalDrag>.spacer {display:none;}
+@media(max-width:600px){#modal.ctms-modern-modal .bpay-next-restructure-form fieldset label {min-height:44px;}#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-restructure) button {min-height:44px;}}
 /* FC-11 supplied small write-off window, with the native EX-01 child challenge. */
 #modal.ctms-modern-modal .bpay-next-write-off {display:flex;flex-direction:column;gap:16px;color:var(--ctms-modal-text,#edf3ff);}
 #modal.ctms-modern-modal .bpay-next-write-off p {margin:0;}
@@ -1162,3 +1185,10 @@
 #modal.ctms-modern-modal:has(.bpay-next-write-off) #btnCloseModal {grid-column:2;grid-row:1 / span 2;}
 #modal.ctms-modern-modal:has(.bpay-next-write-off) #modalDrag>.spacer {display:none;}
 @media(max-width:600px){#modal.ctms-modern-modal .bpay-next-write-off-form fieldset label {min-height:44px;}#modal.ctms-modern-modal .bpay-next-write-off-facts {grid-template-columns:minmax(0,1fr) minmax(0,1fr);}#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-write-off) button {min-height:44px;}}
+
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-restructure .bpay-next-restructure-money input{padding-left:28px;text-align:right;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-restructure-compare{font-size:13px;border:1px solid var(--ctms-modal-line);border-radius:10px;border-collapse:separate;border-spacing:0;overflow:hidden;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-restructure-compare th{position:sticky;top:0;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-restructure .ws-notice.is-success{border-color:var(--ctms-modal-success);border-left:4px solid var(--ctms-modal-success);background:color-mix(in srgb,var(--ctms-modal-success) 14%,var(--ctms-modal-panel));}
+#modal.ctms-modern-modal .bpay-next-restructure-preview-hint{margin-right:auto;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-restructure) #modalActions:has([data-next-window-footer][hidden]):not(:has([data-next-window-footer]:not([hidden]))){display:none;}
