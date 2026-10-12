@@ -233,7 +233,7 @@
 
 @media(max-width:720px){#modal.ctms-kind-bpay-next-read .bpay-next-issue-record-open {display:none;}}
 /* WB15 Candidate Banking: current native groups in a retained standard window. */
-#modal.ctms-kind-bpay-next-read .bpay-next-candidate-identity {margin:4px 0 0;color:var(--ctms-modal-sub);font-size:12px;font-weight:500;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-identity {display:block;margin:4px 0 0;color:var(--ctms-modal-sub);font-size:12px;font-weight:500;}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-window .bpay-next-workbench-tabs {display:flex;flex-wrap:wrap;gap:4px;border:1px solid var(--ctms-modal-line-soft);border-radius:12px;padding:6px;margin:0 0 12px;width:fit-content;max-width:100%;}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-window .bpay-next-workbench-tabs button {background:transparent;border-color:transparent;color:var(--ctms-modal-sub);}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-window .bpay-next-workbench-tabs [aria-selected=true] {background:var(--ctms-modal-panel-raised);border-color:var(--ctms-modal-accent);color:var(--ctms-modal-text);box-shadow:inset 0 -2px var(--ctms-modal-accent);}
@@ -245,6 +245,20 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll td {vertical-align:top;overflow-wrap:anywhere;}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll td small {display:block;margin-top:4px;color:var(--ctms-modal-sub);font-size:12px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll th button {background:none;border:0;color:inherit;font:inherit;padding:0;min-height:32px;text-align:left;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll th {font-size:11px;font-weight:760;text-transform:uppercase;letter-spacing:.055em;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll th button {font-size:11px;font-weight:760;text-transform:uppercase;letter-spacing:.055em;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-table th button {font-size:11px;font-weight:760;text-transform:uppercase;letter-spacing:.055em;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-candidate-identity) {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-candidate-identity) .spacer {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-candidate-identity) #modalTitle {grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .modal-h:has(.bpay-next-candidate-identity) #btnCloseModal {grid-column:2;grid-row:1 / span 2;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-identity {grid-column:1;grid-row:2;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll > table.bpay-next-no-selection > thead > tr > th:first-child {width:auto;}
+@media(max-width:720px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-lists form .btn {min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-phone-open {min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-desktop-open {display:none;}
+}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll tr[aria-selected=true] {background:var(--ctms-modal-panel-raised);box-shadow:inset 3px 0 var(--ctms-modal-accent-bright);}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll tr:focus-visible {outline:2px solid var(--ctms-modal-accent-bright);outline-offset:-2px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-candidate-money {text-align:right;font-variant-numeric:tabular-nums;}
