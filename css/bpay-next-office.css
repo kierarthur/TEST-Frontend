@@ -1132,6 +1132,7 @@
 #modal.ctms-modern-modal .bpay-next-worksheet .candidate-office-badge{font-size:11px;white-space:normal}
 #modal.ctms-modern-modal .bpay-next-worksheet-skeleton-row{height:55px;margin-bottom:1px;background:var(--ctms-modal-panel-raised);border-bottom:1px solid var(--ctms-modal-line)}
 @media(min-width:701px){
- #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='ascending'] .bpay-next-worksheet-sort:after{content:' ↑'}
- #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='descending'] .bpay-next-worksheet-sort:after{content:' ↓'}
+ #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='ascending'] .bpay-next-worksheet-sort:after{content:' ▲';color:var(--ctms-modal-cyan);font-size:10px}
+ #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='descending'] .bpay-next-worksheet-sort:after{content:' ▼';color:var(--ctms-modal-cyan);font-size:10px}
 }
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worksheet) #modalActions:has([data-next-window-footer][hidden]):not(:has([data-next-window-footer]:not([hidden]))){display:none}
