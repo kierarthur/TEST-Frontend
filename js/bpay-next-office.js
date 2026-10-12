@@ -502,6 +502,61 @@ function prepareIssuesResult(payload,args,actor,base,shape,bad){
   };
   // These are the existing frozen-detail service contracts, not current facts.
   const FROZEN_ORIGIN={"classification":"classification","revision_id":"uuid","origin_kind":"originKind","source_kind":"frozenSourceKind","sheet_scope":"dailyScope?","contract_id":"uuid?","client_id":"uuid?","work_date":"date?","physical_timesheet_id":"uuid","physical_timesheet_version":"numberPositive","candidate_display_name":"label","candidate_reference":"label?","client_display_name":"label","job_title":"label?","band_label":"label?","timesheet_reference":"label?","pay_channel":"channel","authorised_at_utc":"timestamp?"};
+// Closed frozen facts only. BigInt checks conservation; it never quotes/reprices.
+function frozenSelectedTreatment(value, runLineId) {
+  if (value === null) return true;
+  const exactKeys = (v, keys) => record(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v,k));
+  const decimal = v => typeof v === 'string' && /^(?:0|[1-9]\d{0,11})(?:\.\d{1,6})?$/.test(v);
+  const quoteRate = v => typeof v === 'string' && v.length<=120000 && /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(v);
+  const zero = v => typeof v==='string' && /^0(?:\.0+)?$/.test(v);
+  const money = v => typeof v === 'string' && /^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/.test(v);
+  const cents = v => { const [w,f=''] = v.split('.'); return BigInt(w)*100n+BigInt(f.padEnd(2,'0')); };
+  const quote = (v, rate) => exactKeys(v,rate?['ex','vat','inc','rate']:['ex','vat','inc'])
+    && ['ex','vat','inc'].every(k=>money(v[k])) && cents(v.ex)+cents(v.vat)===cents(v.inc)
+    && (!rate || v.rate===null || quoteRate(v.rate));
+  const keys=['run_line_id','run_work_id','run_worker_id','candidate_id','captured_revision_id','approved_line_id','component_key',
+    'source_pay_channel','target_pay_channel','target_umbrella_id','target_umbrella_vat_chargeable','valuation_policy_id','valuation_window_id',
+    'valuation_date','source_consumed_ex_vat','component_quote','buckets'];
+  if (!exactKeys(value,keys) || !keys.slice(0,6).every(k=>field(value[k],'uuid'))
+    || typeof runLineId!=='string' || value.run_line_id.toLowerCase()!==runLineId.toLowerCase()
+    || typeof value.component_key!=='string' || value.component_key.includes('\0') || [...value.component_key].length<1 || [...value.component_key].length>256
+    || !['PAYE','UMBRELLA'].includes(value.source_pay_channel) || !['PAYE','UMBRELLA'].includes(value.target_pay_channel)
+    || !field(value.valuation_policy_id,'uuid') || !field(value.valuation_window_id,'uuid') || !field(value.valuation_date,'date')
+    || !money(value.source_consumed_ex_vat) || !quote(value.component_quote,false)
+    || !Array.isArray(value.buckets) || value.buckets.length<1 || value.buckets.length>5) return false;
+  if (value.target_pay_channel==='PAYE'
+    ? value.target_umbrella_id!==null || value.target_umbrella_vat_chargeable!==null
+    : !field(value.target_umbrella_id,'uuid') || typeof value.target_umbrella_vat_chargeable!=='boolean') return false;
+  const bucketKeys=['rate_family','rate_code','decision_id','decision_version','treatment','resolution_mode','approved_units','included_units','source_rate',
+    'source_ex_vat','manual_replacement_rate','manual_amount_ex_vat','quote','valuation_policy_id','valuation_window_id'];
+  const seen=new Set(); let ex=0n, vat=0n, inc=0n;
+  for (const b of value.buckets) {
+    if (!exactKeys(b,bucketKeys) || !['STANDARD','ADDITIONAL','ADJUSTMENT'].includes(b.rate_family)
+      || typeof b.rate_code!=='string' || b.rate_code.includes('\0') || [...b.rate_code].length<1 || [...b.rate_code].length>(b.rate_family==='ADDITIONAL'?245:256)
+      || (b.rate_family==='STANDARD' && !['BH','DAY','NIGHT','SAT','SUN'].includes(b.rate_code))
+      || !['PINNED','NATIVE_DEFAULT'].includes(b.treatment)
+      || !['SUGGESTED_EQUIVALENT_BASIS','MANUAL_REPLACEMENT_RATE','MANUAL_AMOUNT'].includes(b.resolution_mode)
+      || !['approved_units','included_units','source_rate','manual_replacement_rate'].every(k=>b[k]===null||decimal(b[k]))
+      || !['source_ex_vat','manual_amount_ex_vat'].every(k=>b[k]===null||money(b[k])) || !quote(b.quote,true)
+      || !field(b.valuation_policy_id,'uuid') || !field(b.valuation_window_id,'uuid')
+      || b.valuation_policy_id.toLowerCase()!==value.valuation_policy_id.toLowerCase()
+      || b.valuation_window_id.toLowerCase()!==value.valuation_window_id.toLowerCase()) return false;
+    if (b.treatment==='PINNED'
+      ? !field(b.decision_id,'uuid') || typeof b.decision_version!=='string' || !/^[1-9]\d{0,18}$/.test(b.decision_version) || BigInt(b.decision_version)>9223372036854775807n
+      : b.decision_id!==null || b.decision_version!==null || b.rate_family!=='STANDARD' || b.resolution_mode!=='SUGGESTED_EQUIVALENT_BASIS') return false;
+    if (b.resolution_mode==='SUGGESTED_EQUIVALENT_BASIS'
+      ? b.manual_replacement_rate!==null || b.manual_amount_ex_vat!==null
+      : b.resolution_mode==='MANUAL_REPLACEMENT_RATE'
+        ? b.manual_replacement_rate===null || b.manual_amount_ex_vat!==null
+        : b.manual_amount_ex_vat===null || b.manual_replacement_rate!==null || b.quote.rate!==null) return false;
+    const key=JSON.stringify([b.rate_family,b.rate_code]); if(seen.has(key))return false;seen.add(key);
+    ex+=cents(b.quote.ex);vat+=cents(b.quote.vat);inc+=cents(b.quote.inc);
+  }
+  if(zero(value.source_consumed_ex_vat) && (ex!==0n || vat!==0n || inc!==0n || value.buckets.some(b=>!zero(b.included_units)||!zero(b.source_ex_vat)||b.quote.rate!==null)))return false;
+  return ex===cents(value.component_quote.ex) && vat===cents(value.component_quote.vat) && inc===cents(value.component_quote.inc)
+    && (value.target_pay_channel==='UMBRELLA' && value.target_umbrella_vat_chargeable || vat===0n);
+}
+
   const FROZEN_USED_LINE={component_kind:'component',component_key:'key',unit_label:'capturedText?',approved_quantity:'capturedDecimal?',approved_unit_rate:'capturedDecimal?'};
   const DETAIL_INPUT = {
     SHIFTS: { run_line_id:'uuid',after_detail_no:'numberInt?',limit:'limit' },
@@ -1086,12 +1141,13 @@ function caseListResult(payload,call,bad){
       async frozenPage(kind, args) {
         if (!Object.hasOwn(DETAIL_INPUT,kind) || !shape(args,DETAIL_INPUT[kind]) || (kind==='RATE_SCHEDULE' && (args.after_rate_family===null)!==(args.after_rate_code===null))) fail('REQUEST_INVALID');
         const body = await call('/api/banking/pay/next/frozen-detail',{method:'POST',body:JSON.stringify({kind,...args})},true);
-        if(!record(body)||Object.keys(body).length!==7||!shape(body.origin,FROZEN_ORIGIN)
+        if(!record(body)||Object.keys(body).length!==(kind==='RATE_DETAILS'?8:7)||!shape(body.origin,FROZEN_ORIGIN)
           ||(kind==='RATE_DETAILS'?!shape(body.used_line,FROZEN_USED_LINE):body.used_line!==null)
           ||(body.origin.origin_kind==='DAILY'&&(body.origin.sheet_scope!=='DAILY'||body.origin.contract_id!==null||body.origin.work_date===null))
           ||(body.origin.origin_kind==='CONTRACT'&&body.origin.contract_id===null)
           ||((body.origin.classification==='CLASSIFIED')!==(body.origin.client_id!==null)))fail();
-        const {origin,used_line,...page}=body;
+        if(kind==='RATE_DETAILS'&&(!Object.hasOwn(body,'selected_treatment')||!frozenSelectedTreatment(body.selected_treatment,args.run_line_id)))fail();
+        const {origin,used_line,selected_treatment,...page}=body;
         if (!shapePage(page,kind,args.limit) || !body.rows.every(r=>shape(r,DETAIL_ROWS[kind]))) fail();
         let prior = kind==='SHIFTS' ? args.after_detail_no??0 : kind==='BREAKS' ? args.after_break_no??0 : args.after_bucket??'';
         const seen=new Set();
@@ -1960,7 +2016,7 @@ function caseListResult(payload,call,bad){
       }catch{if(current())summaryError='Could not load payment totals; refresh and try again.';}
     }
     async function readLines(cursor=null,direction='next'){const args={run_worker_id:workerId,after_line_no:cursor?.after_line_no??null,limit:100};failedRead={kind:'LINES',args,direction};const next=await transport.page('LINES',args);if(current()){lines=append(cursor||direction==='back'?lines:null,next,direction);failedRead=null;}}
-    async function readDetail(kind,args,old=null,direction='next'){failedRead={kind,args:{...args},old,direction};const next=await transport.frozenPage(kind,args);if(!current())return null;if(line&&!same(next.origin.revision_id,line.captured_revision_id))fail();if(origin&&JSON.stringify(origin)!==JSON.stringify(next.origin))fail();if(kind==='RATE_DETAILS'&&(next.used_line.component_key!==line.component_key||next.used_line.component_kind!==line.component_kind))fail();origin=next.origin;failedRead=null;return append(old,next,direction);}
+    async function readDetail(kind,args,old=null,direction='next'){failedRead={kind,args:{...args},old,direction};const next=await transport.frozenPage(kind,args);if(!current())return null;if(line&&!same(next.origin.revision_id,line.captured_revision_id))fail();if(origin&&JSON.stringify(origin)!==JSON.stringify(next.origin))fail();if(kind==='RATE_DETAILS'&&(next.used_line.component_key!==line.component_key||next.used_line.component_kind!==line.component_kind))fail();if(kind==='RATE_DETAILS'&&next.selected_treatment!==null){const t=next.selected_treatment;if(!same(t.run_worker_id,workerId)||!same(t.candidate_id,options.detailCandidateId)||!same(t.captured_revision_id,line.captured_revision_id)||t.component_key!==line.component_key||t.source_pay_channel!==line.source_pay_channel||t.source_consumed_ex_vat!==line.source_consumed_ex_vat||t.target_pay_channel!==line.target_pay_channel||t.component_quote.ex!==line.frozen_ex_vat||t.component_quote.vat!==line.frozen_vat||t.component_quote.inc!==line.frozen_inc_vat)fail();}if(kind==='RATE_DETAILS'&&old&&JSON.stringify(old.selected_treatment)!==JSON.stringify(next.selected_treatment))fail();origin=next.origin;failedRead=null;return append(old,next,direction);}
     async function chooseLine(next){line=next;origin=null;shifts=breaks=rates=schedule=null;shiftId=null;selectedShift=null;selected=next.run_line_id;scrollTop=0;scrollAnchor=null;
       shifts=await readDetail('SHIFTS',{run_line_id:line.run_line_id,after_detail_no:null,limit:100});selectedShift=shifts?.rows[0]??null;shiftId=selectedShift?.shift_detail_id??null;}
     async function findWork(after=null){let page=null;while(current()){
