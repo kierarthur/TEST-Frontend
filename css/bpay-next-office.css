@@ -1191,4 +1191,49 @@
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-restructure-compare th{position:sticky;top:0;background:var(--ctms-modal-panel-raised);}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-case-restructure .ws-notice.is-success{border-color:var(--ctms-modal-success);border-left:4px solid var(--ctms-modal-success);background:color-mix(in srgb,var(--ctms-modal-success) 14%,var(--ctms-modal-panel));}
 #modal.ctms-modern-modal .bpay-next-restructure-preview-hint{margin-right:auto;color:var(--ctms-modal-sub);font-size:12px;}
+
+/* FC-13 / SCR-30: supplied arrangement layout within the native Office frame. */
+#modal.ctms-modern-modal .bpay-next-case-channel{display:flex;flex-direction:column;gap:20px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-case-channel){width:min(980px,calc(100vw - 48px));}
+#modal.ctms-modern-modal:has(.bpay-next-case-channel) #modalDrag{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;flex:0 0 auto;height:auto;}
+#modal.ctms-modern-modal:has(.bpay-next-case-channel) #modalTitle{grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal:has(.bpay-next-case-channel) [data-next-window-header-detail]{grid-column:1;grid-row:2;margin:0;font-size:12px;line-height:1.4;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal:has(.bpay-next-case-channel) #btnCloseModal{grid-column:2;grid-row:1 / span 2;}
+#modal.ctms-modern-modal:has(.bpay-next-case-channel) #modalDrag>.spacer{display:none;}
+#modal.ctms-modern-modal .bpay-next-channel-confirm .bpay-next-channel-kv{grid-template-columns:1fr;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read :is(.bpay-next-case-channel,.bpay-next-channel-confirm) [hidden]{display:none;}
+#modal.ctms-modern-modal .bpay-next-channel-facts,#modal.ctms-modern-modal .bpay-next-channel-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:0;padding:16px;background:var(--ctms-modal-panel-raised);border:1px solid var(--ctms-modal-line);border-radius:13px;}
+#modal.ctms-modern-modal .bpay-next-channel-totals{grid-template-columns:repeat(5,minmax(0,1fr));}
+#modal.ctms-modern-modal :is(.bpay-next-channel-facts,.bpay-next-channel-totals,.bpay-next-channel-kv) dt{font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal :is(.bpay-next-channel-facts,.bpay-next-channel-totals) dd{margin:6px 0 0;font-size:15px;font-weight:730;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-channel-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;margin:14px 0 0;}
+#modal.ctms-modern-modal .bpay-next-channel-kv>div{display:flex;justify-content:space-between;gap:12px;}
+#modal.ctms-modern-modal .bpay-next-channel-kv dd{margin:0;text-align:right;font-size:13px;font-weight:680;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal :is(.bpay-next-case-channel,.bpay-next-channel-confirm) .ctms-section>small{display:block;font-size:10px;font-weight:760;text-transform:uppercase;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal :is(.bpay-next-case-channel,.bpay-next-channel-confirm) h2{margin:8px 0;font-size:15px;font-weight:730;}
+#modal.ctms-modern-modal .bpay-next-channel-breakdown>.ctms-universal-table-host{max-height:300px;overflow:auto;border-radius:13px;border:1px solid var(--ctms-modal-line);}
+#modal.ctms-modern-modal .bpay-next-channel-breakdown table{width:100%;border-spacing:0;font-size:13px;}
+#modal.ctms-modern-modal .bpay-next-channel-breakdown th{position:sticky;top:0;z-index:1;background:var(--ctms-modal-panel-raised);font-size:11px;text-transform:uppercase;}
+#modal.ctms-modern-modal .bpay-next-channel-breakdown :is(td,th):nth-child(n+3){text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-channel-breakdown td small{display:block;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-case-channel .bpay-next-restructure-form{gap:16px;}
+#modal.ctms-modern-modal .bpay-next-case-channel .bpay-next-restructure-money input{padding-left:28px;text-align:right;}
+#modal.ctms-modern-modal .bpay-next-channel-confirm{display:flex;flex-direction:column;gap:16px;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-case-channel){width:calc(100vw - 12px);}
+ #modal.ctms-modern-modal .bpay-next-channel-facts,#modal.ctms-modern-modal .bpay-next-channel-totals{grid-template-columns:repeat(2,minmax(0,1fr));}
+ #modal.ctms-modern-modal .bpay-next-channel-kv{grid-template-columns:1fr;}
+ #modal.ctms-modern-modal :is(.bpay-next-case-channel,.bpay-next-channel-confirm) button{min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-case-channel fieldset label{min-height:44px;}
+}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-case-restructure) #modalActions:has([data-next-window-footer][hidden]):not(:has([data-next-window-footer]:not([hidden]))){display:none;}
+
+/* SCR-30 confirmation and touch targets, scoped to its native window. */
+#modal.ctms-modern-modal .bpay-next-channel-question{display:flex;align-items:center;gap:12px;}
+#modal.ctms-modern-modal .bpay-next-channel-question-icon{display:grid;place-items:center;flex:0 0 30px;height:30px;border:1px solid var(--ctms-modal-accent-bright);border-radius:50%;background:var(--ctms-modal-panel-raised);font-weight:700;}
+#modal.ctms-modern-modal .bpay-next-channel-confirm-values{font-weight:730;line-height:1.6;}
+#modal.ctms-modern-modal:has(.bpay-next-channel-confirm) #modalDrag{display:none;}
+#modal.ctms-modern-modal .bpay-next-channel-confirm p{margin:0;}
+@media(max-width:700px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(:is(.bpay-next-case-channel,.bpay-next-channel-confirm)) :is(#btnCloseModal,.bpay-next-window-actions .btn){min-height:44px;}}
+
+#modal.ctms-modern-modal .bpay-next-channel-question-icon.is-refused{border-color:var(--ctms-modal-danger);color:var(--ctms-modal-danger);}

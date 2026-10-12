@@ -242,6 +242,7 @@ function worksheetResult(p,args,actor,base,shape,bad){
     CASE_CREATE:{command_id:'uuid',...cases.CASE_INPUT_SCHEMA,preview_token:'caseToken'},
     CASE_PAUSE:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',reason:'pauseReason'},
     CASE_RESUME:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',reason:'pauseReason'},
+    CASE_CHANNEL_RESOLVE:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',input:'channelInput',preview_token:'channelToken'},
     CASE_RESTRUCTURE: {command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',input:'restructureInput',preview_token:'restructureToken'},
   CASE_EDIT:{command_id:'uuid',case_id:'uuid',expected_case_revision:'positive',...cases.CASE_INPUT_SCHEMA,preview_token:'caseEditToken'},
     PREPARATION_DISCARD:{command_id:'uuid',run_id:'uuid',expected_preparation_revision:'integer'},
@@ -270,6 +271,7 @@ function worksheetResult(p,args,actor,base,shape,bad){
     CASE_CREATE:{case_id:'uuid',command_id:'uuid',sequence:'positive',phase:'caseCreatePhase',replay:'boolean'},
     CASE_PAUSE:{case_id:'uuid',candidate_id:'uuid',command_id:'uuid',action:'pauseAction',sequence:'positive',expected_case_revision:'positive',phase:'pauseAdmissionPhase',replay:'boolean'},
     CASE_RESUME:{case_id:'uuid',candidate_id:'uuid',command_id:'uuid',action:'pauseAction',sequence:'positive',expected_case_revision:'positive',phase:'pauseAdmissionPhase',replay:'boolean'},
+    CASE_CHANNEL_RESOLVE:{case_id:'uuid',candidate_id:'uuid',command_id:'uuid',sequence:'positive',expected_case_revision:'positive',rule_id:'uuid?',phase:'channelAdmission',replay:'boolean'},
     CASE_RESTRUCTURE: {case_id:'uuid',candidate_id:'uuid',command_id:'uuid',sequence:'positive',expected_case_revision:'positive',rule_id:'uuid',phase:'restructureAdmission',replay:'boolean'},
   CASE_EDIT:{case_id:'uuid',command_id:'uuid',sequence:'positive',case_revision:'positive',rule_id:'uuid',phase:'caseEditPhase',replay:'boolean'},
     PREPARATION_DISCARD:{command_id:'uuid',run_id:'uuid',sequence:'positive?',phase:'discardReceiptPhase',expected_candidates:'integer',completed_candidates:'integer',removed_candidates:'integer',already_removed_candidates:'integer',blocked_candidates:'integer',replay:'boolean'},
@@ -308,7 +310,7 @@ function worksheetResult(p,args,actor,base,shape,bad){
     ACCEPTED_CANDIDATES:{candidate_id:'uuid',accepted_input_id:'uuid',module_epoch:'positive',target_pay_channel:'channel',target_umbrella_id:'uuid?',pay_week_start:'date',case_scope:'acceptedCaseScope',case_selection_revision:'positive?',settings_witness_kind:'settingsWitness',input_evidence_sha256:'sha',prepare_job_id:'uuid?',prepare_job_status:'prepareJobStatus?',prepare_job_phase:'prepareJobPhase?',run_worker_id:'uuid?',worker_status:'worker?',has_unsealed_work:'boolean',waiting_command_id:'uuid?',waiting_command_sequence:'positive?',progress_state:'acceptedProgress',progress_code:'acceptedProgressCode?',review_issue_code:'issue?'},
     ACCEPTED_WORK:{candidate_id:'uuid',accepted_input_id:'uuid',accepted_work_input_id:'uuid',work_id:'uuid',original_revision_id:'uuid',effective_revision_id:'uuid',selection_mode:'mode',selected_line_count:'integer',publication_command_id:'uuid',predecessor_sequence:'positive',source_kind:'acceptedSourceKind',query_disposition:'acceptedQuery?',query_state_sha256:'sha?',input_evidence_sha256:'sha',effective_cut_id:'uuid?',cut_state:'acceptedCutState'},
     CURRENT_CASES: { case_id: 'uuid', candidate_id: 'uuid', case_kind: 'caseKind', tax_treatment: 'tax', status: 'caseStatus', principal_approved: 'money', principal_funded: 'money', principal_recovered: 'money', principal_written_off: 'money', active_hold_amount: 'money' },
-    CASE_COMPONENTS: { case_component_id: 'uuid', case_id: 'uuid', candidate_id: 'uuid', component_ordinal: 'positive', component_revision: 'positive', case_kind: 'caseKind', case_subtype: 'caseSubtype', tax_treatment: 'tax', instruction_kind: 'instruction', direction: 'direction', payroll_stage: 'stage', source_pay_channel: 'channel', resolution_state: 'resolution', approved_source_ex_vat: 'money', funded_source_ex_vat: 'money', recovered_source_ex_vat: 'money', written_off_source_ex_vat: 'money', active_payout_source_ex_vat: 'money', active_recovery_source_ex_vat: 'money' ,case_principal_approved:'money',rule_id:'uuid',current_rule_id:'uuid?',rule_revision:'positive?',weekly_due_source_ex_vat:'money?',minimum_earnings_threshold:'money?',take_home_floor_override:'money?',schedule_start_monday:'date?',next_due_monday:'date?',schedule_week_count:'positive?',outstanding_source_ex_vat:'money',amount_due:'money?',recoverable_this_run:'null',original_liability_reference:'caseReference?',edit_state:'caseEditState',edit_receipt:'caseEditReceipt?',pause_state:'casePauseState',pause_receipt:'casePauseReceipt?',restructure_receipt:'restructureReceipt?'},
+    CASE_COMPONENTS: { case_component_id: 'uuid', case_id: 'uuid', candidate_id: 'uuid', component_ordinal: 'positive', component_revision: 'positive', case_kind: 'caseKind', case_subtype: 'caseSubtype', tax_treatment: 'tax', instruction_kind: 'instruction', direction: 'direction', payroll_stage: 'stage', source_pay_channel: 'channel', resolution_state: 'resolution', approved_source_ex_vat: 'money', funded_source_ex_vat: 'money', recovered_source_ex_vat: 'money', written_off_source_ex_vat: 'money', active_payout_source_ex_vat: 'money', active_recovery_source_ex_vat: 'money' ,case_principal_approved:'money',rule_id:'uuid',current_rule_id:'uuid?',rule_revision:'positive?',weekly_due_source_ex_vat:'money?',minimum_earnings_threshold:'money?',take_home_floor_override:'money?',schedule_start_monday:'date?',next_due_monday:'date?',schedule_week_count:'positive?',outstanding_source_ex_vat:'money',amount_due:'money?',recoverable_this_run:'null',original_liability_reference:'caseReference?',edit_state:'caseEditState',edit_receipt:'caseEditReceipt?',pause_state:'casePauseState',pause_receipt:'casePauseReceipt?',restructure_receipt:'restructureReceipt?',channel_receipt:'channelReceipt?'},
     CURRENT_WORK: { work_id: 'uuid', candidate_id: 'uuid', original_timesheet_id: 'uuid', work_kind: 'workKind', week_ending_date: 'date', approval_state: 'approval', current_revision_id: 'uuid?', applied_revision_id: 'uuid?', position_ready: 'boolean', source_pay_channel: 'channel?', timesheet_reference: 'label?', client_display_name: 'label?', approved_source_ex_vat: 'money?' },
     WORKERS: { run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', frozen_ex_vat: 'money?', frozen_vat: 'money?', frozen_inc_vat: 'money?', review_issue_code: 'issue?', discard_outcome:'discardOutcome?',discard_blocked_code:'discardBlockedCode?' },
     CHANNEL_WORKERS: { run_worker_id: 'uuid', candidate_id: 'uuid', pay_channel:'channel', worker_status:'worker', frozen_ex_vat:'money', frozen_vat:'money', frozen_inc_vat:'money', review_issue_code:'issue?' },
@@ -472,6 +474,7 @@ function prepareIssuesResult(payload,args,actor,base,shape,bad){
     REVIEW_TOTALS:{run_id:'uuid'},
   REVIEW_CASES:{run_id:'uuid',run_worker_id:'uuid',sort:'reviewCaseSort',after:'reviewCursor?',limit:'limit'},
   PREPARE_ISSUES:PREPARE_ISSUE_INPUT,
+    CASE_CHANNEL_SUGGEST:{case_id:'uuid',expected_case_revision:'positive',input:'channelInput?',after:'channelCursor?',limit:'limit'},
     CASE_RESTRUCTURE_PREVIEW:{case_id:'uuid',expected_case_revision:'positive',input:'restructureInput?'},
     CASE_PREVIEW:{input:'caseInput'},
     GUARD:{run_id:'uuid'},
@@ -597,6 +600,11 @@ function field(v,type){
   if(type==='prepareIssueCounts')return shape(v,{skipped_timesheets:'integer',removed_candidates:'integer',scope_count:'integer'});
   if(type.startsWith('prepareIssue')&&!type.endsWith('?'))return prepareIssueField(v,type,field,shape);
     if(type==='pauseReason')return cases.pauseReason(v);
+    if(type==='channelInput')return cases.caseChannelInput(v);
+    if(type==='channelToken')return cases.caseChannelToken(v);
+    if(type==='channelCursor')return cases.caseChannelCursor(v);
+    if(type==='channelReceipt')return cases.caseChannelReceipt(v);
+    if(type==='channelAdmission')return v==='ACCEPTED_PENDING_CHANNEL_RESOLUTION';
     if(type==='restructureInput')return cases.caseRestructureInput(v);
     if(type==='restructureToken')return cases.caseRestructureToken(v);
     if(type==='restructureReceipt')return cases.caseRestructureReceipt(v);
@@ -738,7 +746,7 @@ function field(v,type){
       ||value.provider_status!=='DISABLED'||value.funding_status!=='UNAVAILABLE'||value.csv_available!==value.environment_ready)fail();
     return Object.freeze({...value});
   }
-  const financial = action => ['WRITE_OFF','CASE_CREATE','CASE_RESTRUCTURE','CASE_EDIT','CASE_PAUSE','CASE_RESUME','PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
+  const financial = action => ['WRITE_OFF','CASE_CREATE','CASE_RESTRUCTURE','CASE_CHANNEL_RESOLVE','CASE_EDIT','CASE_PAUSE','CASE_RESUME','PAYE_NET', 'TRANSFER_BEGIN', 'CANCEL_REQUEST', 'CSV_ISSUE'].includes(action);
   const reauthAction = action => ['WRITE_OFF','CANCEL_REQUEST','CSV_ISSUE','PAYE_SAME_WEEK_OVERRIDE'].includes(action);
   function reauthIntentBody(action,args){
     if(action!=='PAYE_SAME_WEEK_OVERRIDE')return requestBody(action,args);
@@ -760,6 +768,7 @@ function field(v,type){
     if((reauthAction(action)||action==='PAYE_GUARD_DECISION') && Object.hasOwn(args || {},'reauth_token'))schema={...schema,reauth_token:'reauthToken'};
     if(action==='CASE_CREATE'){const {command_id,preview_token,...input}=args||{};if(!field(command_id,'uuid')||!cases.caseInput(input)||!cases.caseToken(preview_token)||!cases.equal(preview_token.input,input))fail('REQUEST_INVALID');}
     if(['CASE_PAUSE','CASE_RESUME'].includes(action)&&(!positive(args?.expected_case_revision)||BigInt(args.expected_case_revision)>=9223372036854775807n))fail('REQUEST_INVALID');
+    if(action==='CASE_CHANNEL_RESOLVE'&&(!cases.caseChannelToken(args?.preview_token,args)||BigInt(args.expected_case_revision)>=9223372036854775807n))fail('REQUEST_INVALID');
     if(action==='CASE_RESTRUCTURE'&&(!cases.caseRestructureToken(args?.preview_token,args)||BigInt(args.expected_case_revision)>=9223372036854775807n))fail('REQUEST_INVALID');
     if(action==='CASE_EDIT'){const {command_id,case_id,expected_case_revision,preview_token,...input}=args||{};
       if(!field(command_id,'uuid')||!field(case_id,'uuid')||!positive(expected_case_revision)||!cases.caseInput(input)
@@ -769,7 +778,7 @@ function field(v,type){
       ||(args.decision!=='UMBRELLA_ONLY'&&!field(args.reauth_token,'reauthToken'))))fail('REQUEST_INVALID');
     const bytes=JSON.stringify({ action, ...args });
     if(action==='PAYE_GUARD_DECISION'&&encoder.encode(bytes).byteLength>32768)fail('REQUEST_INVALID');
-    if(financial(action) && encoder.encode(bytes).byteLength>(['CASE_PAUSE','CASE_RESUME'].includes(action)?16384:action==='CASE_RESTRUCTURE'?32768:action==='CASE_EDIT'?49152:action==='CASE_CREATE'?32768:2048))fail('REQUEST_INVALID');
+    if(financial(action) && encoder.encode(bytes).byteLength>(['CASE_PAUSE','CASE_RESUME'].includes(action)?16384:action==='CASE_CHANNEL_RESOLVE'?49152:action==='CASE_RESTRUCTURE'?32768:action==='CASE_EDIT'?49152:action==='CASE_CREATE'?32768:2048))fail('REQUEST_INVALID');
     return bytes;
   }
 function validCaseNetReceipt(p,command){
@@ -793,6 +802,7 @@ function validCaseNetReceipt(p,command){
     }
     if(action==='CASE_CREATE'&&!same(payload.case_id,args.command_id))fail();
     if(['CASE_PAUSE','CASE_RESUME'].includes(action)&&(payload.action!==action||!same(payload.case_id,args.case_id)||payload.expected_case_revision!==args.expected_case_revision))fail();
+    if(action==='CASE_CHANNEL_RESOLVE'&&(!same(payload.case_id,args.case_id)||!same(payload.candidate_id,args.preview_token.context.candidate_id)||payload.expected_case_revision!==args.expected_case_revision||(args.preview_token.context.case_kind==='MANUAL_DEBT'?!same(payload.rule_id,args.command_id):payload.rule_id!==null)))fail();
     if(action==='CASE_RESTRUCTURE'&&(!same(payload.case_id,args.case_id)||!same(payload.rule_id,args.command_id)||!same(payload.candidate_id,args.preview_token.context.candidate_id)||payload.expected_case_revision!==args.expected_case_revision))fail();
     if(action==='CASE_EDIT'&&(!same(payload.case_id,args.case_id)||!same(payload.rule_id,args.command_id)
       ||BigInt(payload.case_revision)!==BigInt(args.expected_case_revision)+1n))fail();
@@ -1121,9 +1131,9 @@ function caseListResult(payload,call,bad){
           const {ok,...payload}=body;try{contract.caseFinanceResult(payload,kind,args,options.actorId.toLowerCase());}catch{fail();}
           return body;
         }
-        const pageSchema=kind==='LINES'&&Object.hasOwn(args,'worksheet_run_id')?{...PAGES.LINES,worksheet_run_id:'uuid'}:kind==='WORKERS'&&Object.hasOwn(args,'attention_only')?{...PAGES.WORKERS,attention_only:'true'}:kind==='CASE_PREVIEW'&&(Object.hasOwn(args,'case_id')||Object.hasOwn(args,'expected_case_revision'))?{input:'caseInput',case_id:'uuid',expected_case_revision:'positive'}:kind==='CASE_COMPONENTS'?{...PAGES.CASE_COMPONENTS,...(Object.hasOwn(args,'edit_command_id')?{edit_command_id:'uuid'}:{}),...(Object.hasOwn(args,'pause_command_id')?{pause_command_id:'uuid'}:{}),...(Object.hasOwn(args,'restructure_command_id')?{restructure_command_id:'uuid'}:{})}:kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
+        const pageSchema=kind==='LINES'&&Object.hasOwn(args,'worksheet_run_id')?{...PAGES.LINES,worksheet_run_id:'uuid'}:kind==='WORKERS'&&Object.hasOwn(args,'attention_only')?{...PAGES.WORKERS,attention_only:'true'}:kind==='CASE_PREVIEW'&&(Object.hasOwn(args,'case_id')||Object.hasOwn(args,'expected_case_revision'))?{input:'caseInput',case_id:'uuid',expected_case_revision:'positive'}:kind==='CASE_COMPONENTS'?{...PAGES.CASE_COMPONENTS,...(Object.hasOwn(args,'edit_command_id')?{edit_command_id:'uuid'}:{}),...(Object.hasOwn(args,'pause_command_id')?{pause_command_id:'uuid'}:{}),...(Object.hasOwn(args,'restructure_command_id')?{restructure_command_id:'uuid'}:{}),...(Object.hasOwn(args,'channel_command_id')?{channel_command_id:'uuid'}:{})}:kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
         if (!Object.hasOwn(PAGES, kind) || !shape(args, pageSchema) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
-        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, (k==='descriptor'||k==='input'||(['PREPARE_ISSUES','REVIEW_CASES','ACTIVE_PREPARATIONS','PAYE_WORKSHEET'].includes(kind)&&k==='after'||['CHANNEL_DRAFT_LIST','CHANNEL_DRAFT_COUNT'].includes(kind)&&['after','context'].includes(k)))?JSON.stringify(v):String(v));
+        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, (k==='descriptor'||k==='input'||(['PREPARE_ISSUES','REVIEW_CASES','ACTIVE_PREPARATIONS','PAYE_WORKSHEET','CASE_CHANNEL_SUGGEST'].includes(kind)&&k==='after'||['CHANNEL_DRAFT_LIST','CHANNEL_DRAFT_COUNT'].includes(kind)&&['after','context'].includes(k)))?JSON.stringify(v):String(v));
         if(kind==='GUARD'&&encoder.encode(query.toString()).byteLength>128*1024)fail('REQUEST_INVALID');
         let body = await call('/api/banking/pay/next/preparation-page?' + query.toString(), { method: 'GET' },false,null,['PROGRESS','ACTIVE_PREPARATIONS'].includes(kind)?Math.min(options.timeoutMs??LIMITS.timeout,2000):options.timeoutMs??LIMITS.timeout);
   if(kind==='LINES'&&Object.hasOwn(args,'worksheet_run_id')){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind)fail();return {ok,kind,...worksheetLinesResult(payload,args,shape,()=>fail())};}
@@ -1132,6 +1142,7 @@ function caseListResult(payload,call,bad){
   if(['CHANNEL_DRAFT_LIST','CHANNEL_DRAFT_COUNT'].includes(kind)){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind)fail();return {ok,kind,...channelDraftResult(payload,kind,args,options.actorId.toLowerCase(),shape,()=>fail())};}
   if(kind==='ACTIVE_PREPARATIONS'){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind)fail();return {ok,kind,...activePreparationsResult(payload,args,options.actorId.toLowerCase(),field,shape,()=>fail())};}
   if(kind==='PREPARE_ISSUES'){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind)fail();return {ok,kind,...prepareIssuesResult(payload,args,options.actorId.toLowerCase(),field,shape,()=>fail())};}
+  if(kind==='CASE_CHANNEL_SUGGEST'){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind||!cases.caseChannelPreview(payload,args,options.actorId))fail();return body;}
   if(kind==='CASE_RESTRUCTURE_PREVIEW'){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind||!cases.caseRestructurePreview(payload,args,options.actorId))fail();return body;}
   if(kind==='CASE_PREVIEW'){
     if(!record(body)||Object.keys(body).sort().join()!=='complete,kind,next_cursor,ok,rows'||body.ok!==true||body.kind!==kind
@@ -1274,6 +1285,7 @@ function caseListResult(payload,call,bad){
           if(kind==='CASE_COMPONENTS'&&(!same(r.pause_state.case_id,r.case_id)||!same(r.pause_state.candidate_id,r.candidate_id)
             ||(r.pause_receipt!==null&&(!same(r.pause_receipt.case_id,r.case_id)||!same(r.pause_receipt.candidate_id,r.candidate_id)||!same(r.pause_receipt.command_id,args.pause_command_id)))
             ||(Object.hasOwn(args,'pause_command_id')?(r.pause_receipt===null):r.pause_receipt!==null)))fail();
+          if(kind==='CASE_COMPONENTS'&&(args.channel_command_id?(!r.channel_receipt||!same(r.channel_receipt.command_id,args.channel_command_id)||!same(r.channel_receipt.case_id,r.case_id)||!same(r.channel_receipt.candidate_id,r.candidate_id)):r.channel_receipt!==null))fail();
           if(kind==='CASE_COMPONENTS'&&((r.restructure_receipt!==null&&(!same(r.restructure_receipt.case_id,r.case_id)||!same(r.restructure_receipt.candidate_id,r.candidate_id)||!same(r.restructure_receipt.command_id,args.restructure_command_id)))
             ||(Object.hasOwn(args,'restructure_command_id')?r.restructure_receipt===null:r.restructure_receipt!==null)))fail();
           if(kind==='CASE_COMPONENTS'&&(!same(r.edit_state.case_id,r.case_id)||!same(r.edit_state.candidate_id,r.candidate_id)
