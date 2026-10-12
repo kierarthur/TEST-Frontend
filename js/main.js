@@ -7180,11 +7180,19 @@ function renderTopNav(){
                 return;
               }
               const openNextIssueTimesheet = async (issue,review=false) => {
-                    const actor = String(SESSION?.user?.id || '').toLowerCase();
+                    const actor = String(SESSION?.user?.id || '').toLowerCase(),uuid=id=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||'');
+                    const captured=review&&issue.reader_kind==='PREPARE_ISSUES';
                     if (actor !== issue.context.actor_user_id || ownerClient.peek()?.active_owner !== 'NEXT'
                         || !issue.physical_timesheet_id || (review
-                          ? ![issue.accepted_run_id,issue.run_worker_id,issue.work_id,issue.candidate_id,issue.physical_timesheet_id].every(id=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||''))
-                            || !['SOURCE_PAY_QUERY_OPEN','SOURCE_PAY_QUERY_EVIDENCE_UNAVAILABLE'].includes(issue.reason_code)
+                          ? captured
+                            ? ![issue.accepted_run_id,issue.work_id,issue.expected_revision_id,issue.candidate_id,issue.physical_timesheet_id].every(uuid)
+                              || !(issue.run_worker_id===null||uuid(issue.run_worker_id))
+                              || !/^[1-9][0-9]{0,18}$/.test(issue.physical_timesheet_version||'')
+                              || issue.context.owner_epoch!==ownerClient.peek()?.owner_epoch
+                              || !['CANDIDATE','SKIPPED_WORK','SYSTEM_RELEASE','OFFICE_RELEASE','EXPIRED','DISCARDED'].includes(issue.origin)
+                              || !/^(?:(?:SKIP|RELEASE|CANDIDATE|EXPIRED|DISCARDED):|PAGE:[1-9][0-9]{0,18}:)[0-9a-f-]{36}$/.test(issue.row_key||'')
+                            : ![issue.accepted_run_id,issue.run_worker_id,issue.work_id,issue.candidate_id,issue.physical_timesheet_id].every(uuid)
+                              || !['SOURCE_PAY_QUERY_OPEN','SOURCE_PAY_QUERY_EVIDENCE_UNAVAILABLE'].includes(issue.reason_code)
                           : issue.accepted_run_id)) throw new Error('Payment unavailable');
                     const parentFooter = document.querySelector('[data-next-window-footer]');
                     const parent = window.__modalStack?.at(-1);

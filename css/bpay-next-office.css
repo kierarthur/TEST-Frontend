@@ -908,3 +908,62 @@
  #modal.ctms-modern-modal .bpay-next-case-list-tools > span { width:100%; }
  #modal.ctms-modern-modal .bpay-next-case-list-tabs .btn { padding:10px; }
 }
+/* DR15 supplied SCR46 and native review: whole-list sort, continuous scrolling. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-omitted-list) {width:min(980px,calc(100vw - 48px));}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-list {display:flex;flex-direction:column;gap:14px;min-width:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-tools {display:flex;justify-content:flex-end;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-information {display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;border:1px solid var(--ctms-modal-line);border-radius:13px;background:var(--ctms-modal-panel-raised);line-height:1.5;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll {max-height:min(560px,58vh);overflow:auto;overscroll-behavior:contain;border:1px solid var(--ctms-modal-line);border-radius:13px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll table {width:100%;table-layout:fixed;border-collapse:collapse;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll :is(th,td) {padding:12px 14px;border:0;border-bottom:1px solid var(--ctms-modal-line-soft);text-align:left;vertical-align:top;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll th {position:sticky;top:0;z-index:1;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll :is(th,td):nth-child(1) {width:24%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll :is(th,td):nth-child(2) {width:22%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll :is(th,td):nth-child(3) {width:34%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read :is(.bpay-next-omitted-scroll,.bpay-next-review-results) th button {border:0;background:transparent;box-shadow:none;padding:0;min-height:28px;color:var(--ctms-modal-sub);font-size:11px;font-weight:760;text-transform:uppercase;letter-spacing:.055em;text-align:left;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read :is(.bpay-next-omitted-scroll,.bpay-next-review-results) small {display:block;color:var(--ctms-modal-sub);margin-top:5px;font-size:12px;line-height:1.5;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll tr[aria-selected=true] {background:var(--ctms-modal-panel-raised);box-shadow:inset 3px 0 var(--ctms-modal-accent-bright);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read :is(.bpay-next-omitted-list,.bpay-next-worker-review) .bpay-next-phone-open {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(1) {width:24%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(2) {width:16%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(3) {width:30%;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-omitted-list) {width:calc(100vw - 12px);}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll {border:0;max-height:56vh;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll :is(table,tbody,tr,td) {display:block;width:auto;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll thead {display:none;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll tr {border:1px solid var(--ctms-modal-line);border-radius:13px;padding:8px;margin-bottom:10px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll :is(th,td):nth-child(n) {width:auto;border:0;padding:6px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read :is(.bpay-next-omitted-list,.bpay-next-worker-review) .bpay-next-phone-open {display:inline-flex;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-list .bpay-next-desktop-open {display:none;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-omitted-list) :is(#btnCloseModal,button) {min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-information {align-items:flex-start;flex-direction:column;}
+}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-phone-sort {display:none;gap:6px;align-items:center;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-summary {font-size:12px;color:var(--ctms-modal-sub);margin:0;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-phone-sort {display:flex;flex:1;flex-wrap:wrap;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-phone-sort select {min-height:44px;background:var(--ctms-modal-panel-raised);color:var(--ctms-modal-text);border:1px solid var(--ctms-modal-line);border-radius:10px;padding:8px;max-width:100%;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-tools {gap:12px;align-items:center;}
+}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-tools:not(:has(button)) {display:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll th[aria-sort=ascending] button::after,#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results th[aria-sort=ascending] button::after {content:' ▲';color:var(--ctms-modal-cyan);font-size:10px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll th[aria-sort=descending] button::after,#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results th[aria-sort=descending] button::after {content:' ▼';color:var(--ctms-modal-cyan);font-size:10px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions {flex-wrap:nowrap;gap:6px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(1) {width:23%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(2) {width:14%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(3) {width:28%;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions button {padding:8px 10px;font-size:12px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions button[data-next-secondary] {background:transparent;box-shadow:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results th:nth-child(2) button {text-align:right;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-tools:not(:has(button)) {display:flex;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-scroll td>small {grid-column:2;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-results :is(th,td):nth-child(n) {width:auto;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-review-row-actions {flex-wrap:wrap;}
+}
+
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-omitted-information {border-left:4px solid var(--ctms-modal-cyan);}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worker-review .bpay-next-omitted-information {display:flex;align-items:center;justify-content:space-between;flex-direction:row;text-align:left;gap:12px;}
+@media(max-width:700px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worker-review .bpay-next-omitted-information {align-items:flex-start;flex-direction:column;}}
+@media(max-width:700px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worker-review .bpay-next-desktop-open {display:none;}}
