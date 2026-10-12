@@ -1244,3 +1244,23 @@
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-table td.bpay-next-issue-money.is-empty{display:none;}
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-issue-lists) :is(#btnCloseModal,[data-next-window-footer] .btn){min-height:44px;min-width:44px;}
 }
+
+/* SP04 / SCR139: native finite per-row result, in the supplied medium frame. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-unauthorise-result){width:min(980px,calc(100vw - 32px));color-scheme:dark;}
+#modal.ctms-modern-modal:has(.bpay-next-unauthorise-result) #modalActions{display:none;}
+#modal.ctms-modern-modal .bpay-next-unauthorise-result{min-width:0;}
+#modal.ctms-modern-modal .bpay-next-unauthorise-table{width:100%;border:1px solid var(--ctms-modal-line);border-radius:13px;overflow:hidden;}
+#modal.ctms-modern-modal .bpay-next-unauthorise-table th{position:sticky;top:0;z-index:1;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-unauthorise-table td{vertical-align:middle;white-space:normal;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-unauthorise-table :is(strong,small){display:block;}
+#modal.ctms-modern-modal .bpay-next-unauthorise-table small{color:var(--ctms-modal-muted);margin-top:5px;line-height:1.45;}
+#modal.ctms-modern-modal .bpay-next-unauthorise-section td{font-size:11px;text-transform:uppercase;font-weight:750;letter-spacing:.04em;background:var(--ctms-modal-panel-raised);color:var(--ctms-modal-muted);}
+#modal.ctms-modern-modal .bpay-next-unauthorise-table .btn{margin-top:8px;min-height:44px;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read.bpay-next-wide-window:has(.bpay-next-unauthorise-result){width:calc(100vw - 12px);}
+ #modal.ctms-modern-modal:has(.bpay-next-unauthorise-result) #btnCloseModal{min-width:44px;min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-unauthorise-table td:first-child{display:block;}
+ #modal.ctms-modern-modal .bpay-next-unauthorise-table td:first-child::before{display:none;}
+ #modal.ctms-modern-modal .bpay-next-unauthorise-table td:first-child :is(strong,small){display:block;grid-column:1 / -1;}
+ #modal.ctms-modern-modal .bpay-next-unauthorise-table td:last-child small{grid-column:1 / -1;}
+}

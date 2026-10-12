@@ -185720,12 +185720,7 @@ function bindBulkAuthoriseLists(state) {
         });
         const completionModal = (unauthoriseOutcome && typeof unauthoriseOutcome === 'object') ? unauthoriseOutcome.completionModal : null;
         if (completionModal?.shouldShow && !st.__workbench_modal_spinner_active && typeof openUiConfirmModal === 'function') {
-          await openUiConfirmModal({
-            title: completionModal.title || 'Bulk Unauthorise result',
-            message: completionModal.message || '',
-            confirm_label: completionModal.confirm_label || 'OK',
-            cancel_label: completionModal.cancel_label || ''
-          });
+          await showBulkUnauthoriseCompletion(completionModal);
         }
       }
     });
@@ -261725,6 +261720,106 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
 }
 
 
+
+// SP-04: the native bulk result uses only the original selected rows and owner replies.
+function weeklySourceUnauthoriseReason(result) {
+  const code = String(result?.error_code || result?.code || '');
+  const copy = {
+    BPAY_NEXT_SOURCE_WITHDRAW_FINANCIAL_DEPENDENCY: 'A payment depends on this Timesheet, so its authorisation cannot be withdrawn.',
+    WEEKLY_SOURCE_UNAUTHORISE_PAID: 'Already paid, so it stays authorised.',
+    WEEKLY_SOURCE_UNAUTHORISE_INVOICED: 'This Timesheet is on an invoice, so it stays authorised.',
+    WEEKLY_SOURCE_UNAUTHORISE_LATER_DECISION_EXISTS: 'A later Source decision uses this Timesheet; check the Source details.',
+    WEEKLY_SOURCE_UNAUTHORISE_BANKING_ACTIVE: 'This Timesheet is in Banking Pay; check its payment details.',
+    WEEKLY_SOURCE_UNAUTHORISE_MONEY_UNRESOLVED: 'The payment outcome needs checking before authorisation can be withdrawn.',
+    WEEKLY_SOURCE_UNAUTHORISE_RECOVERY_EXISTS: 'A payment recovery uses this Timesheet; check its payment history.',
+    WEEKLY_SOURCE_UNAUTHORISE_INVOICE_OPERATION_ACTIVE: 'An invoice update is in progress; try again when it finishes.',
+    WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY: 'Another update is in progress; try again in a moment.',
+    WEEKLY_SOURCE_CANDIDATE_BUSY: 'Another update is in progress; try again in a moment.',
+    BPAY_NEXT_MODULE_NOT_ACTIVE: 'Banking Pay is not available for this agency yet.',
+    BPAY_NEXT_OWNER_STATUS_UNAVAILABLE: 'This Timesheet cannot be changed right now; try again shortly.'
+  };
+  const stale = result?.source_outcome === 'STALE' || result?.stale === true;
+  const message = stale ? 'This Timesheet has changed; refresh it before trying again.'
+    : copy[code] || 'This Timesheet cannot be unauthorised; check its details.';
+  return window.CloudTMSWeeklySourcePresentationV1?.withdrawalRefusalText?.({
+    answered: true, allowed: false, refusal_code: code,
+    refusal_nature: result?.refusal_nature, refusal_message: message
+  }) || message;
+}
+function openWeeklySourceUnauthoriseResult(completion) {
+  const packet = completion?.sourceResult;
+  if (!packet || SESSION?.user?.id !== packet.actor
+      || bankingNextOwnerClient()?.peek()?.active_owner !== 'NEXT'
+      || bankingNextOwnerClient()?.peek()?.owner_epoch !== packet.ownerEpoch
+      || (packet.parentFrame && window.__modalStack?.at(-1) !== packet.parentFrame)) return false;
+  const el = (tag, text, className) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;};
+  const content=el('section',undefined,'bpay-next-unauthorise-result');
+  const headerDetail=el('span',packet.items.length+' Timesheet'+(packet.items.length===1?'':'s')+' selected','bpay-next-progress-subtitle');
+  const footer=el('div');footer.hidden=true;
+  let frame=null,closed=false;
+  const focusContinuity=window.CloudTMSBpayNextUi.continuity(content,document,()=>content.querySelector('[role="region"]') || document.getElementById('btnCloseModal'));
+  const current=()=>!closed && SESSION?.user?.id===packet.actor
+    && bankingNextOwnerClient()?.peek()?.active_owner==='NEXT'
+    && bankingNextOwnerClient()?.peek()?.owner_epoch===packet.ownerEpoch
+    && (!packet.parentFrame || window.__modalStack?.includes(packet.parentFrame));
+  const results=packet.items.map((item,index)=>({item,row:packet.rows[index] || {},result:packet.results.find(r=>
+    r?.row_key===item.row_key || r?.timesheet_id===item.timesheet_id || r?.expected_timesheet_id===item.expected_timesheet_id) || null,busy:false}));
+  const human=value=>{const t=String(value || '').trim();return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(t)?'':t;};
+  const date=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value))?String(value).split('-').reverse().join('/'):'—';
+  const state=entry=>entry.result?.source_outcome==='UNKNOWN'?'unknown'
+    : entry.result?.success===true || entry.result?.ok===true?'done'
+      : entry.result?'refused':'pending';
+  const paint=()=>{
+    if(!current())return;
+    const focus=focusContinuity.before();
+    const host=el('div',undefined,'ctms-universal-table-host'),table=el('table',undefined,'ctms-universal-table ctms-universal-card-table bpay-next-unauthorise-table');
+    host.tabIndex=0;host.setAttribute('role','region');host.setAttribute('aria-label','Unauthorise result');
+    table.setAttribute('aria-label','Unauthorise result');const head=el('thead'),headRow=el('tr');
+    for(const label of ['Timesheet','Candidate','Result']){const th=el('th',label);th.scope='col';headRow.append(th);}head.append(headRow);table.append(head);const body=el('tbody');
+    const groups=[['done','Done'],['refused','Refused'],['unknown','Not confirmed'],['pending','Still working']];
+    for(const[key,label]of groups){const members=results.filter(entry=>state(entry)===key);if(!members.length)continue;
+      const section=el('tr',undefined,'bpay-next-unauthorise-section'),title=el('td',label+' · '+members.length);title.colSpan=3;section.append(title);body.append(section);
+      for(const entry of members){const row=entry.row,result=entry.result,tr=el('tr');
+        const ts=el('td');ts.dataset.label='Timesheet';ts.append(el('strong','w/e '+date(row.week_ending_date || row.week_end || row.weekEndingDate)));const client=human(row.client_display_name || row.client_name || row.hospital_name);if(client)ts.append(el('small',client));
+        const candidate=el('td');candidate.dataset.label='Candidate';const name=human(row.candidate_display_name || row.candidate_name || [row.candidate_first_name,row.candidate_surname || row.candidate_last_name].filter(Boolean).join(' '));const ref=human(row.candidate_reference || row.candidate_ref || row.tms_ref || row.tms_number);candidate.textContent=[name,ref].filter(Boolean).join(' · ') || '—';
+        const outcome=el('td');outcome.dataset.label='Result';const value=key==='done'?(result?.source_outcome==='WITHDRAWN'&&result.withdrawn===true?'Withdrawn':'Unauthorised'):key==='refused'?'Refused':key==='pending'?'Still working':'Not confirmed';
+        outcome.setAttribute('role',!entry.busy&&(key==='refused'||key==='unknown')?'alert':'status');
+        outcome.append(el('span',value,'candidate-office-badge candidate-office-badge--'+(key==='done'?'success':key==='refused'?'danger':key==='pending'?'info':'warning')));
+        const reason=entry.busy?'Checking the same request.':key==='refused'?weeklySourceUnauthoriseReason(result):key==='unknown'?'The outcome could not be confirmed; try again to check the same request.':key==='pending'?'This request is still being processed.':value==='Withdrawn'?'Not authorised for payment.':'';
+        if(reason)outcome.append(el('small',reason));
+        if(key==='unknown'&&result.source_outcome==='UNKNOWN'){
+          const retry=el('button',entry.busy?'Checking…':'Try again','btn btn-outline');retry.type='button';retry.disabled=entry.busy;
+          retry.dataset.nextFocusKey='withdrawal:'+entry.item.timesheet_id;
+          retry.onclick=async()=>{if(entry.busy||!current()||!frame?.active())return;entry.busy=true;paint();
+            const original=entry.item;try{
+              let reply;try{reply=await apiPostJson('/api/timesheets/'+encodeURIComponent(original.timesheet_id)+'/unauthorise',{
+                expected_timesheet_id:original.expected_timesheet_id,expected_row_signature:original.expected_row_signature,
+                context:'bulk_authorise',response_context:'minimal_lifecycle_mutation'
+              });}catch(error){reply=error?.json;}
+              if(!current()||!frame?.active())return;
+              if(reply?.source_outcome==='WITHDRAWN'&&reply.ok===true&&reply.withdrawn===true || reply?.source_outcome==='REFUSED'&&reply.ok===false || reply?.source_outcome==='STALE'&&reply.ok===false){entry.result={...reply,success:reply.ok===true};}
+              else if(reply?.ok===true&&reply?.unauthorised===true){entry.result={...reply,success:true};}
+              // Anything else remains unconfirmed with these exact original inputs.
+            }finally{entry.busy=false;if(current()&&frame?.active())paint();}
+          };outcome.append(retry);
+        }
+        tr.append(ts,candidate,outcome);body.append(tr);
+      }
+    }
+    if(!results.length){const row=el('tr'),cell=el('td','No results are available; close this window and check the Timesheets.');cell.colSpan=3;row.append(cell);body.append(row);}
+    table.append(body);host.append(table);content.replaceChildren(host);
+    focusContinuity.after(focus);
+  };
+  const adapter=window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal});
+  frame=adapter({title:'Unauthorise result',content,footer,headerDetail,canFocus:current,onDismiss:()=>{closed=true;},onMount:paint});
+  return true;
+}
+async function showBulkUnauthoriseCompletion(completion) {
+  if(completion?.sourceResult)return openWeeklySourceUnauthoriseResult(completion);
+  if(completion?.shouldShow&&typeof openUiConfirmModal==='function')await openUiConfirmModal(completion);
+  return true;
+}
+
 async function handleBulkUnauthoriseSelected(state, options = {}) {
   const { GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][UNAUTHORISE-SELECTED]')
@@ -261748,6 +261843,8 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     return '';
   };
   const opts = (options && typeof options === 'object') ? options : {};
+  const sourceActor=SESSION?.user?.id || null, sourceParentFrame=window.__modalStack?.at(-1) || null;
+  let sourceOwner=null;
   const showCompletionModal = opts.showCompletionModal !== false;
   const returnCompletionResult = opts.returnCompletionResult === true;
   const actionSource = firstString(opts.actionSource, trimStr(opts.source) === 'action-row' ? 'action-row-unauthorise' : '', 'bulk-unauthorise');
@@ -261778,7 +261875,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
       visible_processed_eligible_rows: Array.isArray(visible?.visible_processed_eligible_rows) ? visible.visible_processed_eligible_rows.slice() : visibleRows.filter((row) => trimStr(row?.bulk_authorise_section || '') === 'processed_eligible')
     };
   };
-  const expectedSignatureOf = (row) => firstString(row?.expected_row_signature, row?.backend_row_signature, row?.mutation_row_signature, row?.row_backend_signature, row?.row_signature, row?.render_signature);
+  const expectedSignatureOf = (row) => firstString(row?.expected_row_signature, row?.backend_row_signature, row?.mutation_row_signature, row?.row_backend_signature, row?.row_signature);
   const buildItem = (row) => ({
     row_key: rowIdentityKey(row),
     timesheet_id: firstString(row?.timesheet_id, row?.current_timesheet_id) || null,
@@ -261870,6 +261967,8 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
       return selectionCheck;
     }
 
+    sourceOwner=await bankingNextOwnerClient()?.qualify('timesheet-unauthorise:'+String(sourceParentFrame?.id || sourceActor));
+    if(!sourceOwner || SESSION?.user?.id!==sourceActor || (sourceParentFrame && window.__modalStack?.at(-1)!==sourceParentFrame))throw new Error('The Timesheets window changed; open it again.');
     const preMutationActiveKey = rowIdentityKey(st.active_row || {});
     const preMutationUnauthoriseKeys = selectionKeys.slice();
     const selectedRows = selectionKeys.map((key) => authorisedByKey.get(key)).filter((row) => row && typeof row === 'object');
@@ -262015,6 +262114,11 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     if (staleRows.length) summaryLines.push('', `${staleRows.length} stale row${staleRows.length === 1 ? '' : 's'} need rechecking.`);
     st.summary_message = summaryLines.join('\n');
     const completionModal = { shouldShow: true, title: 'Bulk Unauthorise result', message: st.summary_message, confirm_label: 'OK', cancel_label: '' };
+    if(sourceOwner.active_owner==='NEXT'){
+      completionModal.sourceResult={actor:sourceActor,ownerEpoch:sourceOwner.owner_epoch,parentFrame:sourceParentFrame,
+        items:items.map(item=>Object.freeze({...item})),rows:selectedRows.map(row=>({...row})),results:results.map(row=>({...row}))};
+      st.summary_message=successCount+' Timesheets changed · '+failureCount+' outcomes to check';
+    }
 
     st.batch_busy = false;
     st.__bulk_unauthorise_selected_in_flight = false;
@@ -262032,7 +262136,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     }
     if (!isMultiRowAction && showCompletionModal && typeof openUiConfirmModal === 'function') {
       try {
-        await openUiConfirmModal({ title: completionModal.title, message: completionModal.message, confirm_label: completionModal.confirm_label, cancel_label: completionModal.cancel_label });
+        await showBulkUnauthoriseCompletion(completionModal);
       } catch (modalErr) {
         postMutationRefreshFailed = true;
         postMutationRefreshError = postMutationRefreshError || modalErr;
@@ -264511,10 +264615,11 @@ function bindBulkAuthoriseActionRow(state) {
       }
       clearSyntheticBulkAuthoriseDirtyIfClean();
       const liveMeta = readLiveActionMeta();
-      await withExistingModalLoadingSpinner(st, 'Working', async () => {
-        await handleBulkUnauthoriseSelected(st, {
+      const outcome=await withExistingModalLoadingSpinner(st, 'Working', async () => {
+        return await handleBulkUnauthoriseSelected(st, {
           source: 'action-row',
           showCompletionModal: false,
+          returnCompletionResult: true,
           actionRowKey: liveMeta.liveRowKey,
           activeRowStrategy: 'same-row-after-unauthorise',
           actionSource: 'action-row-unauthorise',
@@ -264525,6 +264630,7 @@ function bindBulkAuthoriseActionRow(state) {
           actionRecordIdentity: liveMeta.liveIdentity
         });
       });
+      if(outcome?.completionModal?.sourceResult)await showBulkUnauthoriseCompletion(outcome.completionModal);
     }
   }, { withSpinner: false });
 
@@ -276534,7 +276640,9 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     mc.timesheetDetails?.tsfin?.expected_row_signature
   ) : '';
 
-  if ((!lifecycleSignatureTrusted || !expectedRowSignature) && typeof refreshTimesheetLifecycleAffectedRows === 'function') {
+  const unauthoriseOwner=await bankingNextOwnerClient()?.qualify('timesheet-unauthorise:'+tsId);
+  if(!unauthoriseOwner)throw new Error('This Timesheet cannot be changed right now; try again shortly.');
+  if (unauthoriseOwner.active_owner!=='NEXT' && (!lifecycleSignatureTrusted || !expectedRowSignature) && typeof refreshTimesheetLifecycleAffectedRows === 'function') {
     try {
       const liveCtx = window.modalCtx || mc || {};
       const refreshResult = await refreshTimesheetLifecycleAffectedRows({
