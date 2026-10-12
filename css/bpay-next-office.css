@@ -1040,3 +1040,13 @@
  #modal.ctms-modern-modal .bpay-next-case-review-scroll td::before{content:attr(data-label);display:block;color:var(--ctms-modal-sub);font-size:12px;margin-bottom:3px}
  #modal.ctms-modern-modal .bpay-next-case-review-scroll tr{border-bottom:1px solid var(--ctms-modal-line);padding:8px}
 }
+
+/* DR13 card-required original source balances, inside the owned deduction cell. */
+#modal.ctms-modern-modal .bpay-next-case-review-scroll .bpay-next-case-balance-meta{font-size:11px;margin:10px 0 0;color:var(--ctms-modal-sub)}
+#modal.ctms-modern-modal .bpay-next-case-balance-meta>div{display:flex;justify-content:space-between;gap:12px;margin:6px 0}
+#modal.ctms-modern-modal .bpay-next-case-balance-meta dd{margin:0;color:var(--ctms-modal-text);font-variant-numeric:tabular-nums;white-space:nowrap}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worker-review .bpay-next-review-results .bpay-next-case-review-scroll td:nth-child(n){display:block;width:auto}
+ #modal.ctms-modern-modal .bpay-next-case-balance-meta{width:100%}
+ #modal.ctms-modern-modal .bpay-next-case-balance-meta dt{min-width:0;overflow-wrap:normal;word-break:normal}
+}

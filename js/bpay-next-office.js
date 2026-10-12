@@ -206,7 +206,7 @@
 // DR16 explicit frozen review contracts, shared shape in Worker and Office.
 const REVIEW_CONTEXT={run_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',review_revision:'integer',run_status:'reviewRun',selection_state:'reviewSelection',paye_totals_revision:'integer',umbrella_totals_revision:'integer',run_worker_id:'uuid?',candidate_id:'uuid?',worker_status:'reviewWorker?',preparation_revision:'positive?',captured_preparation_revision:'positive?',case_selection_revision:'integer?',net_request_revision:'integer?',net_projection_revision:'integer?',sort:'reviewCaseSort?'};
 const REVIEW_TOTAL={candidate_count:'integer',ready_count:'integer',gross_ex_vat:'reviewMoney',gross_vat:'reviewMoney',gross_inc_vat:'reviewMoney',gross_stage_deductions:'reviewMoney',net_recovery_reserved:'reviewMoney',cash_known:'reviewMoney',net_missing_count:'integer',applicable_net_missing_count:'integer',net_replacement_pending_count:'integer',net_refused_code:'reviewNetRefusal?'};
-const REVIEW_CASE={case_id:'uuid',case_component_id:'uuid',instruction_id:'uuid?',selected:'boolean',case_subtype:'label?',direction:'reviewDirection?',payroll_stage:'reviewStage?',source_pay_channel:'channel?',label:'label',due:'reviewAmount?',this_draft:'reviewAmount?',outstanding_after:'reviewAmount?',result_basis:'reviewBasis?',reason_code:'issue?',note:'label',captured_at_utc:'timestamp?',other_run_capacity_reduction:'reviewAmount?',other_run_capacity_reason:'reviewForeign?',sort_key:'reviewKey'};
+const REVIEW_CASE={case_id:'uuid',case_component_id:'uuid',instruction_id:'uuid?',selected:'boolean',case_subtype:'label?',direction:'reviewDirection?',payroll_stage:'reviewStage?',source_pay_channel:'channel?',label:'label',due:'reviewAmount?',this_draft:'reviewAmount?',outstanding_after:'reviewAmount?',principal_outstanding:'reviewAmount?',active_reserved_before:'reviewAmount?',recoverable_this_run:'reviewAmount?',remaining_unreserved:'reviewAmount?',unreserved_limit_note:'reviewLimitNote?',result_basis:'reviewBasis?',reason_code:'issue?',note:'label',captured_at_utc:'timestamp?',other_run_capacity_reduction:'reviewAmount?',other_run_capacity_reason:'reviewForeign?',sort_key:'reviewKey'};
 function reviewField(v,t,base,shape){
  if(t==='reviewAmount')return typeof v==='string'&&/^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/.test(v);
  if(t==='reviewMoney')return typeof v==='string'&&/^-?(?:0|[1-9]\d{0,35})(?:\.\d{1,2})?$/.test(v);
@@ -218,6 +218,7 @@ function reviewField(v,t,base,shape){
  if(t==='reviewDirection')return ['PAYMENT','DEDUCTION'].includes(v);
  if(t==='reviewStage')return ['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'].includes(v);
  if(t==='reviewBasis')return ['DRAFT','NET_ACCEPTED'].includes(v);
+ if(t==='reviewLimitNote')return v==='Shared balance limits this amount';
  if(t==='reviewForeign')return ['SAME_WEEK_INSTALMENT','CASE_BALANCE'].includes(v);
  if(t==='reviewContext')return shape(v,REVIEW_CONTEXT);
  if(t==='reviewKey')return Array.isArray(v)&&v.length===3&&typeof v[0]==='boolean'&&(v[0]?v[1]===null:base(v[1],'label'))&&base(v[2],'uuid');
@@ -253,6 +254,10 @@ function reviewResult(p,kind,args,actor,base,shape,bad){
  if(c.run_worker_id!==args.run_worker_id||c.candidate_id===null||c.worker_status===null||['preparation_revision','captured_preparation_revision','case_selection_revision','net_request_revision','net_projection_revision'].some(k=>c[k]===null)||c.sort!==args.sort||p.rows.length>args.limit||p.complete!==(p.next_cursor===null)||!p.complete&&p.rows.length===0||args.after!==null&&!reviewSame(args.after.context,c)||BigInt(p.counts.selected)+BigInt(p.counts.excluded)!==BigInt(p.counts.scope_count))bad();
  let previous=args.after?.key??null;const ids=new Set();
  for(const r of p.rows){
+  if(r.recoverable_this_run!==(r.selected&&r.direction==='DEDUCTION'?r.this_draft:null)
+   ||r.remaining_unreserved!==null&&(r.principal_outstanding===null||r.active_reserved_before===null||r.captured_at_utc===null)
+   ||r.unreserved_limit_note!==null&&r.remaining_unreserved===null
+   ||r.remaining_unreserved!==null&&reviewPence(r.remaining_unreserved)>((reviewPence(r.principal_outstanding)-reviewPence(r.active_reserved_before))>0n?reviewPence(r.principal_outstanding)-reviewPence(r.active_reserved_before):0n))bad();
   if((r.other_run_capacity_reduction===null||reviewPence(r.other_run_capacity_reduction)===0n)!==(r.other_run_capacity_reason===null)||ids.has(r.case_component_id)||r.sort_key[2]!==r.case_component_id||!r.selected&&(r.instruction_id!==null||r.this_draft!==null||r.result_basis!==null)||r.instruction_id===null&&r.result_basis!==null||r.outstanding_after!==null&&reviewPence(r.outstanding_after)<0n)bad();ids.add(r.case_component_id);
   const value=args.sort.startsWith('DEDUCTION_')?r.label:args.sort.startsWith('DUE_')?r.due:args.sort.startsWith('THIS_DRAFT_')?r.this_draft:args.sort.startsWith('OUTSTANDING_')?r.outstanding_after:r.note;
   if(!reviewSame(r.sort_key,[value===null,value,r.case_component_id])||previous!==null&&reviewCompare(r.sort_key,previous,args.sort)<=0)bad();previous=r.sort_key;
@@ -405,7 +410,7 @@ function validDiscardProgress(p){
 }
 function field(v,type){
  if(type==='reviewCounts')return shape(v,{selected:'integer',excluded:'integer',scope_count:'integer'});
- if(["reviewAmount","reviewMoney","reviewRun","reviewSelection","reviewWorker","reviewCaseSort","reviewNetRefusal","reviewDirection","reviewStage","reviewBasis","reviewForeign","reviewContext","reviewKey","reviewCursor","reviewCases","reviewTotal","reviewChannels"].includes(type))return reviewField(v,type,field,shape);
+ if(["reviewLimitNote","reviewAmount","reviewMoney","reviewRun","reviewSelection","reviewWorker","reviewCaseSort","reviewNetRefusal","reviewDirection","reviewStage","reviewBasis","reviewForeign","reviewContext","reviewKey","reviewCursor","reviewCases","reviewTotal","reviewChannels"].includes(type))return reviewField(v,type,field,shape);
   if(type==='prepareIssueRows')return Array.isArray(v)&&v.length<=100&&v.every(r=>shape(r,PREPARE_ISSUE_ROW));
   if(type==='prepareIssueCounts')return shape(v,{skipped_timesheets:'integer',removed_candidates:'integer',scope_count:'integer'});
   if(type.startsWith('prepareIssue')&&!type.endsWith('?'))return prepareIssueField(v,type,field,shape);
@@ -2039,8 +2044,14 @@ function caseListResult(payload,call,bad){
       for(const [label,key]of [['Deduction','DEDUCTION'],['Due','DUE'],['This Draft','THIS_DRAFT'],['Outstanding after','OUTSTANDING'],['Note','NOTE']])for(const direction of ['ASC','DESC']){const o=el('option',label+(direction==='ASC'?' ascending':' descending'));o.value=key+'_'+direction;select.append(o);}
       select.value=state.sort;select.disabled=locked;select.addEventListener('change',()=>void act(async()=>{state.sort=select.value;await readCases(row);}));phone.append(select);
       for(const item of state.page.rows){
-        const tr=el('tr');tr.tabIndex=0;tr.dataset.caseComponentId=item.case_component_id;tr.dataset.nextFocusKey='review-case:'+item.case_component_id;tr.setAttribute('aria-selected',String(state.selected===item.case_component_id));tr.addEventListener('click',()=>{state.selected=item.case_component_id;for(const n of body.children)n.setAttribute('aria-selected',String(n===tr));});tr.addEventListener('keydown',e=>{if(!['ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();e.stopPropagation();const all=Array.from(body.children),i=all.indexOf(tr),next=e.key==='Home'?all[0]:e.key==='End'?all.at(-1):all[Math.max(0,Math.min(all.length-1,i+(e.key==='ArrowDown'?1:-1)))];if(next){state.selected=next.dataset.caseComponentId;for(const n of all)n.setAttribute('aria-selected',String(n===next));next.focus();next.scrollIntoView({block:'nearest'});}});const values=[item.label,money(item.due),money(item.this_draft),money(item.outstanding_after),item.note||'—'];
+        const tr=el('tr');tr.tabIndex=0;tr.dataset.caseComponentId=item.case_component_id;tr.dataset.nextFocusKey='review-case:'+item.case_component_id;tr.setAttribute('aria-selected',String(state.selected===item.case_component_id));tr.addEventListener('click',()=>{state.selected=item.case_component_id;for(const n of body.children)n.setAttribute('aria-selected',String(n===tr));});tr.addEventListener('keydown',e=>{if(!['ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();e.stopPropagation();const all=Array.from(body.children),i=all.indexOf(tr),next=e.key==='Home'?all[0]:e.key==='End'?all.at(-1):all[Math.max(0,Math.min(all.length-1,i+(e.key==='ArrowDown'?1:-1)))];if(next){state.selected=next.dataset.caseComponentId;for(const n of all)n.setAttribute('aria-selected',String(n===next));next.focus();next.scrollIntoView({block:'nearest'});}});const values=[item.label,money(item.due),money(item.direction==='DEDUCTION'?item.recoverable_this_run:item.this_draft),money(item.outstanding_after),item.note||'—'];
         for(let i=0;i<values.length;i++){const td=el('td',values[i]);td.dataset.label=['Deduction','Due','This Draft','Outstanding after','Note'][i];
+          if(i===0){const balances=el('dl',undefined,'bpay-next-case-balance-meta');balances.setAttribute('aria-label','Original payment balance');
+            for(const [label,key]of [['Original balance','principal_outstanding'],['Already held','active_reserved_before'],['Unreserved after this Draft','remaining_unreserved']]){const group=el('div'),value=el('dd',money(item[key]));value.dataset.nextFormattedMoney='';group.append(el('dt',label),value);balances.append(group);}
+            td.append(balances);if(item.source_pay_channel!==null)td.append(el('small',(item.source_pay_channel==='PAYE'?'PAYE':'Umbrella')+' balance'));
+            if(item.captured_at_utc!==null)td.append(el('small','Figures from '+win.CloudTMSBpayNextDates.formatTimestamp(item.captured_at_utc)));
+            if(item.unreserved_limit_note!==null)td.append(el('small',item.unreserved_limit_note));
+          }
           if(i>0&&i<4){td.dataset.nextFormattedMoney='';td.classList.add('bpay-next-review-money');if((i===1||i===3)&&item.source_pay_channel!==null&&item.source_pay_channel!==row.pay_channel)td.append(el('small',item.source_pay_channel==='PAYE'?'PAYE':'Umbrella'));}
           tr.append(td);
         }
