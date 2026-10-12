@@ -1237,3 +1237,10 @@
 @media(max-width:700px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(:is(.bpay-next-case-channel,.bpay-next-channel-confirm)) :is(#btnCloseModal,.bpay-next-window-actions .btn){min-height:44px;}}
 
 #modal.ctms-modern-modal .bpay-next-channel-question-icon.is-refused{border-color:var(--ctms-modal-danger);color:var(--ctms-modal-danger);}
+
+/* FC15 A4: native issue frame, empty reference cell and phone controls. */
+@media(min-width:701px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-table{border:1px solid var(--ctms-modal-line);border-radius:13px;}}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-issue-table td.bpay-next-issue-money.is-empty{display:none;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-issue-lists) :is(#btnCloseModal,[data-next-window-footer] .btn){min-height:44px;min-width:44px;}
+}

@@ -686,6 +686,7 @@ const ISSUE_REASONS=Object.freeze({
  APPROVAL_WITHDRAWN:'Missing approval — approval withdrawn',MISSING_APPROVAL:'Awaiting authorisation',APPLY_PENDING:'Updating',
  PAY_QUERY_UNAVAILABLE:'Pay query status unavailable',PAY_QUERY_OPEN:'Pay query open',AWAITING_REAUTHORISATION:'Paid — awaiting re-authorisation',
  ORIGIN_UNAUTHORISED_WAIT:'Waiting for re-authorisation — recovery paused',CASE_REVIEW_REQUIRED:'Finance case needs review',RECOVERY_MANAGED:'Recovery managed through the finance case',
+ MANUAL_COLLECTION:'Manual collection',MANUAL_COLLECTION_REFERENCE:'Manual collection shown with the overpayment',MANUAL_COLLECTION_UNAVAILABLE:'Manual collection amount unavailable',
  IN_PREPARATION:'Included in Draft preparation',CASE_PAUSED:'Finance case paused',RESERVED:'Reserved in an existing payment',SNOOZED:'Snoozed'
 });
 function issueReason(row){
@@ -699,6 +700,9 @@ function issueReason(row){
  return ISSUE_REASONS[row.reason_code]??'Payment needs review';
 }
 function issueAmounts(row){
+ if(row.reason_code==='MANUAL_COLLECTION_REFERENCE')return [];
+ if(row.reason_code==='MANUAL_COLLECTION_UNAVAILABLE')return [{label:'Manual collection',value:null}];
+ if(row.reason_code==='MANUAL_COLLECTION')return [{label:'Manual collection',value:row.amount_known?row.nominal_source_ex_vat:null}];
  const netStage=['NET_ADD','NET_DEDUCT'].includes(row.payroll_stage);
  const values=[];const add=(label,value)=>{if(value!==null)values.push({label,value});};
  if(!row.amount_known||row.nominal_source_ex_vat===null)values.push({label:'Current amount',value:null});
@@ -1140,7 +1144,7 @@ function mountIssueView(options){
  input.type='search';input.maxLength=200;input.setAttribute('data-next-focus-key','issue-search');label.append(input);submit.type='submit';form.append(label,submit);form.hidden=Boolean(detail);select.setAttribute('data-next-focus-key','issue-sort');
  function columns(){return [['NAME','Candidate'],['PAYMENT','Payment'],['REASON',section==='BLOCKED'?'Why it is blocked':'What needs attention'],['AMOUNT','Amount ex VAT']];}
  function sorts(){select.replaceChildren();for(const [key,text] of columns())for(const dir of ['ASC','DESC']){const n=el('option',text+(dir==='ASC'?' ▲':' ▼'));n.value=key+'_'+dir;select.append(n);}select.value=sort;}
- sorts();mobile.append(select);scroller.tabIndex=0;scroller.setAttribute('role','region');scroller.setAttribute('aria-label',detail?'Affected payments':'Payments needing attention');count.setAttribute('data-next-live-copy','');status.setAttribute('data-next-live-copy','');status.setAttribute('role','status');foot.setAttribute('data-next-live-copy','');root.append(count,form,mobile,scroller,status,retry,foot);host.append(root);
+ sorts();mobile.append(select);scroller.tabIndex=0;scroller.setAttribute('role','region');scroller.setAttribute('aria-label',detail?'Affected payments':'Payments needing attention');count.setAttribute('data-next-live-copy','');status.setAttribute('data-next-live-copy','');status.setAttribute('role','status');foot.setAttribute('data-next-live-copy','');root.append(count,form,mobile,status,retry,scroller,foot);host.append(root);
  function current(){try{return !closed&&(root.isConnected||options.windowAlive?.()===true)&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();}catch{return false;}}
  function available(){return Boolean(current()&&context&&!busy&&!error&&options.parentAvailable?.()!==false&&(!options.parentContext?.()||sameWorkbenchRevision(context,options.parentContext())));}
  function notify(){try{options.onAvailability?.({available:available(),context});}catch{}}
@@ -1158,7 +1162,7 @@ function mountIssueView(options){
    cells[1].append(el('strong',issuePayment(row)));if(row.week_ending_date)cells[1].append(el('small','w/e '+row.week_ending_date.split('-').reverse().join('/')));
    cells[2].textContent=issueReason(row);const values=issueAmounts(row);for(const [i,value] of values.entries()){const n=el(i===0?'strong':'small',(i===0?'':value.label+' ')+displayPounds(value.value));n.setAttribute('data-next-formatted-money','');cells[3].append(n);}
    if(['RATE_RESOLUTION_REQUIRED','GROSS_RESOLUTION_REQUIRED'].includes(row.reason_code)&&row.source_pay_channel)cells[3].append(el('small',(row.source_pay_channel==='PAYE'?'PAYE':'Umbrella')+', as authorised'));
-   cells[3].className='bpay-next-issue-money';
+   cells[3].className='bpay-next-issue-money';if(row.reason_code==='MANUAL_COLLECTION_REFERENCE'&&values.length===0)cells[3].classList.add('is-empty');
    {for(const action of issueActions(row,options)){const b=button(action.label,event=>{event.stopPropagation();void invoke(action.callback,row);});b.disabled=!usable;if(action.key==='timesheet'&&(!detail||row.physical_timesheet_id!==null&&typeof options.openPayment==='function'))b.classList.add('bpay-next-issue-desktop-open');if(detail&&action.key==='timesheet')b.classList.add('bpay-next-issue-record-open');b.setAttribute('data-next-focus-key','issue-action:'+row.item_id+':'+action.key);actions.append(b);}}
    if(!detail){const b=button('Open',event=>{event.stopPropagation();void invoke(options.openIssue,row);});b.disabled=!usable;b.classList.add('bpay-next-issue-phone-open');actions.append(b);}
    tr.append(...cells,actions);
@@ -1242,7 +1246,7 @@ function mountPaymentDetail(options,address){
  function earlierScroll(list,canRestart,restart,canInteract=interactive){let touchY=null;const run=()=>{if(canInteract()&&list.scrollTop<40&&canRestart()){restart();return true;}return false;};list.addEventListener('wheel',event=>{if(event.deltaY<0&&run())event.preventDefault();},{passive:false});list.addEventListener('keydown',event=>{if(event.target===list&&['Home','ArrowUp','PageUp'].includes(event.key)&&run())event.preventDefault();});list.addEventListener('touchstart',event=>{touchY=event.touches[0]?.clientY??null;},{passive:true});list.addEventListener('touchmove',event=>{const y=event.touches[0]?.clientY??null;if(y!==null&&touchY!==null&&y>touchY&&run())touchY=null;else touchY=y;},{passive:true});}
  function table(headers){const t=el('table',undefined,'ctms-universal-table ctms-universal-card-table bpay-next-detail-table'),head=el('thead'),tr=el('tr'),body=el('tbody');for(const text of headers){const th=el('th',text);th.scope='col';tr.append(th);}head.append(tr);t.append(head,body);return {table:t,body};}
  function cells(body,labels,values,cls){const tr=el('tr',undefined,cls);labels.forEach((label,i)=>{const td=el('td');td.dataset.label=label;const value=values[i];if(value?.nodeType)td.append(value);else td.textContent=value??'—';tr.append(td);});body.append(tr);return tr;}
- function amount(member){return member.is_selected?(member.selected_amount_known?member.selected_source_ex_vat:null):!member.amount_known?null:member.portion_kind==='RESERVED'?member.active_reserved_source_ex_vat:member.section==='READY'?member.included_source_ex_vat:member.nominal_source_ex_vat;}
+ function amount(member){if(member.reason_code==='MANUAL_COLLECTION_UNAVAILABLE'||member.reason_code==='MANUAL_COLLECTION_REFERENCE')return null;return member.is_selected?(member.selected_amount_known?member.selected_source_ex_vat:null):!member.amount_known?null:member.portion_kind==='RESERVED'?member.active_reserved_source_ex_vat:member.section==='READY'?member.included_source_ex_vat:member.nominal_source_ex_vat;}
  async function openDetailSnooze(member,scopeKind,clear=false,many=false,subjectFacts={}){
   if(!interactive()||member.portion_kind==='RESERVED'||childWindow?.alive()||!win.CloudTMSBpayNextSnooze)return;
   try{childWindow=win.CloudTMSBpayNextSnooze.open(options.snoozeOptions,{scope:win.CloudTMSBpayNextSnooze.seed(member,scopeKind),clear,many,label:subjectFacts.label??(scopeKind==='SEGMENT'?'Shift':member.component_kind==='MILEAGE'?'Mileage':scopeKind==='EXPENSE_LINE'?'Expense':'Timesheet expenses'),candidateLabel:member.candidate_display_name,clientLabel:address.client_display_name,dateLabel:subjectFacts.dateLabel??(member.work_date?date(member.work_date):null),...(!many?{amount:amount(member)}:{})});
