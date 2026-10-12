@@ -1,5 +1,6 @@
 /* WB09 bounded read client; typed failure is surfaced, never an empty GBP0 list. */
 (function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.CloudTMSBpayNextWorkbench=api;})(typeof globalThis==='object'?globalThis:this,function(){'use strict';
+const resolutionApi=typeof module==='object'&&module.exports?require('./bpay-next-resolution.js'):globalThis.CloudTMSBpayNextResolution;
 /** WB09 pure Office reads. Closed kinds, trusted admin actor, fixed RPC only.
  * No reconstruction, financial calculation, command or automatic page retry. */
 const BPAY_NEXT_WORKBENCH_LIMITS=Object.freeze({requestBytes:32768,responseBytes:131072,timeoutMs:4000});
@@ -522,6 +523,7 @@ function decimalCompare(a,b){const negA=a.startsWith('-'),negB=b.startsWith('-')
 function keyCompare(a,b,kind,sort){if(kind==='CANDIDATE_ESTIMATE'){for(let n=0;n<4;n++){const value=n===0||n===2?BigInt(a[n])<BigInt(b[n])?-1:BigInt(a[n])>BigInt(b[n])?1:0:textCompare(a[n],b[n]);if(value)return value;}return 0;}for(let n=0;n<a.length;n++){const value=typeof a[n]==='number'?a[n]-b[n]:typeof a[n]==='boolean'?Number(a[n])-Number(b[n]):n===1&&(sort.startsWith('AMOUNT_')||kind==='EXPORT_ROWS'&&sort.includes('_AMOUNT_'))?decimalCompare(a[n],b[n]):textCompare(a[n],b[n]);if(value)return sort.endsWith('_DESC')?-value:value;}return 0;}
 function fail(code,status=503,retryable=false,reload=false){return Object.assign(new Error(code),{code,status,retryable,reload});}
 function normalizeWorkbenchInput(kind,input={}){
+  if(kind==='RESOLUTION_CONTEXT')return resolutionApi.normalizeResolutionInput(input);
   if(kind==='SNOOZES')return globalThis.CloudTMSBpayNextSnoozeActions.normalizeSnoozesInput(input);
   if(!KINDS.includes(kind)||!record(input)||Reflect.ownKeys(input).some(k=>typeof k!=='string'||!Object.hasOwn(COMMON,k)))throw fail('BPAY_NEXT_WORKBENCH_REQUEST_INVALID',400);
   const args={candidate_id:null,client_id:null,channel:'ALL',section:'ALL',search:'',sort:'NAME_ASC',group_key:null,item_id:null,reason_code:null,count_selection:null,selection_memory:null,progress_after:null,estimate:null,after:null,limit:kind==='CANDIDATE_GROUPS'?10:50,...input};
@@ -572,6 +574,7 @@ function validateJobProgress(progress,args,actorId,revision){
 }
 
 function validateWorkbenchResponse(payload,kind,args,actorId=null){
+  if(kind==='RESOLUTION_CONTEXT')return payload?.ok===false?resolutionApi.validateResolutionFault(payload):resolutionApi.validateResolutionResponse(payload,args,actorId);
   if(kind==='SNOOZES'&&payload?.ok===true)return globalThis.CloudTMSBpayNextSnoozeActions.validateSnoozesResponse(payload,args,actorId);
   const original=payload;
   if(Object.hasOwn(payload??{},'job_progress')){
@@ -656,8 +659,8 @@ function createWorkbenchClient(options){
     let controller,timer,bytes=0,rows=0,status='REFUSED',timedOut=false;const started=now();
     try{
       assertActor();const args=normalizeWorkbenchInput(kind,params);
-      if(args.after!==null&&args.after.context.actor_user_id!==actor)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
-      const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection','progress_after','selection_memory','estimate'].includes(key)?JSON.stringify(value):String(value));
+      if(kind!=='RESOLUTION_CONTEXT'&&args.after!==null&&args.after.context.actor_user_id!==actor)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);
+      const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))if(value!==null)query.set(key,['after','count_selection','progress_after','selection_memory','estimate','resolution'].includes(key)?JSON.stringify(value):String(value));
       if(ENCODER.encode(query.toString()).byteLength>32768)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');
       controller=new AbortController();const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{timedOut=true;controller.abort();reject(new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true));},BPAY_NEXT_WORKBENCH_LIMITS.timeoutMs);});
       const read=async()=>{
@@ -666,15 +669,17 @@ function createWorkbenchClient(options){
         if(controller.signal.aborted){void response.body?.cancel().catch(()=>{});throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',true);}
         const body=await readWorkbenchJson(response,controller.signal,n=>{bytes=n;});assertActor();
         if(body?.ok===false){
+          if(exact(body,['ok','error_code','retryable'])&&body.ok===false&&body.retryable===false&&['BPAY_NEXT_ENVIRONMENT_MISMATCH','BPAY_NEXT_OFFICE_FORBIDDEN'].includes(body.error_code))throw new WorkbenchReadError(body.error_code,false);
+          if(kind==='RESOLUTION_CONTEXT'){resolutionApi.validateResolutionFault(body);throw new WorkbenchReadError(body.error_code,body.retryable,body.reload_required);}
           if(shape(body,REFUSAL)||Object.hasOwn(body,'job_progress')){validateWorkbenchResponse(body,kind,args,actor);const failure=new WorkbenchReadError(body.error_code,body.retryable,body.reload_required);failure.jobProgress=body.job_progress??null;throw failure;}
           if(exact(body,['ok','error_code','retryable'])&&body.ok===false&&body.retryable===false&&['BPAY_NEXT_ENVIRONMENT_MISMATCH','BPAY_NEXT_OFFICE_FORBIDDEN'].includes(body.error_code))throw new WorkbenchReadError(body.error_code,false);
           throw new WorkbenchReadError(response.status===401?'BPAY_NEXT_WORKBENCH_UNAUTHORIZED':response.status===403?'BPAY_NEXT_WORKBENCH_FORBIDDEN':'BPAY_NEXT_WORKBENCH_UNAVAILABLE',response.status>=500);
         }
         if(!response.ok)throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_UNAVAILABLE',response.status>=500);
-        const validated=validateWorkbenchResponse(body,kind,args,actor);rows=validated.rows.length;return validated;
+        const validated=validateWorkbenchResponse(body,kind,args,actor);rows=kind==='RESOLUTION_CONTEXT'?validated.works.reduce((n,w)=>n+w.rows.length,0):validated.rows.length;return validated;
       };
       const result=await Promise.race([read(),timeout]);status='OK';return result;
-    }catch(e){const error=e instanceof WorkbenchReadError?e:new WorkbenchReadError(FAILURE_CODES.includes(e?.code)?e.code:'BPAY_NEXT_WORKBENCH_UNAVAILABLE',e?.retryable===true,e?.reload===true);try{if(typeof options.onReadFailure==='function'&&String(options.currentActorId()||'').toLowerCase()===actor)options.onReadFailure(error);}catch{}throw error;}
+    }catch(e){const error=e instanceof WorkbenchReadError?e:new WorkbenchReadError(FAILURE_CODES.includes(e?.code)||kind==='RESOLUTION_CONTEXT'&&resolutionApi.BPAY_NEXT_RESOLUTION_REFUSALS.includes(e?.code)?e.code:'BPAY_NEXT_WORKBENCH_UNAVAILABLE',e?.retryable===true,e?.reload===true);try{if(typeof options.onReadFailure==='function'&&String(options.currentActorId()||'').toLowerCase()===actor)options.onReadFailure(error);}catch{}throw error;}
     finally{if(timer!==undefined)clearTimeout(timer);try{if(KINDS.includes(kind)&&String(options.currentActorId()||'').toLowerCase()===actor){debug.workbenchReads.push(Object.freeze({kind,rows,bytes,status:timedOut?'TIMEOUT':status,elapsedMs:Math.round(Math.max(0,now()-started))}));if(debug.workbenchReads.length>100)debug.workbenchReads.splice(0,debug.workbenchReads.length-100);}}catch{}}
   }
   return Object.freeze({loadWorkbenchPage,debug});
