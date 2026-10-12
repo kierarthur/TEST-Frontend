@@ -981,3 +981,62 @@
 @media(max-width:600px){#modal.ctms-modern-modal .bpay-next-waiting-scroll{border:0}#modal.ctms-modern-modal .bpay-next-progress-waiting-table tbody tr{border:1px solid var(--ctms-modal-line);border-radius:13px;padding:8px;margin-bottom:10px}}
 
 #modal.ctms-modern-modal .bpay-next-progress-waiting-table th{position:sticky;top:0;z-index:1}#modal.ctms-modern-modal .bpay-next-progress-waiting-table th[aria-sort=ascending] button::after{content:' ▲';color:var(--ctms-modal-cyan);font-size:10px}#modal.ctms-modern-modal .bpay-next-progress-waiting-table th[aria-sort=descending] button::after{content:' ▼';color:var(--ctms-modal-cyan);font-size:10px}
+
+/* DR16 existing Draft review: frozen summary and useful Case details. */
+#modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals{grid-template-columns:repeat(3,minmax(0,1fr))}
+#modal.ctms-modern-modal:has(.bpay-next-worker-review){width:min(1320px,calc(100vw - 32px))}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) .modal-h{flex:0 0 auto;height:auto}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results :is(th,td):nth-child(n){width:auto}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table{table-layout:fixed;width:100%}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>thead>tr>th:nth-child(1),#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>tbody>tr>td:nth-child(1){width:21%;white-space:normal}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>thead>tr>th:nth-child(2){width:9%}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>thead>tr>th:nth-child(3){width:10%}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>thead>tr>th:nth-child(4){width:9%}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>thead>tr>th:nth-child(5){width:24%}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>thead>tr>th:nth-child(6){width:27%}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results>table>tbody>tr>td{white-space:normal}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results small{white-space:normal}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-row-actions{gap:6px}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-row-actions button{white-space:normal;padding:7px;font-size:12px}
+#modal.ctms-modern-modal .bpay-next-review-results :is(th,td):is(:nth-child(3),:nth-child(4)){text-align:right}
+#modal.ctms-modern-modal .bpay-next-review-results :is(th,td):is(:nth-child(3),:nth-child(4)) button{text-align:right}
+#modal.ctms-modern-modal .bpay-next-review-caret{display:inline-flex;align-items:center;justify-content:center;width:24px;min-height:24px;padding:0;margin-right:8px;border:1px solid var(--ctms-modal-line);border-radius:7px;background:transparent;color:var(--ctms-modal-text);vertical-align:middle}
+#modal.ctms-modern-modal .bpay-next-review-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#modal.ctms-modern-modal .bpay-next-review-counts{display:flex;gap:20px;margin-right:auto}
+#modal.ctms-modern-modal .bpay-next-review-counts>div{border-right:1px solid var(--ctms-modal-line);padding-right:20px}
+#modal.ctms-modern-modal .bpay-next-review-counts small{display:block;color:var(--ctms-modal-sub);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+#modal.ctms-modern-modal .bpay-next-review-counts strong{font-size:14px}
+#modal.ctms-modern-modal .bpay-next-draft-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:16px}
+#modal.ctms-modern-modal .bpay-next-draft-total-card{padding:18px;border:1px solid var(--ctms-modal-line);border-radius:16px;background:var(--ctms-modal-panel-raised)}
+#modal.ctms-modern-modal .bpay-next-draft-total-card h3{font-size:11px;font-weight:760;letter-spacing:.1em;text-transform:uppercase;color:var(--ctms-modal-accent-bright);margin:0 0 6px}
+#modal.ctms-modern-modal .bpay-next-draft-total-card>strong{font-size:14px}
+#modal.ctms-modern-modal .bpay-next-draft-total-card dl{border-top:1px solid var(--ctms-modal-line);margin:12px 0 0;padding-top:12px;font-size:13px}
+#modal.ctms-modern-modal .bpay-next-draft-total-card dl>div{display:flex;justify-content:space-between;gap:12px;margin:10px 0}
+#modal.ctms-modern-modal .bpay-next-draft-total-card dt{color:var(--ctms-modal-sub)}
+#modal.ctms-modern-modal .bpay-next-draft-total-card dd{font-weight:760;text-align:right;margin:0}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results .bpay-next-case-detail-row>td{padding:0;background:var(--ctms-modal-panel-raised)}
+#modal.ctms-modern-modal .bpay-next-case-review-scroll{max-height:330px;overflow:auto;overscroll-behavior:contain}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results .bpay-next-case-review-scroll :is(th,td):nth-child(n){width:auto}
+#modal.ctms-modern-modal .bpay-next-case-review-scroll th{position:sticky;top:0;background:var(--ctms-modal-panel-raised);z-index:1}
+#modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results .bpay-next-case-review-scroll :is(th,td):is(:nth-child(2),:nth-child(3),:nth-child(4)){text-align:right;font-variant-numeric:tabular-nums}
+#modal.ctms-modern-modal .bpay-next-case-review-scroll th:nth-child(2) button{text-align:right}
+#modal.ctms-modern-modal .bpay-next-case-review-scroll tr[aria-selected=true]{background:var(--ctms-modal-panel-soft)}
+#modal.ctms-modern-modal .bpay-next-case-review-scroll :is(th,td):nth-child(5){text-align:left}
+#modal.ctms-modern-modal .bpay-next-draft-totals.is-stale,#modal.ctms-modern-modal .has-read-error .bpay-next-review-results{opacity:.6}
+#modal.ctms-modern-modal:has(.bpay-next-worker-review) .bpay-next-window-actions{justify-content:space-between}
+@media(max-width:700px){
+ #modal.ctms-kind-bpay-next-read .bpay-next-frozen-totals{grid-template-columns:repeat(2,minmax(0,1fr))}
+ #modal.ctms-modern-modal:has(.bpay-next-worker-review){width:calc(100vw - 12px)}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) .modal-h .bpay-next-progress-subtitle{white-space:normal;overflow:visible;text-overflow:clip;max-height:none;grid-column:1 / -1;padding-right:0}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worker-review) .modal-h #btnCloseModal{grid-row:1}
+ #modal.ctms-modern-modal .bpay-next-draft-totals{grid-template-columns:1fr}
+ #modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results :is(th,td):nth-child(n){width:auto}
+ #modal.ctms-modern-modal .bpay-next-review-counts{width:100%;gap:10px;flex-wrap:wrap}
+ #modal.ctms-modern-modal .bpay-next-review-counts>div{padding-right:10px}
+ #modal.ctms-modern-modal .bpay-next-review-caret{width:44px;min-height:44px}
+ #modal.ctms-modern-modal .bpay-next-case-review-scroll :is(table,tbody,tr,td){display:block}
+ #modal.ctms-modern-modal .bpay-next-case-review-scroll thead{display:none}
+ #modal.ctms-modern-modal .bpay-next-worker-review .bpay-next-review-results .bpay-next-case-review-scroll td:nth-child(n){padding:6px 10px;text-align:left}
+ #modal.ctms-modern-modal .bpay-next-case-review-scroll td::before{content:attr(data-label);display:block;color:var(--ctms-modal-sub);font-size:12px;margin-bottom:3px}
+ #modal.ctms-modern-modal .bpay-next-case-review-scroll tr{border-bottom:1px solid var(--ctms-modal-line);padding:8px}
+}

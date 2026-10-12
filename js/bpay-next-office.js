@@ -199,15 +199,73 @@
   };
   const ACCEPTED_HEADER={run_id:'uuid',prepare_command_id:'uuid',accepted_sequence:'positive',accepted_module_epoch:'positive',run_status:'run',command_status:'prepareCommandStatus',expected_candidate_count:'positive',enrolled_candidate_count:'integer'};
   const STATUS_HEADER = {
-    run_id: 'uuid', run_status: 'run', selection_state: 'selection', review_revision: 'integer', run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', target_pay_channel: 'channel', umbrella_id: 'uuid?', preparation_revision: 'positive', case_selection_revision: 'integer', net_request_revision: 'integer', net_projection_revision: 'integer', net_pending: 'boolean', review_issue_code: 'issue?', review_issue_work_id: 'uuid?', frozen_gross_ex_vat: 'money', frozen_gross_vat: 'money', frozen_gross_inc_vat: 'money', projection_id: 'uuid?', projection_input_kind: 'projection?', entered_paye_net: 'money?', accepted_recoveries: 'money?', accepted_net_additions: 'money?', cash_amount: 'money?', reservation_mode:'reservationMode',reservation_projection_id:'uuid?',remaining_reservation_cash:'cashMoney?',reservation_internal_zero:'boolean',reservation_holds_state:'reservationHolds'
+    run_id: 'uuid', run_status: 'run', selection_state: 'selection', review_revision: 'integer', run_worker_id: 'uuid', candidate_id: 'uuid', worker_status: 'worker', target_pay_channel: 'channel', umbrella_id: 'uuid?', preparation_revision: 'positive', case_selection_revision: 'integer', net_request_revision: 'integer', net_projection_revision: 'integer', net_pending: 'boolean', review_issue_code: 'issue?', review_issue_work_id: 'uuid?', frozen_gross_ex_vat: 'money', frozen_gross_vat: 'money', frozen_gross_inc_vat: 'money', gross_stage_deductions:'money',net_recovery_reserved:'money',frozen_offer_complete:'boolean', projection_id: 'uuid?', projection_input_kind: 'projection?', entered_paye_net: 'money?', accepted_recoveries: 'money?', accepted_net_additions: 'money?', cash_amount: 'money?', reservation_mode:'reservationMode',reservation_projection_id:'uuid?',remaining_reservation_cash:'cashMoney?',reservation_internal_zero:'boolean',reservation_holds_state:'reservationHolds'
   };
   const RETURN_HEADER = {run_id:'uuid',run_worker_id:'uuid',candidate_id:'uuid',financial_view_revision:'integer'};
+
+// DR16 explicit frozen review contracts, shared shape in Worker and Office.
+const REVIEW_CONTEXT={run_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',review_revision:'integer',run_status:'reviewRun',selection_state:'reviewSelection',paye_totals_revision:'integer',umbrella_totals_revision:'integer',run_worker_id:'uuid?',candidate_id:'uuid?',worker_status:'reviewWorker?',preparation_revision:'positive?',captured_preparation_revision:'positive?',case_selection_revision:'integer?',net_request_revision:'integer?',net_projection_revision:'integer?',sort:'reviewCaseSort?'};
+const REVIEW_TOTAL={candidate_count:'integer',ready_count:'integer',gross_ex_vat:'reviewMoney',gross_vat:'reviewMoney',gross_inc_vat:'reviewMoney',gross_stage_deductions:'reviewMoney',net_recovery_reserved:'reviewMoney',cash_known:'reviewMoney',net_missing_count:'integer',applicable_net_missing_count:'integer',net_replacement_pending_count:'integer',net_refused_code:'reviewNetRefusal?'};
+const REVIEW_CASE={case_id:'uuid',case_component_id:'uuid',instruction_id:'uuid?',selected:'boolean',case_subtype:'label?',direction:'reviewDirection?',payroll_stage:'reviewStage?',source_pay_channel:'channel?',label:'label',due:'reviewAmount?',this_draft:'reviewAmount?',outstanding_after:'reviewAmount?',result_basis:'reviewBasis?',reason_code:'issue?',note:'label',captured_at_utc:'timestamp?',other_run_capacity_reduction:'reviewAmount?',other_run_capacity_reason:'reviewForeign?',sort_key:'reviewKey'};
+function reviewField(v,t,base,shape){
+ if(t==='reviewAmount')return typeof v==='string'&&/^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/.test(v);
+ if(t==='reviewMoney')return typeof v==='string'&&/^-?(?:0|[1-9]\d{0,35})(?:\.\d{1,2})?$/.test(v);
+ if(t==='reviewRun')return ['PREPARING','REVIEW','DRAFT','EXECUTING','COMPLETE','CANCELLING','CANCELLED'].includes(v);
+ if(t==='reviewSelection')return ['OPEN','SEALED'].includes(v);
+ if(t==='reviewWorker')return ['PREPARING','REVIEW','READY','DRAFT','ISSUED','COMPLETE','CANCELLING','CANCELLED'].includes(v);
+ if(t==='reviewCaseSort')return typeof v==='string'&&/^(DEDUCTION|DUE|THIS_DRAFT|OUTSTANDING|NOTE)_(ASC|DESC)$/.test(v);
+ if(t==='reviewNetRefusal')return ['CASE_INPUT_UNBOUND','CASE_WEEK_BASIS_UNBOUND','CASE_RETURN_FLOOR_UNBOUND'].includes(v);
+ if(t==='reviewDirection')return ['PAYMENT','DEDUCTION'].includes(v);
+ if(t==='reviewStage')return ['GROSS_ADD','GROSS_DEDUCT','NET_ADD','NET_DEDUCT'].includes(v);
+ if(t==='reviewBasis')return ['DRAFT','NET_ACCEPTED'].includes(v);
+ if(t==='reviewForeign')return ['SAME_WEEK_INSTALMENT','CASE_BALANCE'].includes(v);
+ if(t==='reviewContext')return shape(v,REVIEW_CONTEXT);
+ if(t==='reviewKey')return Array.isArray(v)&&v.length===3&&typeof v[0]==='boolean'&&(v[0]?v[1]===null:base(v[1],'label'))&&base(v[2],'uuid');
+ if(t==='reviewCursor')return shape(v,{context:'reviewContext',key:'reviewKey'})&&new TextEncoder().encode(JSON.stringify(v)).byteLength<=8192;
+ if(t==='reviewCases')return Array.isArray(v)&&v.length<=100&&v.every(r=>shape(r,REVIEW_CASE));
+ if(t==='reviewTotal')return shape(v,REVIEW_TOTAL);
+ if(t==='reviewChannels')return Array.isArray(v)&&v.length===2&&v[0].pay_channel==='PAYE'&&v[1].pay_channel==='UMBRELLA'&&v.every(r=>shape(r,{pay_channel:'channel',...REVIEW_TOTAL,totals_revision:'integer',updated_at_utc:'timestamp'}));
+ return false;
+}
+function reviewPence(v){const negative=v.startsWith('-'),[w,f='']=v.replace(/^-/,'').split('.');return (negative?-1n:1n)*(BigInt(w)*100n+BigInt(f.padEnd(2,'0')));}
+function reviewSame(a,b){if(a===b)return true;if(a===null||b===null||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;return Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>Object.hasOwn(b,k)&&reviewSame(a[k],b[k]));}
+function reviewCompare(a,b,sort){
+ if(a[0]!==b[0])return a[0]?1:-1;
+ const numeric=/^(DUE|THIS_DRAFT|OUTSTANDING)_/.test(sort),enc=new TextEncoder();
+ const bytes=(x,y)=>{const a=enc.encode(x??''),b=enc.encode(y??'');for(let i=0;i<Math.min(a.length,b.length);i++)if(a[i]!==b[i])return a[i]<b[i]?-1:1;return a.length===b.length?0:a.length<b.length?-1:1;};
+ let n=numeric?(reviewPence(a[1]??'0')===reviewPence(b[1]??'0')?0:reviewPence(a[1]??'0')<reviewPence(b[1]??'0')?-1:1):bytes(a[1],b[1]);
+ if(n===0)n=bytes(a[2],b[2]);return sort.endsWith('_DESC')?-n:n;
+}
+function reviewResult(p,kind,args,actor,base,shape,bad){
+ const totals=kind==='REVIEW_TOTALS';
+ if(!shape(p,totals?{context:'reviewContext',whole:'reviewTotal',channels:'reviewChannels',captured_at_utc:'timestamp',observed_at_utc:'timestamp'}:{context:'reviewContext',rows:'reviewCases',complete:'boolean',next_cursor:'reviewCursor?',counts:'reviewCounts'}))bad();
+ const c=p.context;if(c.run_id!==args.run_id||c.actor_user_id!==actor)bad();
+ if(totals){
+  if(['run_worker_id','candidate_id','worker_status','preparation_revision','captured_preparation_revision','case_selection_revision','net_request_revision','net_projection_revision','sort'].some(k=>c[k]!==null))bad();
+  if(c.paye_totals_revision!==p.channels[0].totals_revision||c.umbrella_totals_revision!==p.channels[1].totals_revision)bad();
+  for(const row of [p.whole,...p.channels]){
+   if(BigInt(row.ready_count)>BigInt(row.candidate_count)||BigInt(row.applicable_net_missing_count)>BigInt(row.net_missing_count)||BigInt(row.net_missing_count)>BigInt(row.candidate_count)||BigInt(row.net_replacement_pending_count)>BigInt(row.candidate_count)||reviewPence(row.gross_inc_vat)!==reviewPence(row.gross_ex_vat)+reviewPence(row.gross_vat)||['gross_stage_deductions','net_recovery_reserved','cash_known'].some(k=>reviewPence(row[k])<0n))bad();
+  }
+  for(const k of Object.keys(REVIEW_TOTAL).filter(k=>k!=='net_refused_code')){const n=REVIEW_TOTAL[k]==='reviewMoney'?reviewPence:BigInt;if(n(p.whole[k])!==n(p.channels[0][k])+n(p.channels[1][k]))bad();}
+  const codes=p.channels.map(r=>r.net_refused_code).filter(x=>x!==null).sort();if(p.whole.net_refused_code!==(codes[0]??null))bad();
+  return p;
+ }
+ if(c.run_worker_id!==args.run_worker_id||c.candidate_id===null||c.worker_status===null||['preparation_revision','captured_preparation_revision','case_selection_revision','net_request_revision','net_projection_revision'].some(k=>c[k]===null)||c.sort!==args.sort||p.rows.length>args.limit||p.complete!==(p.next_cursor===null)||!p.complete&&p.rows.length===0||args.after!==null&&!reviewSame(args.after.context,c)||BigInt(p.counts.selected)+BigInt(p.counts.excluded)!==BigInt(p.counts.scope_count))bad();
+ let previous=args.after?.key??null;const ids=new Set();
+ for(const r of p.rows){
+  if((r.other_run_capacity_reduction===null||reviewPence(r.other_run_capacity_reduction)===0n)!==(r.other_run_capacity_reason===null)||ids.has(r.case_component_id)||r.sort_key[2]!==r.case_component_id||!r.selected&&(r.instruction_id!==null||r.this_draft!==null||r.result_basis!==null)||r.instruction_id===null&&r.result_basis!==null||r.outstanding_after!==null&&reviewPence(r.outstanding_after)<0n)bad();ids.add(r.case_component_id);
+  const value=args.sort.startsWith('DEDUCTION_')?r.label:args.sort.startsWith('DUE_')?r.due:args.sort.startsWith('THIS_DRAFT_')?r.this_draft:args.sort.startsWith('OUTSTANDING_')?r.outstanding_after:r.note;
+  if(!reviewSame(r.sort_key,[value===null,value,r.case_component_id])||previous!==null&&reviewCompare(r.sort_key,previous,args.sort)<=0)bad();previous=r.sort_key;
+ }
+ if(p.next_cursor!==null&&(!reviewSame(p.next_cursor.context,c)||!reviewSame(p.next_cursor.key,p.rows.at(-1).sort_key)))bad();return p;
+}
+
 const PREPARE_ISSUE_INPUT={run_id:'uuid',view:'prepareIssueView',sort:'prepareIssueSort',after:'prepareIssueCursor?',limit:'limit',row_key:'prepareIssueRowKey?',waiting_only:'boolean'};
-const PREPARE_ISSUE_CONTEXT={run_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',review_revision:'integer',run_status:'run',selection_state:'selection',selection_pages:'integer',selected_candidates:'integer',preparing:'integer',ready:'integer',review:'integer',removed:'integer',workbench_revision:'integer',adoption_revision:'integer',view:'prepareIssueView',sort:'prepareIssueSort',row_key:'prepareIssueRowKey?',waiting_only:'boolean'};
-const PREPARE_ISSUE_ROW={row_key:'prepareIssueRowKey',origin:'prepareIssueOrigin',candidate_id:'uuid',run_worker_id:'uuid?',worker_status:'prepareIssueState',issue_code:'issue?',work_id:'uuid?',expected_revision_id:'uuid?',physical_timesheet_id:'uuid?',physical_timesheet_version:'positive?',candidate_display_name:'label?',candidate_reference:'label?',label_origin:'prepareIssueLabelOrigin',timesheet_reference:'label?',week_ending_date:'date?',frozen_ex_vat:'money?',preparation_revision:'positive?',discard_outcome:'discardOutcome?',discard_blocked_code:'discardBlockedCode?',waiting_on_other_run:'boolean',waiting_run_id:'uuid?',waiting_actor_display_name:'label?',capacity_reduced_by_other_run:'boolean',sort_key:'prepareIssueKey'};
+const PREPARE_ISSUE_CONTEXT={run_id:'uuid',actor_user_id:'uuid',owner_epoch:'positive',review_revision:'integer',run_status:'run',selection_state:'selection',selection_pages:'integer',selected_candidates:'integer',preparing:'integer',ready:'integer',review:'integer',removed:'integer',workbench_revision:'integer',adoption_revision:'integer',view:'prepareIssueView',sort:'prepareIssueSort',row_key:'prepareIssueRowKey?',waiting_only:'boolean',paye_totals_revision:'integer?',umbrella_totals_revision:'integer?'};
+const PREPARE_ISSUE_ROW={row_key:'prepareIssueRowKey',origin:'prepareIssueOrigin',candidate_id:'uuid',run_worker_id:'uuid?',worker_status:'prepareIssueState',issue_code:'issue?',work_id:'uuid?',expected_revision_id:'uuid?',physical_timesheet_id:'uuid?',physical_timesheet_version:'positive?',candidate_display_name:'label?',candidate_reference:'label?',label_origin:'prepareIssueLabelOrigin',timesheet_reference:'label?',week_ending_date:'date?',frozen_ex_vat:'money?',preparation_revision:'positive?',discard_outcome:'discardOutcome?',discard_blocked_code:'discardBlockedCode?',waiting_on_other_run:'boolean',waiting_run_id:'uuid?',waiting_actor_display_name:'label?',capacity_reduced_by_other_run:'boolean',pay_channel:'channel?',deduction_total:'money?',frozen_offer_complete:'boolean',case_count:'integer?',sort_key:'prepareIssueKey'};
 function prepareIssueField(v,t,base,shape){
   if(t==='prepareIssueView')return ['CANDIDATES','NOT_IN_DRAFT'].includes(v);
-  if(t==='prepareIssueSort')return /^(CANDIDATE|PAYMENT|REASON|GROSS|STATE)_(ASC|DESC)$/.test(v)&&typeof v==='string';
+  if(t==='prepareIssueSort')return /^(CANDIDATE|PAYMENT|REASON|GROSS|DEDUCTIONS|CHANNEL|STATE)_(ASC|DESC)$/.test(v)&&typeof v==='string';
   if(t==='prepareIssueRowKey')return typeof v==='string'&&v.length<=160&&/^(?:(?:SKIP|RELEASE|CANDIDATE|EXPIRED|DISCARDED):|PAGE:[1-9][0-9]{0,18}:)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v);
   if(t==='prepareIssueKey')return Array.isArray(v)&&v.length===3&&typeof v[0]==='boolean'&&(v[0]?v[1]===null:base(v[1],'label'))&&prepareIssueField(v[2],'prepareIssueRowKey',base,shape);
   if(t==='prepareIssueContext')return shape(v,PREPARE_ISSUE_CONTEXT);
@@ -228,14 +286,14 @@ function prepareIssuesResult(payload,args,actor,base,shape,bad){
       ||(r.physical_timesheet_id===null)!==(r.physical_timesheet_version===null)
       ||r.physical_timesheet_id!==null&&(r.work_id===null||r.expected_revision_id===null||r.week_ending_date===null)
       ||(r.discard_outcome==='BLOCKED')!==(r.discard_blocked_code!==null))bad();ids.add(r.row_key);
-    if(args.sort.startsWith('GROSS_')&&r.sort_key[1]!==null&&!base(r.sort_key[1],'money'))bad();
+    if(/^(GROSS|DEDUCTIONS)_/.test(args.sort)&&r.sort_key[1]!==null&&!base(r.sort_key[1],'money'))bad();
     if(r.waiting_on_other_run!==(r.waiting_run_id!==null)||!r.waiting_on_other_run&&r.waiting_actor_display_name!==null||r.waiting_run_id===args.run_id||args.waiting_only&&!r.waiting_on_other_run)bad();
     if(r.origin==='CANDIDATE'){
       if(args.view!=='CANDIDATES'||r.row_key!=='CANDIDATE:'+r.candidate_id
         ||(r.run_worker_id===null)!==(['PENDING','FAILED'].includes(r.worker_status))
-        ||r.run_worker_id!==null&&r.preparation_revision===null||['PENDING','PREPARING','REVIEW','CANCELLING','CANCELLED','FAILED'].includes(r.worker_status)&&r.frozen_ex_vat!==null)bad();
+        ||r.run_worker_id!==null&&r.preparation_revision===null||['PENDING','PREPARING','CANCELLING','CANCELLED','FAILED'].includes(r.worker_status)&&r.frozen_ex_vat!==null||r.worker_status==='REVIEW'&&!r.frozen_offer_complete&&r.frozen_ex_vat!==null||r.frozen_offer_complete&&(!['READY','REVIEW','DRAFT','ISSUED','COMPLETE'].includes(r.worker_status)||r.run_worker_id===null||r.frozen_ex_vat===null||r.deduction_total===null||r.pay_channel===null)||!r.frozen_offer_complete&&r.deduction_total!==null)bad();
     }else{
-      if(r.waiting_on_other_run||r.capacity_reduced_by_other_run||args.view!=='NOT_IN_DRAFT'||r.worker_status!=='NOT_IN_DRAFT'||r.issue_code===null||r.frozen_ex_vat!==null)bad();
+      if(r.pay_channel!==null||r.deduction_total!==null||r.frozen_offer_complete||r.case_count!==null||r.waiting_on_other_run||r.capacity_reduced_by_other_run||args.view!=='NOT_IN_DRAFT'||r.worker_status!=='NOT_IN_DRAFT'||r.issue_code===null||r.frozen_ex_vat!==null)bad();
       if(r.origin==='SKIPPED_WORK'&&(r.run_worker_id!==null||r.work_id===null||!r.row_key.endsWith(':'+r.work_id)))bad();
       if(['SYSTEM_RELEASE','OFFICE_RELEASE'].includes(r.origin)&&(r.run_worker_id===null||r.row_key!=='RELEASE:'+r.run_worker_id||r.preparation_revision===null))bad();
       if(r.origin==='SYSTEM_RELEASE'&&!['SELECTED_WORK_NOT_APPROVED','SELECTED_WORK_REVISION_CHANGED','SELECTED_WORK_POSITION_PENDING','SOURCE_PAY_QUERY_OPEN','SOURCE_PAY_QUERY_EVIDENCE_UNAVAILABLE','CASE_NO_PAYABLE_AMOUNT'].includes(r.issue_code))bad();
@@ -247,7 +305,9 @@ function prepareIssuesResult(payload,args,actor,base,shape,bad){
 }
 
   const PAGES = {
-    PREPARE_ISSUES:PREPARE_ISSUE_INPUT,
+    REVIEW_TOTALS:{run_id:'uuid'},
+  REVIEW_CASES:{run_id:'uuid',run_worker_id:'uuid',sort:'reviewCaseSort',after:'reviewCursor?',limit:'limit'},
+  PREPARE_ISSUES:PREPARE_ISSUE_INPUT,
     CASE_PREVIEW:{input:'caseInput'},
     GUARD:{run_id:'uuid'},
     PROGRESS:{run_id:'uuid'},
@@ -344,6 +404,8 @@ function validDiscardProgress(p){
     &&(p.discard_phase==='DISCARDED'?p.status==='CANCELLED'&&blocked===0n:p.status==='REVIEW'&&blocked>0n);
 }
 function field(v,type){
+ if(type==='reviewCounts')return shape(v,{selected:'integer',excluded:'integer',scope_count:'integer'});
+ if(["reviewAmount","reviewMoney","reviewRun","reviewSelection","reviewWorker","reviewCaseSort","reviewNetRefusal","reviewDirection","reviewStage","reviewBasis","reviewForeign","reviewContext","reviewKey","reviewCursor","reviewCases","reviewTotal","reviewChannels"].includes(type))return reviewField(v,type,field,shape);
   if(type==='prepareIssueRows')return Array.isArray(v)&&v.length<=100&&v.every(r=>shape(r,PREPARE_ISSUE_ROW));
   if(type==='prepareIssueCounts')return shape(v,{skipped_timesheets:'integer',removed_candidates:'integer',scope_count:'integer'});
   if(type.startsWith('prepareIssue')&&!type.endsWith('?'))return prepareIssueField(v,type,field,shape);
@@ -842,9 +904,10 @@ function caseListResult(payload,call,bad){
         }
         const pageSchema=kind==='WORKERS'&&Object.hasOwn(args,'attention_only')?{...PAGES.WORKERS,attention_only:'true'}:kind==='CASE_PREVIEW'&&(Object.hasOwn(args,'case_id')||Object.hasOwn(args,'expected_case_revision'))?{input:'caseInput',case_id:'uuid',expected_case_revision:'positive'}:kind==='CASE_COMPONENTS'?{...PAGES.CASE_COMPONENTS,...(Object.hasOwn(args,'edit_command_id')?{edit_command_id:'uuid'}:{}),...(Object.hasOwn(args,'pause_command_id')?{pause_command_id:'uuid'}:{})}:kind==='GUARD'&&Object.hasOwn(args,'descriptor')?{run_id:'uuid',descriptor:'descriptor'}:kind==='WORK_CHOICES'&&Object.hasOwn(args,'accepted_inputs')?{run_id:'uuid',accepted_inputs:'true',after_member_no:'positive?',limit:'limit',...(Object.hasOwn(args,'member_kind')?{member_kind:'choiceMember'}:{})}:PAGES[kind];
         if (!Object.hasOwn(PAGES, kind) || !shape(args, pageSchema) || (kind === 'CURRENT_WORK' && (args.after_week === null) !== (args.after_work_id === null))) fail('REQUEST_INVALID');
-        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, (k==='descriptor'||k==='input'||kind==='PREPARE_ISSUES'&&k==='after')?JSON.stringify(v):String(v));
+        const query = new URLSearchParams({ kind }); for (const [k, v] of Object.entries(args)) if (v !== null) query.set(k, (k==='descriptor'||k==='input'||['PREPARE_ISSUES','REVIEW_CASES'].includes(kind)&&k==='after')?JSON.stringify(v):String(v));
         if(kind==='GUARD'&&encoder.encode(query.toString()).byteLength>128*1024)fail('REQUEST_INVALID');
         let body = await call('/api/banking/pay/next/preparation-page?' + query.toString(), { method: 'GET' },false,null,kind==='PROGRESS'?Math.min(options.timeoutMs??LIMITS.timeout,2000):options.timeoutMs??LIMITS.timeout);
+  if(['REVIEW_TOTALS','REVIEW_CASES'].includes(kind)){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind)fail();return {ok,kind,...reviewResult(payload,kind,args,options.actorId.toLowerCase(),field,shape,()=>fail())};}
   if(kind==='PREPARE_ISSUES'){const {ok,kind:replyKind,...payload}=body;if(ok!==true||replyKind!==kind)fail();return {ok,kind,...prepareIssuesResult(payload,args,options.actorId.toLowerCase(),field,shape,()=>fail())};}
   if(kind==='CASE_PREVIEW'){
     if(!record(body)||Object.keys(body).sort().join()!=='complete,kind,next_cursor,ok,rows'||body.ok!==true||body.kind!==kind
@@ -1702,9 +1765,9 @@ function caseListResult(payload,call,bad){
       if(tab==='Used rates')host=list(['Rate','Approved hours','Used pay rate'],['DAY','NIGHT','SAT','SUN','BH'].flatMap(code=>(rates?.rows??[]).filter(r=>r.bucket===code)).map(r=>[rateNames[r.bucket],decimal(r.approved_hours),rate(r.source_pay_rate)]));
       if(tab==='Available rates'){const rows=schedule?.rows??[],standard=['DAY','NIGHT','SAT','SUN','BH'].flatMap(code=>rows.filter(r=>r.rate_family==='STANDARD'&&r.rate_code===code));host=list(['Rate','PAYE pay','Umbrella pay','Charge'],[...standard,...rows.filter(r=>r.rate_family!=='STANDARD')].map(r=>[rateNames[r.rate_code]||r.rate_code,rate(r.paye_rate),rate(r.umbrella_rate),rate(r.charge_rate)]));}
       if(host)parts.push(host);
-      if(summary?.target_pay_channel==='UMBRELLA'&&tab==='Lines'){
-        const totals=el('dl',undefined,'bpay-next-frozen-totals');totals.setAttribute('aria-label','Umbrella payment totals');
-        for(const [label,key] of [['Pay ex VAT','frozen_gross_ex_vat'],['VAT','frozen_gross_vat'],['Pay inc VAT','frozen_gross_inc_vat'],['Bank amount','cash_amount']]){
+      if(summary&&tab==='Lines'){
+        const totals=el('dl',undefined,'bpay-next-frozen-totals');totals.setAttribute('aria-label','Candidate payment totals');
+        for(const [label,key] of [['Gross ex VAT','frozen_gross_ex_vat'],['VAT','frozen_gross_vat'],['Gross inc VAT','frozen_gross_inc_vat'],['Deductions at gross','gross_stage_deductions'],[summary.target_pay_channel==='PAYE'?'Recoveries from PAYE net':'Recoveries at net','net_recovery_reserved'],['Bank amount','cash_amount']]){
           const group=el('div'),value=el('dd',rate(summary[key]));value.dataset.nextFormattedMoney='';group.append(el('dt',label),value);totals.append(group);
         }
         parts.push(totals);
@@ -1934,6 +1997,7 @@ function caseListResult(payload,call,bad){
     const issuePages=preparationIssuePages(transport,runId,'CANDIDATES');
     const content=el('section',undefined,'bpay-next-worker-review'),footer=el('div',undefined,'bpay-next-window-actions'),headerDetail=el('span',undefined,'bpay-next-progress-subtitle');
     headerDetail.hidden=true;headerDetail.dataset.nextLiveCopy='';
+    let totals=null,caseDetail=null;
     let frame,controller,busy=false,closed=false,timer=null,page=null,progressFacts=null,progressTicket=0,readError='',result='',selected=null,scrollOffset=0,loadingMore=false,discardRequested=false;
     const current=()=>{try{return !closed&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true
       &&(!reviewScope||!options.progressCurrentNamespace||preparationScope(options.progressCurrentNamespace())===reviewScope);}catch{return false;}};
@@ -1941,9 +2005,68 @@ function caseListResult(payload,call,bad){
     const money=v=>{if(v===null)return '—';const neg=v.startsWith('-'),[whole,fraction='']=(neg?v.slice(1):v).split('.');return (neg?'−':'')+'£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0').slice(0,2);};
     const focus=ui.continuity(content,doc,()=>content.querySelector('button'));
     async function act(fn){if(busy||!current())return;busy=true;readError='';render();try{await fn();}catch(e){readError=e?.serverCode==='BPAY_NEXT_CONFIRM_PREPARATION_DISCARDED_OR_BLOCKED'?'This Draft was discarded or has payments that could not be removed.':e?.serverCode==='BPAY_NEXT_CONFIRM_PREPARATION_EXPIRED_OR_UNBOUND'?'This Draft has expired.':controller.snapshot().pending?'The result is not known; try this request again.':e?.serverCode==='BPAY_NEXT_PREPARE_ISSUES_CONTEXT_CHANGED'||e?.code==='READ_CHANGED'?'The list has changed. Refresh and try again.':'Could not complete this action; refresh and try again.';}finally{busy=false;render();}}
+
+    async function readTotals(next){
+      const total=await transport.page('REVIEW_TOTALS',{run_id:runId});
+      if(!current())return;
+      for(const key of ['review_revision','run_status','selection_state','paye_totals_revision','umbrella_totals_revision'])if(total.context[key]!==next.context[key])fail('READ_CHANGED');
+      return total;
+    }
+    async function readCases(row,after=null,direction='next'){
+      const state=caseDetail?.worker===row.run_worker_id?caseDetail:{worker:row.run_worker_id,row,sort:'DEDUCTION_ASC',page:null,history:[],after:null,scroll:0};
+      const next=await transport.page('REVIEW_CASES',{run_id:runId,run_worker_id:row.run_worker_id,sort:state.sort,after,limit:100});
+      if(!current()||!page)return;
+      for(const key of ['review_revision','paye_totals_revision','umbrella_totals_revision'])if(next.context[key]!==page.context[key])fail('READ_CHANGED');
+      if(next.context.preparation_revision!==row.preparation_revision)fail('READ_CHANGED');
+      const history=after===null?[]:direction==='back'?state.history.slice(0,-1):[...state.history,state.after];
+      caseDetail={...state,page:next,after,history,scroll:0};
+    }
+    async function toggleCases(row){
+      if(caseDetail?.worker===row.run_worker_id){caseDetail=null;return;}
+      caseDetail={worker:row.run_worker_id,row,sort:'DEDUCTION_ASC',page:null,history:[],after:null,scroll:0};await readCases(row);
+    }
+    function caseLines(row,locked){
+      const state=caseDetail,host=el('div',undefined,'bpay-next-case-review-scroll');
+      host.tabIndex=0;host.setAttribute('role','region');host.setAttribute('aria-label',row.candidate_display_name+' payments');
+      if(!state?.page){const loading=el('p','Loading payments…');loading.setAttribute('role','status');host.append(loading);return host;}
+      const table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),head=el('thead'),titles=el('tr'),body=el('tbody');
+      const sort=async key=>{state.sort=key+'_'+(state.sort===key+'_ASC'?'DESC':'ASC');await readCases(row);};
+      for(const [label,key]of [['Deduction','DEDUCTION'],['Due','DUE'],['This Draft','THIS_DRAFT'],['Outstanding after','OUTSTANDING'],['Note','NOTE']]){
+        const th=el('th'),sorted=state.sort.startsWith(key+'_');th.setAttribute('aria-sort',sorted?(state.sort.endsWith('_DESC')?'descending':'ascending'):'none');th.append(button(label,()=>sort(key),locked));titles.append(th);
+      }
+      head.append(titles);
+      const phone=el('label','Sort payments by','bpay-next-issue-phone-sort'),select=el('select');
+      for(const [label,key]of [['Deduction','DEDUCTION'],['Due','DUE'],['This Draft','THIS_DRAFT'],['Outstanding after','OUTSTANDING'],['Note','NOTE']])for(const direction of ['ASC','DESC']){const o=el('option',label+(direction==='ASC'?' ascending':' descending'));o.value=key+'_'+direction;select.append(o);}
+      select.value=state.sort;select.disabled=locked;select.addEventListener('change',()=>void act(async()=>{state.sort=select.value;await readCases(row);}));phone.append(select);
+      for(const item of state.page.rows){
+        const tr=el('tr');tr.tabIndex=0;tr.dataset.caseComponentId=item.case_component_id;tr.dataset.nextFocusKey='review-case:'+item.case_component_id;tr.setAttribute('aria-selected',String(state.selected===item.case_component_id));tr.addEventListener('click',()=>{state.selected=item.case_component_id;for(const n of body.children)n.setAttribute('aria-selected',String(n===tr));});tr.addEventListener('keydown',e=>{if(!['ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();e.stopPropagation();const all=Array.from(body.children),i=all.indexOf(tr),next=e.key==='Home'?all[0]:e.key==='End'?all.at(-1):all[Math.max(0,Math.min(all.length-1,i+(e.key==='ArrowDown'?1:-1)))];if(next){state.selected=next.dataset.caseComponentId;for(const n of all)n.setAttribute('aria-selected',String(n===next));next.focus();next.scrollIntoView({block:'nearest'});}});const values=[item.label,money(item.due),money(item.this_draft),money(item.outstanding_after),item.note||'—'];
+        for(let i=0;i<values.length;i++){const td=el('td',values[i]);td.dataset.label=['Deduction','Due','This Draft','Outstanding after','Note'][i];
+          if(i>0&&i<4){td.dataset.nextFormattedMoney='';td.classList.add('bpay-next-review-money');if((i===1||i===3)&&item.source_pay_channel!==null&&item.source_pay_channel!==row.pay_channel)td.append(el('small',item.source_pay_channel==='PAYE'?'PAYE':'Umbrella'));}
+          tr.append(td);
+        }
+        body.append(tr);
+      }
+      table.append(head,body);host.append(phone,table);host.scrollTop=state.scroll;
+      host.addEventListener('scroll',()=>{state.scroll=host.scrollTop;if(locked||readError)return;if(host.scrollTop<30&&state.history.length)void act(()=>readCases(row,state.history.at(-1),'back'));else if(host.scrollTop+host.clientHeight>=host.scrollHeight-50&&!state.page.complete)void act(()=>readCases(row,state.page.next_cursor));});
+      return host;
+    }
+    function totalsCards(){
+      const host=el('div',undefined,'bpay-next-draft-totals');host.classList.toggle('is-stale',Boolean(readError));host.setAttribute('aria-label','Draft totals');
+      const cards=[['Whole Draft',totals?.whole],['PAYE Draft',totals?.channels[0]],['Umbrella Draft',totals?.channels[1]]];
+      for(const [name,value]of cards){const card=el('section',undefined,'bpay-next-draft-total-card'),title=el('h3',name),count=el('strong',value?value.candidate_count+(value.candidate_count==='1'?' Candidate':' Candidates'):'—');card.append(title,count);
+        const list=el('dl');const unknown=value===undefined||BigInt(value.net_missing_count)>0n||BigInt(value.net_replacement_pending_count)>0n;
+        for(const [label,key]of [['Gross ex VAT','gross_ex_vat'],['VAT','gross_vat'],['Deductions at gross','gross_stage_deductions'],['Recoveries from PAYE net','net_recovery_reserved'],['Bank amount','cash_known']]){
+          if(name==='PAYE Draft'&&key==='gross_vat')continue;
+          const text=key==='cash_known'&&unknown?(value===undefined?'—':BigInt(value.net_replacement_pending_count)>0n?'PAYE net is updating':'PAYE net not entered'):money(value?.[key]??null);
+          const group=el('div');group.append(el('dt',key==='net_recovery_reserved'&&name!=='PAYE Draft'?'Recoveries at net':label),el('dd',text));group.lastChild.dataset.nextFormattedMoney='';list.append(group);
+        }
+        card.append(list);host.append(card);
+      }return host;
+    }
+
     async function readRows(cursor=null,direction='next'){
       loadingMore=cursor!==null;if(cursor===null&&direction!=='back')scrollOffset=0;render();
-      try{const next=await issuePages.read(cursor,direction);if(!current())return;page=next;}finally{loadingMore=false;}
+      try{const next=await issuePages.read(cursor,direction);if(!current())return;const total=await readTotals(next);if(!current())return;page=next;totals=total;caseDetail=null;}finally{loadingMore=false;}
     }
     async function updateAction(){
       const s=controller.snapshot(),a=s.worker_action;if(!a||s.pending)return;
@@ -1996,25 +2119,25 @@ function caseListResult(payload,call,bad){
     }
     function render(){
       if(!controller||!content.isConnected)return;win.clearTimeout(timer);if(!current()){headerDetail.hidden=true;headerDetail.textContent='';content.replaceChildren(el('p','Banking Pay is unavailable.'));footer.replaceChildren();return;}
-      headerDetail.textContent=progressFacts?'Started by '+progressFacts.actor_display_name+' · '+win.CloudTMSBpayNextDates.formatTimestamp(progressFacts.started_at_utc)+(!['DRAFT','EXECUTING','COMPLETE'].includes(progressFacts.status)?' · '+(progressFacts.expired_at_utc?'Expired at '+win.CloudTMSBpayNextDates.formatTimestamp(progressFacts.expired_at_utc):(progressFacts.status==='CANCELLING'?'Expiry time ':'Expires ')+win.CloudTMSBpayNextDates.formatTimestamp(progressFacts.expires_at_utc)):''):'';headerDetail.hidden=!headerDetail.textContent;
-      const token=focus.before(),s=controller.snapshot(),locked=busy||s.busy||s.pending!==null||s.worker_action!==null||!current();
+      headerDetail.textContent=progressFacts?'Started by '+progressFacts.actor_display_name+' · '+win.CloudTMSBpayNextDates.formatTimestamp(progressFacts.started_at_utc):'';if(totals)headerDetail.textContent+=' · Figures from '+win.CloudTMSBpayNextDates.formatTimestamp(totals.captured_at_utc);headerDetail.hidden=!headerDetail.textContent;
+      content.classList.toggle('has-read-error',Boolean(readError));const token=focus.before(),s=controller.snapshot(),locked=busy||s.busy||s.pending!==null||s.worker_action!==null||!current();
       if(progressFacts?.discard_phase!==null&&progressFacts?.discard_phase!==undefined){headerDetail.textContent=discardActorCopy(progressFacts,win.CloudTMSBpayNextDates.formatTimestamp);headerDetail.hidden=false;}
-      const top=el('div',undefined,'bpay-next-review-tools');top.append(button('Refresh',refresh,locked));const sortLabel=el('label','Sort by','bpay-next-issue-phone-sort'),sortSelect=el('select');for(const [key,label]of [['CANDIDATE_ASC','Candidate A–Z'],['CANDIDATE_DESC','Candidate Z–A'],['GROSS_ASC','Amount low–high'],['GROSS_DESC','Amount high–low'],['STATE_ASC','To review first'],['STATE_DESC','Reverse state order']]){const option=el('option',label);option.value=key;sortSelect.append(option);}sortSelect.value=issuePages.sort();sortSelect.disabled=locked;sortSelect.addEventListener('change',()=>void act(async()=>{issuePages.setSort(sortSelect.value);await readRows();}));sortLabel.append(sortSelect);top.prepend(sortLabel);
+      const top=el('div',undefined,'bpay-next-review-tools');top.append(button('Refresh',refresh,locked));if(progressFacts){const strip=el('div',undefined,'bpay-next-review-counts');for(const [label,value]of [['Candidates',page?.counts.scope_count??progressFacts.selected_candidates],['To review',progressFacts.review],['Expires',win.CloudTMSBpayNextDates.formatTimestamp(progressFacts.expires_at_utc)]]){const group=el('div');group.append(el('small',label),el('strong',value));strip.append(group);}top.prepend(strip);}if(totals)top.append(el('small','Updated '+win.CloudTMSBpayNextDates.formatTimestamp(totals.observed_at_utc))); const sortLabel=el('label','Sort by','bpay-next-issue-phone-sort'),sortSelect=el('select');for(const [key,label]of [['CANDIDATE_ASC','Candidate A–Z'],['CANDIDATE_DESC','Candidate Z–A'],['GROSS_ASC','Amount low–high'],['GROSS_DESC','Amount high–low'],['CHANNEL_ASC','Pay channel A–Z'],['CHANNEL_DESC','Pay channel Z–A'],['DEDUCTIONS_ASC','Deductions low–high'],['DEDUCTIONS_DESC','Deductions high–low'],['STATE_ASC','To review first'],['STATE_DESC','Reverse state order']]){const option=el('option',label);option.value=key;sortSelect.append(option);}sortSelect.value=issuePages.sort();sortSelect.disabled=locked;sortSelect.addEventListener('change',()=>void act(async()=>{issuePages.setSort(sortSelect.value);await readRows();}));sortLabel.append(sortSelect);top.prepend(sortLabel);
       const message=el('p',readError||(s.pending?'The result is not known; try this request again.':result||(busy&&!loadingMore?(page===null?'Loading Draft…':'Checking Candidates…'):'')),readError||s.pending?'ws-notice ws-notice--danger':'ws-notice ws-notice--info');message.hidden=!message.textContent;message.dataset.nextLiveCopy='';message.setAttribute('role',readError||s.pending?'alert':'status');
       if(!readError&&!s.pending&&['Candidate ready.','Candidate removed from Draft.','Candidate not in this Draft.','Draft confirmed.'].includes(result))message.className='ws-notice bpay-next-result-success';
       if(!readError&&!s.pending&&progressFacts?.discard_phase==='PARTIAL')message.className='ws-notice ws-notice--danger';
       const scroll=el('div',undefined,'ctms-universal-table-host bpay-next-review-results');scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.setAttribute('aria-label','Draft results');
       const hasActions=(page?.rows??[]).some(row=>row.physical_timesheet_id!==null||row.worker_status==='READY'||progressFacts?.discard_phase===null&&['PREPARING','REVIEW'].includes(row.worker_status));
-      const table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),head=el('thead'),titles=el('tr'),rows=el('tbody');for(const [label,key]of [['Candidate','CANDIDATE'],['Gross ex VAT','GROSS'],['State','STATE'],...(hasActions?[['Actions',null]]:[])]){const th=el('th');if(key){const sorted=issuePages.sort().startsWith(key+'_'),desc=sorted&&issuePages.sort().endsWith('_DESC');th.setAttribute('aria-sort',sorted?(desc?'descending':'ascending'):'none');th.append(button(label,async()=>{issuePages.setSort(key+'_'+(desc?'ASC':'DESC'));await readRows();},locked));}else th.textContent=label;titles.append(th);}head.append(titles);
+      const table=el('table',undefined,'ctms-universal-table ctms-universal-card-table'),head=el('thead'),titles=el('tr'),rows=el('tbody');for(const [label,key]of [['Candidate','CANDIDATE'],['Pay channel','CHANNEL'],['Gross ex VAT','GROSS'],['Deductions','DEDUCTIONS'],['State','STATE'],...(hasActions?[['Actions',null]]:[])]){const th=el('th');if(key){const sorted=issuePages.sort().startsWith(key+'_'),desc=sorted&&issuePages.sort().endsWith('_DESC');th.setAttribute('aria-sort',sorted?(desc?'descending':'ascending'):'none');th.append(button(label,async()=>{issuePages.setSort(key+'_'+(desc?'ASC':'DESC'));await readRows();},locked));}else th.textContent=label;titles.append(th);}head.append(titles);
       for(const row of page?.rows??[]){
         const tr=el('tr');tr.tabIndex=0;tr.dataset.workerId=row.run_worker_id??'';tr.dataset.issueRowKey=row.row_key;tr.setAttribute('aria-selected',String(selected===row.row_key));
         tr.dataset.nextFocusKey='issue-row:'+row.row_key;
         tr.addEventListener('keydown',e=>{if(e.target!==tr||!['ArrowUp','ArrowDown','Home','End'].includes(e.key))return;e.preventDefault();e.stopPropagation();const all=Array.from(tr.parentElement.querySelectorAll('tr[data-issue-row-key]')),i=all.indexOf(tr),target=e.key==='Home'?all[0]:e.key==='End'?all.at(-1):all[Math.max(0,Math.min(all.length-1,i+(e.key==='ArrowDown'?1:-1)))];if(target){selected=target.dataset.issueRowKey;for(const node of all)node.setAttribute('aria-selected',String(node===target));target.focus();target.scrollIntoView({block:'nearest'});}});
         tr.addEventListener('click',event=>{if(event.target.closest('button'))return;selected=row.row_key;render();});
-        const labels=[row.candidate_display_name??'—',money(row.frozen_ex_vat),null,null];
-        for(let i=0;i<(hasActions?4:3);i++){const td=el('td',labels[i]);td.dataset.label=['Candidate','Gross ex VAT','State','Actions'][i];if(i===0){td.replaceChildren(el('strong',labels[i]));if(row.candidate_reference!==null)td.append(el('small',row.candidate_reference));if(row.timesheet_reference!==null)td.append(el('small','Timesheet '+row.timesheet_reference+(row.week_ending_date?' · Week ending '+row.week_ending_date.split('-').reverse().join('/') : '')));}if(i===1){td.className='bpay-next-review-money';td.dataset.nextFormattedMoney='';}tr.append(td);}
+        const labels=[row.candidate_display_name??'—',row.pay_channel===null?'—':row.pay_channel==='PAYE'?'PAYE':'Umbrella',money(row.frozen_ex_vat),money(row.deduction_total),null,null];
+        for(let i=0;i<(hasActions?6:5);i++){const td=el('td',labels[i]);td.dataset.label=['Candidate','Pay channel','Gross ex VAT','Deductions','State','Actions'][i];if(i===0){td.replaceChildren(el('strong',labels[i]));if(row.frozen_offer_complete&&BigInt(row.case_count??'0')>0n){const open=caseDetail?.worker===row.run_worker_id,caret=button(open?'▾':'▸',()=>toggleCases(row),locked||Boolean(readError));caret.className='bpay-next-review-caret';caret.setAttribute('aria-expanded',String(open));caret.setAttribute('aria-label',(open?'Hide':'Show')+' payments for '+(row.candidate_display_name??'Candidate'));td.prepend(caret);}if(row.candidate_reference!==null)td.append(el('small',row.candidate_reference));if(row.timesheet_reference!==null)td.append(el('small','Timesheet '+row.timesheet_reference+(row.week_ending_date?' · Week ending '+row.week_ending_date.split('-').reverse().join('/') : '')));}if(i===2||i===3){td.className='bpay-next-review-money';td.dataset.nextFormattedMoney='';}tr.append(td);}
         const state=el('span',row.waiting_on_other_run?'Waiting':({PENDING:'Waiting to prepare',FAILED:'To review',NOT_IN_DRAFT:'Not in this Draft',DRAFT:'Confirmed',ISSUED:'Issued',COMPLETE:'Complete',PREPARING:'Preparing',REVIEW:'To review',READY:'Ready',CANCELLING:'Removing',CANCELLED:'Not in this Draft'})[row.worker_status]||'Preparing','candidate-office-badge candidate-office-badge--'+({PENDING:'neutral',FAILED:'warning',NOT_IN_DRAFT:'neutral',DRAFT:'success',ISSUED:'info',COMPLETE:'success',REVIEW:'warning',READY:'success',PREPARING:'info',CANCELLING:'info',CANCELLED:'neutral'})[row.worker_status]);
-        const stateValue=el('div');stateValue.append(state);tr.children[2].replaceChildren(stateValue);if(row.waiting_on_other_run)stateValue.append(el('small',preparationIssueReason(row)));if(row.capacity_reduced_by_other_run)stateValue.append(el('small','Some deductions are already in another Draft.'));
+        const stateValue=el('div');stateValue.append(state);tr.children[4].replaceChildren(stateValue);if(row.waiting_on_other_run)stateValue.append(el('small',preparationIssueReason(row)));if(row.capacity_reduced_by_other_run)stateValue.append(el('small','Some deductions are already in another Draft.'));
         if(['REVIEW','FAILED'].includes(row.worker_status)){stateValue.append(el('small',preparationIssueReason(row)));}
         if(row.discard_outcome==='BLOCKED'){state.textContent='Could not remove';state.className='candidate-office-badge candidate-office-badge--danger';stateValue.replaceChildren(state,el('small','This payment cannot be removed; refresh or contact support.'));}
         const actions=el('div',undefined,'bpay-next-review-row-actions'),rowLocked=locked||Boolean(readError);
@@ -2031,7 +2154,7 @@ function caseListResult(payload,call,bad){
           }else await ask(row,'WORKER_REPREPARE');
         },rowLocked));
         if(progressFacts?.discard_phase===null&&['PREPARING','REVIEW','READY'].includes(row.worker_status))actions.append(button('Remove from Draft',()=>ask(row,'WORKER_RELEASE'),rowLocked));
-        if(row.physical_timesheet_id!==null&&row.expected_revision_id!==null||row.worker_status==='READY'){const phone=button('Open',()=>{if(row.worker_status==='READY')return openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id);return openReviewTimesheet(row);},rowLocked);phone.classList.add('bpay-next-phone-open');for(const child of actions.querySelectorAll('button'))if(['Open Timesheet','Draft detail'].includes(child.textContent))child.classList.add('bpay-next-desktop-open');actions.append(phone);}if(hasActions){tr.children[3].append(actions);tr.children[3].hidden=actions.childElementCount===0;}for(const action of tr.querySelectorAll('button'))action.dataset.nextFocusKey='issue-action:'+row.row_key+':'+action.textContent;rows.append(tr);
+        if(row.physical_timesheet_id!==null&&row.expected_revision_id!==null||row.worker_status==='READY'){const phone=button('Open',()=>{if(row.worker_status==='READY')return openFrozenWorkerDetail({...options,detailRunId:runId,detailCandidateId:row.candidate_id},row.run_worker_id);return openReviewTimesheet(row);},rowLocked);phone.classList.add('bpay-next-phone-open');for(const child of actions.querySelectorAll('button'))if(['Open Timesheet','Draft detail'].includes(child.textContent))child.classList.add('bpay-next-desktop-open');actions.append(phone);}if(hasActions){tr.children[5].append(actions);tr.children[5].hidden=actions.childElementCount===0;}for(const action of tr.querySelectorAll('button'))action.dataset.nextFocusKey='issue-action:'+row.row_key+':'+action.textContent;rows.append(tr);if(caseDetail?.worker===row.run_worker_id){const detail=el('tr',undefined,'bpay-next-case-detail-row'),td=el('td');td.colSpan=hasActions?6:5;td.append(caseLines(row,rowLocked));detail.append(td);rows.append(detail);}
       }
       table.append(head,rows);scroll.append(table);
       scroll.addEventListener('scroll',()=>{scrollOffset=scroll.scrollTop;if(locked||readError||!page)return;if(scroll.scrollTop<40&&page.history.length)void act(()=>readRows(page.history.at(-1),'back'));else if(scroll.scrollTop+scroll.clientHeight>=scroll.scrollHeight-80&&!page.complete)void act(()=>readRows(page.next_cursor));});
@@ -2040,10 +2163,10 @@ function caseListResult(payload,call,bad){
       more?.setAttribute('role','status');
       const reviewWarning=el('p',progressFacts&&BigInt(progressFacts.review)>0n?String(progressFacts.review)+(progressFacts.review==='1'?' Candidate needs':' Candidates need')+' review before you can confirm.':'','ws-notice ws-notice--warning');reviewWarning.setAttribute('role','status');
       const omitted=el('div',undefined,'bpay-next-omitted-information ws-notice ws-notice--info'),omission=page?preparationOmissionCopy(page.counts):'';if(omission){omitted.append(el('span',omission),button('Not in this Draft',()=>openNotInDraft({...options,transport},runId),locked));}
-      content.replaceChildren(...(message.hidden?[]:[message]),...(recovery?[recovery]:[]),...(reviewWarning.textContent?[reviewWarning]:[]),...(omission?[omitted]:[]),top,...(empty?[empty]:[]),scroll,...(page?[el('p',String(page.counts.scope_count).replace(/\B(?=(\d{3})+(?!\d))/g,',')+(page.counts.scope_count==='1'?' Candidate':' Candidates')+' · Sorted by '+(issuePages.sort()==='STATE_ASC'?'state, To review first':issuePages.sort()==='STATE_DESC'?'state, reverse order':issuePages.sort().startsWith('GROSS_')?'amount, '+(issuePages.sort().endsWith('_DESC')?'high to low':'low to high'):'Candidate, '+(issuePages.sort().endsWith('_DESC')?'Z to A':'A to Z')),'bpay-next-omitted-summary')]:[]),...(more?[more]:[]));scroll.scrollTop=scrollOffset;footer.replaceChildren();
+      content.replaceChildren(...(message.hidden?[]:[message]),...(recovery?[recovery]:[]),...(reviewWarning.textContent?[reviewWarning]:[]),...(omission?[omitted]:[]),top,...(empty?[empty]:[]),scroll,...(page?[el('p',String(page.counts.scope_count).replace(/\B(?=(\d{3})+(?!\d))/g,',')+(page.counts.scope_count==='1'?' Candidate':' Candidates')+' · Sorted by '+(issuePages.sort()==='STATE_ASC'?'state, To review first':issuePages.sort()==='STATE_DESC'?'state, reverse order':issuePages.sort().startsWith('CHANNEL_')?'pay channel, '+(issuePages.sort().endsWith('_DESC')?'Z to A':'A to Z'):issuePages.sort().startsWith('DEDUCTIONS_')?'deductions, '+(issuePages.sort().endsWith('_DESC')?'high to low':'low to high'):issuePages.sort().startsWith('GROSS_')?'amount, '+(issuePages.sort().endsWith('_DESC')?'high to low':'low to high'):'Candidate, '+(issuePages.sort().endsWith('_DESC')?'Z to A':'A to Z')),'bpay-next-omitted-summary')]:[]),...(more?[more]:[]),totalsCards());scroll.scrollTop=scrollOffset;footer.replaceChildren();
       if(progressFacts?.discard_phase===null&&['PREPARING','REVIEW'].includes(progressFacts.status)&&!s.confirmed){const discard=button('Discard this Draft',discardDraft,locked||Boolean(readError));discard.dataset.nextDestructive='';footer.append(discard);}
       if(['DISCARDED','PARTIAL'].includes(progressFacts?.discard_phase))footer.append(button('Back to Banking Pay',backToBankingPay,locked,true));
-      else if(progressFacts?.discard_phase===null)footer.append(button('Confirm Draft',async()=>{await controller.mutate('CONFIRM',{run_id:runId,review_revision:s.review_revision});result='Draft confirmed.';await readRows();},locked||Boolean(readError)||page===null||!progressFacts||progressFacts.discard_phase!==null||['CANCELLING','CANCELLED'].includes(progressFacts.status)||!s.can_confirm||!s.review_revision||s.confirmed,true));focus.after(token);
+      else if(progressFacts?.discard_phase===null)footer.append(button('Confirm Draft',async()=>{await controller.mutate('CONFIRM',{run_id:runId,review_revision:s.review_revision});result='Draft confirmed.';await readRows();},locked||Boolean(readError)||page===null||totals===null||!progressFacts||progressFacts.discard_phase!==null||['CANCELLING','CANCELLED'].includes(progressFacts.status)||!s.can_confirm||!s.review_revision||s.confirmed,true));focus.after(token);
       footer.hidden=footer.childElementCount===0;
       if(!busy&&!s.busy&&!s.pending&&current()&&frame?.active()&&doc.visibilityState!=='hidden'&&(s.worker_action||progressFacts?.discard_phase==='CANCELLING'))timer=win.setTimeout(()=>void act(async()=>{if(progressFacts?.discard_phase==='CANCELLING')await refresh();else{await updateAction();await readRows();}}),2000);
     }
