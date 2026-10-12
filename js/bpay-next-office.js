@@ -2405,7 +2405,7 @@ function caseListResult(payload,call,bad){
       channels=page.rows.map(({run_id,pay_channel})=>({run_id,pay_channel}));render();
     }
     const onScroll=()=>{if(!visible()||reading||error||!pages.length)return;if(scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<80&&!pages.at(-1).complete)void read(pages.at(-1).next_cursor,'next');else if(scroll.scrollTop<1&&history.length)void read(history.at(-1),'back');};
-    const onVisible=()=>{win.clearTimeout(timer);if(visible())void refresh(false);else render();},onChanged=()=>{setNamespace(options.currentNamespace());render();};
+    const onVisible=()=>{win.clearTimeout(timer);if(visible())void refresh(false);else render();},onChanged=()=>{setNamespace(null);try{if(options.ownerReady()===true)setNamespace(options.currentNamespace());}catch{}render();};
     scroll.addEventListener('scroll',onScroll);doc.addEventListener('visibilitychange',onVisible);win.addEventListener('focus',onVisible);win.addEventListener('cloudtms:bpay-next-owner-changed',onChanged);
     setNamespace(options.currentNamespace());return Object.freeze({setNamespace,refresh,setConfirmedDrafts,snapshot:()=>({context:namespace,rows:pages.flatMap(p=>p.rows),complete:pages.at(-1)?.complete??false,error}),close(){closed=true;generation++;win.clearTimeout(timer);scroll.removeEventListener('scroll',onScroll);doc.removeEventListener('visibilitychange',onVisible);win.removeEventListener('focus',onVisible);win.removeEventListener('cloudtms:bpay-next-owner-changed',onChanged);root.remove();}});
   }
