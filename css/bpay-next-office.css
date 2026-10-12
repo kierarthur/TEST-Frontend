@@ -1082,3 +1082,56 @@
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-draft-created) button{min-height:44px}
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-draft-confirm) button{min-height:44px}
 }
+
+/* DR21: native dark worksheet, fixed captured values and cursor scrolling. */
+#modal.ctms-modern-modal .bpay-next-worksheet-toolbar{display:flex;align-items:flex-end;gap:12px;margin-bottom:20px}
+#modal.ctms-modern-modal .bpay-next-worksheet-toolbar label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ctms-modal-muted)}
+#modal.ctms-modern-modal .bpay-next-worksheet-toolbar input{min-width:280px;background:var(--ctms-modal-panel-raised);color:var(--ctms-modal-text);border:1px solid var(--ctms-modal-line);border-radius:10px;padding:10px 12px}
+#modal.ctms-modern-modal .bpay-next-worksheet-scroll{max-height:60vh;overflow:auto;overscroll-behavior:contain;border:1px solid var(--ctms-modal-line);border-radius:13px}
+#modal.ctms-modern-modal .bpay-next-worksheet-scroll table{width:100%;table-layout:fixed}
+#modal.ctms-modern-modal .bpay-next-worksheet-scroll th:first-child{width:22%}
+#modal.ctms-modern-modal .bpay-next-worksheet-scroll :is(th,td){overflow-wrap:anywhere;vertical-align:top}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worksheet .bpay-next-worksheet-sort{border:0;border-radius:0;box-shadow:none;background:transparent;color:inherit;font:inherit;font-weight:700;text-align:inherit;padding:0;min-height:0;cursor:pointer}
+#modal.ctms-modern-modal .bpay-next-worksheet-sort:focus-visible{outline:2px solid var(--ctms-modal-accent-bright);outline-offset:3px}
+#modal.ctms-modern-modal .bpay-next-worksheet-name{display:flex;align-items:flex-start;gap:7px}
+#modal.ctms-modern-modal .bpay-next-worksheet :is(td small,.bpay-next-worksheet-name small){display:block;color:var(--ctms-modal-muted);font-size:11px;margin-top:5px}
+#modal.ctms-modern-modal .bpay-next-worksheet .bpay-next-review-caret{border:0;background:transparent;color:inherit;cursor:pointer;padding:0;min-width:20px;height:22px}
+#modal.ctms-modern-modal .bpay-next-worksheet-expanded>td{padding:16px;background:var(--ctms-modal-panel-raised)}
+#modal.ctms-modern-modal .bpay-next-worksheet-workings p{margin:0 0 12px}
+#modal.ctms-modern-modal .bpay-next-worksheet-workings dl{display:flex;flex-wrap:wrap;gap:16px;margin:0 0 14px}
+#modal.ctms-modern-modal .bpay-next-worksheet-workings dt{color:var(--ctms-modal-muted);font-size:12px}
+#modal.ctms-modern-modal .bpay-next-worksheet-workings dd{margin:5px 0 0;font-weight:700;font-variant-numeric:tabular-nums}
+#modal.ctms-modern-modal .bpay-next-worksheet-line-scroll{max-height:240px;overflow:auto;margin:14px 0}
+#modal.ctms-modern-modal .bpay-next-worksheet-toolbar .bpay-next-worksheet-phone-sort,#modal.ctms-modern-modal .bpay-next-worksheet-phone-open{display:none}
+#modal.ctms-modern-modal .bpay-next-worksheet [hidden]{display:none}
+@media(min-width:701px){#modal.ctms-modern-modal .bpay-next-worksheet-scroll :is(th,td):is(:nth-child(2),:nth-child(3),:nth-child(4),:nth-child(5),:nth-child(6)){text-align:right;font-variant-numeric:tabular-nums}}
+@media(max-width:700px){
+ #modal.ctms-modern-modal .bpay-next-worksheet-toolbar{flex-wrap:wrap;gap:10px}
+ #modal.ctms-modern-modal .bpay-next-worksheet-toolbar label:first-child{flex:1 1 100%}
+ #modal.ctms-modern-modal .bpay-next-worksheet-toolbar input{min-width:0;width:100%}
+ #modal.ctms-modern-modal .bpay-next-worksheet-toolbar .bpay-next-worksheet-phone-sort{display:flex;flex:1}
+ #modal.ctms-modern-modal .bpay-next-worksheet-phone-open{display:inline-block;margin-top:10px}
+ #modal.ctms-modern-modal .bpay-next-worksheet :is(button,select){min-height:44px}
+ #modal.ctms-modern-modal .bpay-next-worksheet .bpay-next-review-caret{width:44px;height:44px;flex-shrink:0}
+ #modal.ctms-modern-modal .bpay-next-worksheet-scroll table{table-layout:auto}
+ #modal.ctms-modern-modal .bpay-next-worksheet-expanded>td{display:block}
+ #modal.ctms-modern-modal .bpay-next-worksheet-expanded>td:before{display:none}
+}
+
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worksheet .bpay-next-worksheet-sort{font-size:11px;text-transform:uppercase;letter-spacing:.02em}
+
+#modal.ctms-modern-modal .bpay-next-worksheet-scroll[data-stale='true'] tbody{opacity:.5}
+@media(min-width:701px){#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worksheet-line-scroll :is(th,td):is(:nth-child(5),:nth-child(6),:nth-child(7)){text-align:right;font-variant-numeric:tabular-nums}}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worksheet :is(.bpay-next-worksheet-phone-open,.bpay-next-review-caret){min-height:44px;min-width:44px}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worksheet button.btn,#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worksheet :is(select,input){min-height:44px}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-worksheet-scroll>table>thead{display:none}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-worksheet) #btnCloseModal{min-height:44px;min-width:44px}
+}
+
+#modal.ctms-modern-modal .bpay-next-worksheet .candidate-office-badge{font-size:11px;white-space:normal}
+#modal.ctms-modern-modal .bpay-next-worksheet-skeleton-row{height:55px;margin-bottom:1px;background:var(--ctms-modal-panel-raised);border-bottom:1px solid var(--ctms-modal-line)}
+@media(min-width:701px){
+ #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='ascending'] .bpay-next-worksheet-sort:after{content:' ↑'}
+ #modal.ctms-modern-modal .bpay-next-worksheet-scroll th[aria-sort='descending'] .bpay-next-worksheet-sort:after{content:' ↓'}
+}
