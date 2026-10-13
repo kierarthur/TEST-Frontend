@@ -749,6 +749,17 @@
 .ws-charge-guidance { margin: 10px 0 0; color: var(--ws-muted-text, #b7c4d8); line-height: 1.45; }
 [data-wsr-table] .ws-query-contact-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 [data-wsr-table] .ws-query-contact-actions:empty { display: none; }
+.ws-contact-policy, .ws-contact-review, .ws-contact-result { padding: 16px; margin: 12px 0; border: 1px solid #344b65; border-radius: 12px; background: #102037; }
+.ws-contact-audiences { display: flex; gap: 8px; flex-wrap: wrap; }
+.ws-contact-audiences [aria-pressed="true"] { border-color: #9994ff; background: #31375e; }
+.ws-contact-policy p, .ws-contact-note { color: #b8c8db; font-size: 13px; }
+.ws-contact-policy .ws-toolbar label { flex-direction: row; align-items: center; }
+.ws-contact-policy input[type="checkbox"] { min-height: 0; }
+.ws-contact-eligibility { display: block; margin-top: 6px; color: #b8c8db; font-size: 12px; max-width: 32ch; }
+.ws-contact-eligibility--ready { color: #87ddba; }
+.ws-contact-review ul, .ws-contact-result ul { padding-left: 20px; }
+.ws-contact-review li, .ws-contact-result li { margin: 12px 0; overflow-wrap: anywhere; }
+.ws-contact-review li > span, .ws-contact-result li > span { display: block; margin-top: 4px; color: #b8c8db; }
 :is([data-wsr-table], [data-wsc-table]) .ws-status { border-radius: 6px; padding: 4px 7px; max-width: 100%; }
 :is([data-wsr-table], [data-wsc-table]) .ws-status-sub { color: var(--ws-muted-text, #94a3b8); font-weight: 400; }
 [data-wsr-table] th:has([data-wsr-sort="client"]), [data-wsc-table] th:has([data-wsc-sort="client"]) { width: 19%; }
