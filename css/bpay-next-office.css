@@ -1,4 +1,78 @@
 /* NEXT presentation only: full tables scroll inside a fixed reachable header. */
+/* WB30: native bucket table and bounded evidence, with one footer action. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-rates){width:min(1360px,calc(100vw - 48px));color-scheme:dark;}
+#modal.ctms-modern-modal:has(.bpay-next-rates) #modalDrag{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;}
+#modal.ctms-modern-modal:has(.bpay-next-rates) #modalTitle{grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal:has(.bpay-next-rates) [data-next-window-header-detail]{grid-column:1;grid-row:2;margin:0;font-size:12px;line-height:1.4;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal:has(.bpay-next-rates) #btnCloseModal{grid-column:2;grid-row:1 / span 2;}
+#modal.ctms-modern-modal:has(.bpay-next-rates) #modalDrag>.spacer{display:none;}
+#modal.ctms-modern-modal .bpay-next-rates{min-width:0;}
+#modal.ctms-modern-modal .bpay-next-rates-scroll{max-height:65vh;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-modern-modal .bpay-next-rates-warning{padding:12px 14px;border:1px solid rgba(246,189,82,.48);border-left:4px solid #f6bd52;border-radius:10px;background:var(--ctms-modal-panel-raised);margin:0 0 16px;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-rate-table{width:100%;table-layout:fixed;border:1px solid var(--ctms-modal-line);border-radius:13px;border-spacing:0;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-rate-table>thead>tr>th{position:sticky;top:0;z-index:1;background:var(--ctms-modal-panel-raised);font-size:11px;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-rate-table>thead>tr>th:first-child{border-top-left-radius:13px;}
+#modal.ctms-modern-modal .bpay-next-rate-table>thead>tr>th:last-child{border-top-right-radius:13px;}
+#modal.ctms-modern-modal .bpay-next-rate-table :is(th,td){padding:12px 10px;vertical-align:middle;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-rate-table :is(th,td):first-child{width:18%;}
+#modal.ctms-modern-modal .bpay-next-rate-table :is(th,td):nth-child(n+2):nth-child(-n+8){text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-rate-table td small{display:block;color:var(--ctms-modal-sub);margin-top:5px;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-rate-name{display:flex;align-items:center;gap:4px;font-weight:730;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-rate-caret{display:inline-grid;place-items:center;width:24px;height:24px;min-width:24px;min-height:24px;margin:0;padding:0;border:1px solid var(--ctms-modal-line);border-radius:5px;background:transparent;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-rate-table input{width:100%;min-height:38px;padding:8px;background:var(--ctms-modal-input);color:var(--ctms-modal-text);border:1px solid var(--ctms-modal-line);border-radius:8px;font:inherit;text-align:right;box-sizing:border-box;}
+#modal.ctms-modern-modal .bpay-next-rate-table input[aria-invalid=true]{border-color:var(--ctms-modal-danger);}
+#modal.ctms-modern-modal .bpay-next-field-error{color:var(--ctms-modal-danger);margin:0 0 6px;line-height:1.5;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-rates-linked{display:flex;align-items:center;gap:10px;margin-top:16px;min-height:44px;font-size:13px;}
+#modal.ctms-modern-modal .bpay-next-rates-linked input{width:18px;height:18px;accent-color:var(--ctms-modal-accent-bright);}
+#modal.ctms-modern-modal .bpay-next-rates-reason{display:flex;flex-direction:column;gap:8px;margin-top:16px;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-rates-reason textarea{width:100%;box-sizing:border-box;padding:10px;background:var(--ctms-modal-input);color:var(--ctms-modal-text);border:1px solid var(--ctms-modal-line);border-radius:8px;font:inherit;}
+#modal.ctms-modern-modal :is(.bpay-next-rates,.bpay-next-rates-footer) [hidden]{display:none;}
+#modal.ctms-modern-modal .bpay-next-rates-exclusions{color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-rates-footer{display:flex;align-items:center;justify-content:flex-end;gap:12px;width:100%;}
+#modal.ctms-modern-modal .bpay-next-rates-result{margin:0 auto 0 0;font-size:12px;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-rates-evidence{max-height:280px;overflow:auto;overscroll-behavior:contain;}
+#modal.ctms-modern-modal .bpay-next-rates-evidence table{width:100%;table-layout:auto;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-rates-evidence th{position:sticky;top:0;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-rates-evidence :is(th,td):last-child{text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-rate-confirmation{display:flex;flex-direction:column;gap:16px;}
+#modal.ctms-modern-modal .bpay-next-rate-confirmation h2{display:flex;align-items:center;gap:12px;font-size:15px;margin:0;}
+#modal.ctms-modern-modal .bpay-next-rate-question-icon{display:grid;place-items:center;flex:0 0 30px;height:30px;border:1px solid var(--ctms-modal-accent-bright);border-radius:50%;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-rate-confirmation p{margin:0;line-height:1.5;}
+#modal.ctms-modern-modal:has(.bpay-next-rate-confirmation) .bpay-next-confirmation-footer{display:flex;justify-content:flex-end;gap:8px;}
+#modal.ctms-modern-modal .bpay-next-rate-confirmation table{width:100%;border:1px solid var(--ctms-modal-line);border-radius:10px;font-size:13px;}
+#modal.ctms-modern-modal .bpay-next-rate-confirmation table :is(th,td){padding:12px;}
+#modal.ctms-modern-modal .bpay-next-rate-table-host{border:1px solid var(--ctms-modal-line);border-radius:13px;overflow:hidden;}
+#modal.ctms-modern-modal .bpay-next-rate-table-host table{width:100%;border:0;border-spacing:0;font-size:13px;}
+#modal.ctms-modern-modal .bpay-next-rates-result-table :is(th,td){padding:12px 14px;}
+#modal.ctms-modern-modal .bpay-next-rates-result-table th{position:sticky;top:0;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-rate-evidence-message{display:flex;align-items:center;gap:12px;font-size:12px;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-rate-evidence-message p{margin:8px 0;}
+#modal.ctms-modern-modal .bpay-next-rates .bpay-next-result-line{padding:12px 14px;border:1px solid var(--ctms-modal-success);border-left:4px solid var(--ctms-modal-success);border-radius:10px;background:color-mix(in srgb,var(--ctms-modal-success) 14%,var(--ctms-modal-panel));line-height:1.5;}
+#modal.ctms-modern-modal:has(.bpay-next-rates) #modalActions:has([data-next-window-footer][hidden]):not(:has([data-next-window-footer]:not([hidden]))){display:none;}
+#modal.ctms-modern-modal:has(.bpay-next-rate-confirmation) .bpay-next-confirmation-footer:has(.btn-warn){width:100%;}
+#modal.ctms-modern-modal:has(.bpay-next-rate-confirmation) .bpay-next-confirmation-footer .btn-warn{order:-1;margin-right:auto;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal:has(.bpay-next-rate-confirmation) .bpay-next-confirmation-footer .btn{min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-rate-table,#modal.ctms-modern-modal .bpay-next-rate-table-host{border:0;border-radius:0;overflow:visible;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-rate-table .bpay-next-rate-detail{border:0;border-radius:0;box-shadow:none;background:transparent;margin:0;padding:0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-rate-table .bpay-next-rate-detail>td{padding:8px 0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-rates-evidence table.ctms-universal-table tbody tr{border:0;border-radius:0;box-shadow:none;background:transparent;margin:0;padding:8px 0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-rates-evidence table{border:0;border-radius:0;box-shadow:none;background:transparent;}
+}
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-rates){width:calc(100vw - 12px);}
+ #modal.ctms-modern-modal .bpay-next-rates-scroll{max-height:62vh;}
+ #modal.ctms-modern-modal .bpay-next-rate-table :is(th,td):nth-child(n){width:auto;text-align:left;}
+ #modal.ctms-modern-modal .bpay-next-rate-table td:first-child{display:block;font-size:14px;}
+ #modal.ctms-modern-modal .bpay-next-rate-table td:first-child::before{display:none;}
+ #modal.ctms-modern-modal .bpay-next-rate-table td:nth-child(8){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+ #modal.ctms-modern-modal .bpay-next-rate-table td:nth-child(8) .bpay-next-field-error{grid-column:1 / -1;}
+ #modal.ctms-modern-modal .bpay-next-rate-detail>td{display:block;}
+ #modal.ctms-modern-modal .bpay-next-rate-detail>td::before{display:none;}
+ #modal.ctms-modern-modal:has(.bpay-next-rates) :is(#btnCloseModal,button,input[type=text]){min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-rate-caret{width:44px;height:44px;min-width:44px;min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-rates-footer{flex-wrap:wrap;}
+}
 /* EX-01 supplied SCR66: one credential step and one native footer action. */
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth {display:flex;flex-direction:column;gap:16px;}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-reauth-intro {border:1px solid var(--ctms-modal-line);border-radius:13px;background:var(--ctms-modal-panel-raised);padding:12px 14px;line-height:1.5;}
