@@ -377,7 +377,7 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-estimate-banner[hidden],
 #modal.ctms-kind-bpay-next-read .bpay-next-estimate-summary[hidden] {display:none;}
 #modal.ctms-kind-bpay-next-read .bpay-next-payment-name {display:flex;align-items:center;gap:6px;}
-#modal.ctms-kind-bpay-next-read .bpay-next-payment-caret {flex:0 0 auto;min-width:26px;min-height:26px;padding:0;font-size:16px;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-payment-caret {display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:24px;height:24px;min-width:24px;min-height:24px;padding:0;font-size:14px;line-height:1;}
 #modal.ctms-kind-bpay-next-read .bpay-next-row-actions {display:flex;align-items:flex-start;gap:6px;flex-wrap:nowrap;}
 #modal.ctms-kind-bpay-next-read .bpay-next-row-actions .btn {white-space:nowrap;margin:0;font-size:12px;padding:7px 9px;}
 #modal.ctms-kind-bpay-next-read .bpay-next-row-more {position:relative;}
@@ -389,7 +389,7 @@
 #modal.ctms-kind-bpay-next-read .bpay-next-estimate-feedback {display:none;}
 #modal.ctms-kind-bpay-next-read [data-next-focus-key="candidate-include"][hidden] {display:none;}
 @media(max-width:720px){
- #modal.ctms-kind-bpay-next-read .bpay-next-payment-caret {min-height:44px;min-width:44px;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-payment-caret {width:44px;height:44px;min-height:44px;min-width:44px;}
  #modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll td[data-label=Actions]:has(> .bpay-next-row-actions:empty) {display:none;}
  #modal.ctms-kind-bpay-next-read .bpay-next-estimate-feedback:not([hidden]) {display:block;flex-basis:100%;margin:0;color:#b8c6d9;font-size:12px;}
  #modal.ctms-kind-bpay-next-read .bpay-next-estimate-feedback.is-outdated {color:#ffe7b6;}
@@ -1266,4 +1266,24 @@
  #modal.ctms-modern-modal .bpay-next-unauthorise-table td:first-child::before{display:none;}
  #modal.ctms-modern-modal .bpay-next-unauthorise-table td:first-child :is(strong,small){display:block;grid-column:1 / -1;}
  #modal.ctms-modern-modal .bpay-next-unauthorise-table td:last-child small{grid-column:1 / -1;}
+}
+
+/* WB29: one native payment frame, flat factual rows, and phone value grouping. */
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll {border:1px solid var(--ctms-modal-line);border-radius:13px;overflow:auto;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-payment-detail {padding:0;border:0;background:transparent;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-payment-detail table {border:0;border-radius:0;box-shadow:none;margin:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-detail-day {background:transparent;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-detail-table > tbody > tr:has(.bpay-next-shift-list) > td {padding:0;}
+@media(min-width:721px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll > table > thead > tr > th:nth-child(2) {width:30%;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-candidate-scroll > table > thead > tr > th:last-child {width:220px;}
+}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-payment-detail table.ctms-universal-table tbody td {background:transparent;}
+@media(max-width:720px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-payment-detail {padding:0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-payment-detail tr {border:0;border-radius:0;box-shadow:none;margin:0;padding:8px 0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-detail-table > tbody > tr:has(.bpay-next-shift-list) {padding:0;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-detail-day > td[data-label]:not([colspan])::before {content:attr(data-label);}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-detail-day > td[data-label=Status]:empty {display:none;}
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-filter-content) :is(#btnCloseModal,[data-next-window-footer] .btn) {min-height:44px;min-width:44px;height:auto;}
 }
