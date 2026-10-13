@@ -1,4 +1,57 @@
 /* NEXT presentation only: full tables scroll inside a fixed reachable header. */
+/* WB31: the original Office frame, one component and one footer action. */
+#modal.ctms-modern-modal:has(div.bpay-next-component-choice){width:min(600px,calc(100vw - 48px));color-scheme:dark;}
+#modal.ctms-modern-modal:has(div.bpay-next-component-choice) #modalDrag{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;}
+#modal.ctms-modern-modal:has(div.bpay-next-component-choice) #modalTitle{grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal:has(div.bpay-next-component-choice) [data-next-window-header-detail]{grid-column:1;grid-row:2;margin:0;font-size:12px;line-height:1.4;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal:has(div.bpay-next-component-choice) #btnCloseModal{grid-column:2;grid-row:1 / span 2;}
+#modal.ctms-modern-modal:has(div.bpay-next-component-choice) #modalDrag>.spacer{display:none;}
+#modal.ctms-modern-modal div.bpay-next-component-choice{display:block;cursor:default;max-height:65vh;width:100%;overflow:auto;overscroll-behavior:contain;font-size:13px;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-component-subject{padding:14px;border:1px solid var(--ctms-modal-line);border-radius:13px;background:var(--ctms-modal-panel-raised);margin-bottom:16px;}
+#modal.ctms-modern-modal .bpay-next-component-subject p{margin:5px 0 0;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal div.bpay-next-component-choice fieldset{border:0;background:transparent;border-radius:0;padding:0;margin:16px 0;}
+#modal.ctms-modern-modal div.bpay-next-component-choice legend{font-size:12px;margin-bottom:8px;}
+#modal.ctms-modern-modal .bpay-next-component-mode{display:grid;grid-template-columns:18px auto minmax(0,1fr);column-gap:9px;align-items:center;min-height:28px;margin:0;}
+#modal.ctms-modern-modal .bpay-next-component-mode small{grid-column:3;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-component-mode:has(input:disabled){color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal :is(.bpay-next-component-mode,.bpay-next-component-linked) input{width:18px;height:18px;accent-color:var(--ctms-modal-accent-bright);margin:0;}
+#modal.ctms-modern-modal .bpay-next-component-field{display:flex;flex-direction:column;gap:8px;font-size:12px;margin:16px 0;}
+#modal.ctms-modern-modal .bpay-next-component-field :is(input,textarea){width:100%;box-sizing:border-box;min-height:38px;padding:10px;background:var(--ctms-modal-input);color:var(--ctms-modal-text);border:1px solid var(--ctms-modal-line);border-radius:8px;font:inherit;}
+#modal.ctms-modern-modal .bpay-next-component-field input{text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-component-money-input{position:relative;display:block;}
+#modal.ctms-modern-modal .bpay-next-component-money-input>span{position:absolute;left:12px;top:10px;pointer-events:none;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read div.bpay-next-component-choice .bpay-next-component-field .bpay-next-component-money-input input{padding-left:28px;text-align:left;}
+#modal.ctms-modern-modal .bpay-next-component-field [aria-invalid=true]{border-color:var(--ctms-modal-danger);}
+#modal.ctms-modern-modal .bpay-next-component-linked{display:flex;align-items:center;gap:9px;min-height:44px;margin:16px 0;}
+#modal.ctms-modern-modal .bpay-next-component-facts{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;border:0;padding:0;margin:16px 0;}
+#modal.ctms-modern-modal .bpay-next-component-facts dt{color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-component-facts dd{margin:0;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-component-saved{padding:12px 14px;border-left:4px solid var(--ctms-modal-accent-bright);background:var(--ctms-modal-panel-raised);border-radius:8px;}
+#modal.ctms-modern-modal .bpay-next-component-saved span{display:block;margin-top:4px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-component-excluded{font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-component-success{padding:12px 14px;border:1px solid var(--ctms-modal-success);border-left:4px solid var(--ctms-modal-success);border-radius:10px;background:color-mix(in srgb,var(--ctms-modal-success) 14%,var(--ctms-modal-panel));}
+#modal.ctms-modern-modal div.bpay-next-component-choice p .candidate-office-badge{margin-left:10px;}
+#modal.ctms-modern-modal .bpay-next-component-footer{display:flex;align-items:center;gap:12px;justify-content:flex-end;width:100%;}
+#modal.ctms-modern-modal .bpay-next-component-footer p{margin:0 auto 0 0;font-size:12px;line-height:1.5;}
+#modal.ctms-modern-modal :is(div.bpay-next-component-choice,.bpay-next-component-footer) [hidden]{display:none;}
+#modal.ctms-modern-modal .bpay-next-component-confirmation{display:flex;flex-direction:column;gap:16px;}
+#modal.ctms-modern-modal .bpay-next-component-confirmation h2{display:flex;align-items:center;gap:12px;font-size:15px;margin:0;}
+#modal.ctms-modern-modal .bpay-next-component-confirmation p{margin:0;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-component-confirmation p span{display:block;margin-top:4px;}
+#modal.ctms-modern-modal .bpay-next-component-question{display:grid;place-items:center;flex:0 0 30px;height:30px;border:1px solid var(--ctms-modal-accent-bright);border-radius:50%;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-component-question-danger{color:var(--ctms-modal-danger);border-color:var(--ctms-modal-danger);background:color-mix(in srgb,var(--ctms-modal-danger) 12%,var(--ctms-modal-panel));}
+#modal.ctms-modern-modal:has(.bpay-next-component-confirmation) .bpay-next-confirmation-footer{display:flex;justify-content:flex-end;gap:8px;width:100%;}
+#modal.ctms-modern-modal:has(.bpay-next-component-confirmation) .bpay-next-confirmation-footer .btn-warn{order:-1;margin-right:auto;}
+#modal.ctms-modern-modal:has(div.bpay-next-component-choice) #modalActions:has([data-next-window-footer][hidden]):not(:has([data-next-window-footer]:not([hidden]))){display:none;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal:has(div.bpay-next-component-choice){width:calc(100vw - 16px);}
+ #modal.ctms-modern-modal:has(div.bpay-next-component-choice) #btnCloseModal{min-width:44px;min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-component-field :is(input,textarea){min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-component-mode{grid-template-columns:18px minmax(0,1fr);min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-component-mode small{grid-column:2;}
+ #modal.ctms-modern-modal :is(div.bpay-next-component-choice,.bpay-next-component-footer,.bpay-next-component-confirmation) .btn,#modal.ctms-modern-modal:has(.bpay-next-component-confirmation) .bpay-next-confirmation-footer .btn{min-width:44px;min-height:44px;}
+ #modal.ctms-modern-modal div.bpay-next-component-choice{max-height:60vh;}
+}
 /* WB30: native bucket table and bounded evidence, with one footer action. */
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-rates){width:min(1360px,calc(100vw - 48px));color-scheme:dark;}
 #modal.ctms-modern-modal:has(.bpay-next-rates) #modalDrag{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;}
