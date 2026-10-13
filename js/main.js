@@ -332628,6 +332628,7 @@ let _pushedRight = false;
 (top.tabs||[]).forEach((t,i)=>{
   const b = document.createElement('button');
   b.type = 'button';
+  b.dataset.tabKey = String(t.key || '');
   b.textContent = t.label || t.title || t.key;
   if (recordOwned) {
     b.setAttribute('role', 'tab');

@@ -145,6 +145,8 @@
       managerHint:managerReplyTime?`Manager responded ${managerReplyTime} UK`:managerContactTime?`Manager contacted ${managerContactTime} UK`:''};
   }
   function render(model,state={}){
+    const payView=model?.permissions?.contract==='WEEKLY_SOURCE_PAYMENT_VIEW_V1'||model?.permissions?.view==='PAY';
+    if(payView&&(model.tab!=='queries'||!a(model.permissions.allowed_sections).includes(model.section)))return '<p role="status">Refresh to load the permitted pay information.</p>';
     if(model?.contract==='WEEKLY_SOURCE_REPORT_HISTORY_V1')return renderHistory(model,state);
     if(model?.contract!=='WEEKLY_SOURCE_COMBINED_REVIEW_V1')return '<p role="status">Loading source work…</p>';
     const filters=state.filters||{},options=a(state.options||model.scope_options);
@@ -152,11 +154,11 @@
       const values=new Map(options.map(item=>[item[id],item[name]]).filter(([value,label])=>value&&label));
       return `<label>${label}<select data-wsr-filter="${key}"><option value="">${all}</option>${[...values].sort((x,y)=>String(x[1]).localeCompare(String(y[1]),'en-GB')).map(([value,label])=>`<option value="${e(value)}"${filters[key]===value?' selected':''}>${e(label)}</option>`).join('')}</select></label>`;
     };
-    const tabs=model.tab==='imports'?[]:[['questions','Hours questions'],['checks','Office checks'],['protected','Protected shifts']];
+    const tabs=(model.tab==='imports'?[]:[['questions','Hours questions'],['checks','Office checks'],['protected','Protected shifts']]).filter(([key])=>!payView||a(model.permissions.allowed_sections).includes(key));
     const columns=model.tab==='imports'
       ? [...(!filters.client_id?[['Client','client']]:[]),['File','file'],['Uploaded','uploaded'],['Coverage','coverage'],['Purpose','purpose_label'],['Status','status'],['Actions','actions']]
       : [...(!filters.client_id?[['Client','client']]:[]),['Candidate','candidate'],...(model.section==='questions'?[['Problem','question_problem'],['Candidate','question_candidate'],['Manager','question_manager'],['Next action','question_next']]:[['Day/date','day_date'],['Hours / break',model.section==='protected'?'protected_hours':'system_hours'],['Status / problem','status']]),['Actions','actions']];
-    const cohortContacts=model.section==='questions'&&!model.attention_kind;
+    const cohortContacts=!payView&&model.section==='questions'&&!model.attention_kind;
     if(cohortContacts)columns.unshift(['Select','selection']);
     const head=columns.map(([label,key])=>['client','candidate','day_date','status','file','uploaded'].includes(key)?`<th><button class="ws-sort" data-wsr-sort="${key}">${label}${model.sort_key===key?(model.sort_direction==='desc'?' ↓':' ↑'):''}</button></th>`:`<th>${label}</th>`).join('');
     const selected=state.selected||new Set();
@@ -195,7 +197,7 @@
     }).join('')}</tr>${model.section==='questions'?`<tr class="ws-query-expansion"><td colspan="${columns.length}"><details><summary>Shifts for ${e(row.candidate)}</summary><div class="ws-query-contact-actions">${actionButtons(row,row.actions,undefined,action=>action.label!=='Open')}</div><table class="grid mini ws-query-shifts"><thead><tr><th>Day/date</th><th>Candidate hours</th><th>Client hours</th><th>Problem</th><th>Actions</th></tr></thead><tbody>${a(row.children).map((child,childIndex)=>`<tr class="${child.issue==='Timesheet missing'?'ws-query-nonblocking':'ws-query-hold'}"><td data-label="Day/date">${e(child.day_date)}</td><td data-label="Candidate hours">${e(child.candidate_hours||'Not submitted')}</td><td data-label="Client hours">${e(child.system_hours||'Not recorded')}</td><td data-label="Problem">${manualProblem(child)}</td><td data-label="Actions" class="ws-actions">${actionButtons(row,child.actions,childIndex)}</td></tr>`).join('')}</tbody></table></details></td></tr>`:''}`).join('');
     const outreach=cohortContacts?contactPanel(model,state):'';
     const add=model.tab==='queries'&&a(model.owners).some(owner=>owner.protected_pay_enabled)?'<button class="btn btn-outline" data-wsr-add-protected>Add protected shift</button>':'';
-    const attention=attentionSummary(model,state);
+    const attention=payView?'':attentionSummary(model,state);
     return `<div class="ws-toolbar">${select('Source','source_group_id','source_group_id','source','All sources')}${select('Client','client_id','client_id','client','All clients')}${select('Period','week_ending','week_ending','period','All periods')}<button class="btn btn-outline" data-wsr-refresh>Refresh list</button>${add}</div>${attention}<div class="ws-inner-tabs">${tabs.map(([key,label])=>`<button class="btn btn-outline${model.counts?.[key]?'':' ws-tab-empty'}" data-wsr-section="${key}" aria-selected="${model.section===key}">${label} (${Number(model.counts?.[key]||0)})</button>`).join('')}</div>${outreach}<div class="ws-scroll" data-wsr-table tabindex="0" aria-label="Source work. Type to jump in the sorted column."><table class="grid mini ws-grid"><thead><tr>${head}</tr></thead><tbody>${rows||`<tr><td colspan="${columns.length}">No matching work.</td></tr>`}</tbody></table>${model.has_more?'<button class="btn btn-outline" data-wsr-more>Load more</button>':''}</div>`;
   }
   function renderHistory(model,state={}){

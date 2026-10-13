@@ -30,13 +30,18 @@
     ROSTER_WEEKLY_SUMMARY_ACTUAL_V1: 'Finalise week'
   });
   const ACTIONS = Object.freeze({
-    imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager']),
-    queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet', 'Retry recheck']),
+    imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager', 'Continue daily check', 'View daily check']),
+    queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet', 'Retry recheck', 'Send reminder', 'Send reminder for selected', 'Send again', 'Correct this Timesheet', 'Cancel correction', 'Authorise both', 'Open Timesheet']),
     shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay', 'Review and reconcile']),
     finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),
     tracker: new Set(['No shifts to import', 'View'])
   });
   const TONES = new Set(['neutral', 'info', 'warning', 'positive', 'danger']);
+  // These labels can be received during the ordered server rollout. Enable
+  // them only when their exact request contracts and handlers are installed.
+  const PENDING_ACTIONS = new Set(['Continue daily check', 'View daily check', 'Send reminder',
+    'Send reminder for selected', 'Send again', 'Correct this Timesheet', 'Cancel correction',
+    'Authorise both', 'Open Timesheet']);
   // This is deliberately a presentation contract, not a charge calculator.
   // The Weekly Source service has already classified every line and sealed the
   // acceptance binding.  Office can select only the server-provided warning
@@ -273,8 +278,16 @@
     const queries = asObject(source.queries);
     const imports = asObject(source.imports);
     const journey = asObject(imports.journey);
+    const permissions = asObject(source.permissions);
+    const payView = permissions.contract === 'WEEKLY_SOURCE_PAYMENT_VIEW_V1' || permissions.view === 'PAY';
     return {
       contract: asText(source.contract) || CONTRACT,
+      permissions: payView ? {
+        contract: 'WEEKLY_SOURCE_PAYMENT_VIEW_V1', view: 'PAY', allowed_tabs: ['queries'], landing_tab: 'queries',
+        allowed_sections: asArray(permissions.allowed_sections).filter(section => ['questions', 'checks', 'protected'].includes(section)),
+        can_upload: false, can_finalise: false, can_manage_settings: false,
+        checklist: { available: false, read_only: true, pay_only: true, action_links: false }
+      } : null,
       combined_source_workspace: source.combined_source_workspace === true,
       workspace_version: asText(source.workspace_version || source.record_version),
       recheck_payload: asObject(source.recheck_payload),
@@ -284,7 +297,7 @@
       },
       context: {
         subtitle: asText(context.subtitle || source.subtitle),
-        cycle_state: CYCLE_STATES.has(cycleState) ? cycleState : (cycleState || 'Before cutoff'),
+        cycle_state: CYCLE_STATES.has(cycleState) ? cycleState : (cycleState || 'To check'),
         cycle_tone: tone(context.cycle_tone, cycleState === 'Finalised' ? 'positive' : 'warning'),
         controls: normaliseControls(context.controls)
       },
@@ -309,7 +322,7 @@
           ready_rows: asArray(journey.ready_rows)
         }
       },
-      queries: { ...normalisePage(queries), protected_pay_enabled: queries.protected_pay_enabled === true, protected_shifts: normalisePage(queries.protected_shifts), bulk_actions: normaliseBulkActions(queries.bulk_actions), office_checks: normalisePage(queries.office_checks) },
+      queries: { ...normalisePage(queries), protected_pay_enabled: queries.protected_pay_enabled === true, protected_shifts: normalisePage(queries.protected_shifts), bulk_actions: normaliseBulkActions(payView ? {} : queries.bulk_actions), office_checks: normalisePage(queries.office_checks) },
       finalise: {
         prepared: finalise.prepared !== false,
         prepare_action: asObject(finalise.prepare_action),
@@ -347,7 +360,12 @@
       { key: 'queries', label: `Queries${ws.counts.queries ? ` (${ws.counts.queries})` : ''}` },
       { key: 'finalise', label: `${ws.profile.finalise_label}${ws.finalise.prepared && ws.counts.blockers ? ` (${ws.counts.blockers} blocker${ws.counts.blockers === 1 ? '' : 's'})` : ''}` },
       { key: 'history', label: 'History' }
-    ];
+    ].filter(tab => !ws.permissions || ws.permissions.allowed_tabs.includes(tab.key));
+  }
+
+  function availableTab(workspace, tab) {
+    const descriptors = tabDescriptors(workspace);
+    return descriptors.some((descriptor) => descriptor.key === tab) ? tab : descriptors[0]?.key || 'imports';
   }
 
   function normaliseActions(value, allowlist) {
@@ -356,12 +374,12 @@
       const label = asText(raw.label);
       return allowlist.has(label) ? {
         label,
-        enabled: raw.enabled !== false,
+        enabled: !PENDING_ACTIONS.has(label) && raw.enabled !== false,
         payload: asObject(raw.payload),
         context: asObject(raw.context),
-        reason: asText(raw.reason),
+        reason: asText(raw.reason) || (PENDING_ACTIONS.has(label) ? 'This action is not available yet.' : ''),
         kind: asText(raw.kind).toUpperCase(),
-        command: asText(raw.command).toUpperCase()
+        command: PENDING_ACTIONS.has(label) ? '' : asText(raw.command).toUpperCase()
       } : null;
     }).filter(Boolean);
   }
@@ -651,6 +669,7 @@
   }
 
   function renderQueries(workspace, state) {
+    const payView = workspace.permissions?.view === 'PAY';
     const stale = workspace.queries.stale;
     const hasOutreachAuthority = bulkOutreachAction(workspace.queries, 'ASK_CANDIDATES')?.enabled === true
       || bulkOutreachAction(workspace.queries, 'SEND_MANAGER_NOW')?.enabled === true;
@@ -678,7 +697,7 @@
       <label>Candidate<input type="search" data-ws-filter="candidate" placeholder="All" value="${escapeHtml(filters.candidate || '')}"></label>
       <label>Issue<select data-ws-filter="issue"><option value="ALL"${!filters.issue || filters.issue === 'ALL' ? ' selected' : ''}>All</option><option value="HOURS_DIFFER"${filters.issue === 'HOURS_DIFFER' ? ' selected' : ''}>Hours differ</option><option value="MISSING_SHIFT"${filters.issue === 'MISSING_SHIFT' ? ' selected' : ''}>Missing shift</option><option value="TIMESHEET_MISSING"${filters.issue === 'TIMESHEET_MISSING' ? ' selected' : ''}>Timesheet missing</option></select></label>
       ${renderMobileSort(sortable, sort)}
-      <button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button>`;
+      ${payView ? '<button type="button" class="btn btn-outline" data-ws-refresh>Refresh list</button>' : '<button type="button" class="btn btn-outline" data-ws-recheck>Recheck</button>'}`;
     const actionControls = `
       <button type="button" class="btn primary" data-ws-bulk-action="ASK_CANDIDATES" disabled>Ask selected candidates</button>
       <button type="button" class="btn btn-outline" data-ws-bulk-action="SEND_MANAGER_NOW" disabled>Send selected to manager now</button>
@@ -700,10 +719,10 @@
           <summary class="btn btn-outline">Filters and sorting</summary>
           <div class="ws-query-filter-fields">${filterControls}</div>
         </details>
-        <details class="ws-query-actions-menu" open>
+        ${payView ? '' : `<details class="ws-query-actions-menu" open>
           <summary class="btn primary" data-ws-actions-summary aria-disabled="true">Actions for selected</summary>
           <div class="ws-query-action-choices">${actionControls}</div>
-        </details>
+        </details>`}
       </div>
       <div class="ws-selection-summary" data-ws-selection-summary>0 query groups selected</div>
       <div class="ws-scroll ws-query-scroll" data-ws-scroll><table class="grid mini ws-grid ws-query-grid"><thead><tr><th><input type="checkbox" data-ws-group-header aria-label="Select all query groups"${stale || !hasOutreachAuthority ? ' disabled' : ''}></th><th></th>${sortable.map(([label,key]) => renderSortHeader(label,key,sort)).join('')}<th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="10" class="ws-empty">Nothing matches the current filters.</td></tr>'}</tbody></table><div data-ws-sentinel></div></div>
@@ -906,7 +925,7 @@
   }
 
   function renderWorkspace(workspace, tabKey, state = {}) {
-    const tab = TABS.includes(tabKey) ? tabKey : 'imports';
+    const tab = availableTab(workspace, tabKey);
     const notices = workspace.notices.map((notice) => `<div class="ws-notice ws-notice--${escapeHtml(notice.tone)}"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');
     const error = asText(state.error) ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>Weekly source information could not be loaded</strong><span>${escapeHtml(state.error)}</span></div>` : '';
     const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;
@@ -974,6 +993,7 @@
     const frame = currentFrame();
     if (!frame?.setTab) return Promise.resolve();
     frame.tabs = tabDescriptors(session.workspace);
+    session.activeTab = availableTab(session.workspace, session.activeTab);
     return Promise.resolve(frame.setTab(session.activeTab)).catch(() => {});
   }
 
@@ -1022,10 +1042,20 @@
         const keys = new Set(current.rows.map((row) => asText(row.row_key || row.group_key || row.id)));
         nextPage.rows = [...current.rows, ...nextPage.rows.filter((row) => { const key = asText(row.row_key || row.group_key || row.id); if (!key || keys.has(key)) return false; keys.add(key); return true; })];
       }
-      session.workspace = next; syncUploadProfile(next); session.loadedTab = tab; session.loading = false;
+      session.workspace = next; syncUploadProfile(next); session.activeTab = availableTab(next, tab); session.loadedTab = session.activeTab; session.loading = false;
       session.reloadOnReturn = !currentFrame();
       if(['imports','queries','history'].includes(tab)&&next.combined_source_workspace&&!session.reviewSingleScope) return loadCombinedReview(tab);
-    } catch (error) { if (sequence !== session.requestSequence) return; session.loadedTab = tab; session.loading = false; session.error = friendlyWorkspaceError(error); }
+    } catch (error) {
+      if (sequence !== session.requestSequence) return;
+      if (error?.code === 'WEEKLY_SOURCE_OFFICE_ADMIN_REQUIRED' && !append) {
+        try {
+          session.workspace = normaliseWorkspace(await requestJson(ENDPOINTS.workspace));
+          session.activeTab = availableTab(session.workspace, tab);
+          session.loadedTab = session.activeTab; session.error = '';
+        } catch (discoveryError) { session.workspace = emptyWorkspace(); session.error = friendlyWorkspaceError(discoveryError); }
+      } else { session.loadedTab = tab; session.error = friendlyWorkspaceError(error); }
+      session.loading = false;
+    }
     await repaint();
     const focus = session.contextFocus;
     if (sequence === session.requestSequence && focus?.tab === session.activeTab) {
@@ -1585,11 +1615,13 @@
       finally { session.recheckBusy = false; }
     }));
     host.querySelectorAll('.ws-row-action').forEach((button) => button.addEventListener('click', () => {
+      if (button.disabled) return;
       let payload = {}; let context = {};
       try { payload = JSON.parse(button.dataset.wsPayload || '{}'); } catch {}
       try { context = JSON.parse(button.dataset.wsContext || '{}'); } catch {}
       root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action', { detail: { label: button.dataset.wsAction, kind: button.dataset.wsKind, command: button.dataset.wsCommand, payload, context } }));
     }));
+    host.querySelector('[data-ws-refresh]')?.addEventListener('click', () => loadWorkspace(session.activeTab));
     host.querySelectorAll('[data-ws-sort]').forEach((button) => button.addEventListener('click', () => {
       const sort = session.sort[session.activeTab];
       const key = button.dataset.wsSort;
@@ -1759,8 +1791,8 @@
     // The shared shell highlights clicks, but programmatic deep-links and
     // return-to-parent renders also need the selected tab to match the body.
     const descriptors = tabDescriptors(session.workspace);
-    document.querySelectorAll('#modalTabs > button').forEach((button, index) => {
-      const descriptor = descriptors[index];
+    document.querySelectorAll('#modalTabs > button').forEach((button) => {
+      const descriptor = descriptors.find((entry) => entry.key === button.dataset.tabKey);
       if (!descriptor) return;
       button.classList.toggle('active', descriptor.key === tab);
       button.setAttribute('aria-selected', String(descriptor.key === tab));
@@ -1784,7 +1816,7 @@
   }
 
   function renderTab(tab) {
-    session.activeTab = TABS.includes(tab) ? tab : 'imports';
+    session.activeTab = availableTab(session.workspace || emptyWorkspace(), tab);
     if (session.activeTab !== session.loadedTab && !session.loading) {
       session.loading = true;
       setTimeout(() => loadWorkspace(session.activeTab), 0);
@@ -1798,10 +1830,12 @@
     const tab = TABS.includes(initialTab) ? initialTab : 'imports';
     session.activeTab = tab; session.loading = true; session.error = '';
     try {
-      session.workspace = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?tab=${encodeURIComponent(tab)}`));
+      // Discover the server permission view before sending a requested tab.
+      session.workspace = normaliseWorkspace(await requestJson(ENDPOINTS.workspace));
+      session.activeTab = availableTab(session.workspace, tab);
       session.uploadProfileId = '';
       syncUploadProfile(session.workspace);
-      session.loadedTab = tab;
+      session.loadedTab = session.workspace.permissions?.landing_tab || 'imports';
       if(['finalise','imports','queries','history'].includes(tab)&&session.workspace.combined_source_workspace) session.loadedTab='';
     } catch (error) {
       session.workspace = emptyWorkspace(); session.loadedTab = tab; session.error = friendlyWorkspaceError(error);
@@ -1812,7 +1846,7 @@
       if (session.reloadOnReturn && currentFrame()) { session.reloadOnReturn = false; repaint(); }
       else wire(session.activeTab);
     }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
-    if (tab !== 'imports') await currentFrame()?.setTab?.(tab);
+    if (tab !== 'imports') await currentFrame()?.setTab?.(availableTab(session.workspace, tab));
   }
 
   async function navigateToExistingShift(target) {

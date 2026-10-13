@@ -630,6 +630,7 @@
       if (!editable) {
         host?.querySelectorAll('input,select,button').forEach((control) => { control.disabled = true; });
       }
+      global.CloudTMSWeeklySourceRuleSettings?.mount(root, ctx, state.source_groups || []);
     };
     if (ctx[GLOBAL_STATE]?.loaded) mount(ctx[GLOBAL_STATE]);
     else loadGlobal(ctx).then(mount).catch(() => {});
