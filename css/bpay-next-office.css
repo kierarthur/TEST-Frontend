@@ -1531,6 +1531,16 @@
  #modal.ctms-modern-modal.ctms-kind-bpay-next-read:has(.bpay-next-filter-content) :is(#btnCloseModal,[data-next-window-footer] .btn) {min-height:44px;min-width:44px;height:auto;}
 }
 /* WB32 A4: only this native window's secondary, destructive and phone states. */
+/* WB34 native changed operands use the existing universal table and modal tokens. */
+#modal.ctms-modern-modal .bpay-next-rate-changed-evidence {margin:16px 0;}
+#modal.ctms-modern-modal .bpay-next-rate-changed-evidence :is(th,td):not(:first-child) {text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-rate-changed-evidence th {position:sticky;top:0;background:var(--ctms-modal-panel-raised);}
+#modal.ctms-modern-modal .bpay-next-publication-status {white-space:nowrap;flex-shrink:0;}
+#modal.ctms-modern-modal:has(.bpay-next-clear-confirmation) #modalTitle {grid-column:1;grid-row:1;}
+#modal.ctms-modern-modal:has(.bpay-next-clear-confirmation) #modalDrag {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 16px;}
+#modal.ctms-modern-modal:has(.bpay-next-clear-confirmation) #modalDrag > .spacer {display:none;}
+#modal.ctms-modern-modal:has(.bpay-next-clear-confirmation) [data-next-window-header-detail] {grid-column:1;grid-row:2;margin:0;font-size:12px;line-height:1.4;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal:has(.bpay-next-clear-confirmation) #btnCloseModal {grid-column:2;grid-row:1 / span 2;}
 #modal.ctms-modern-modal .bpay-next-pay-channel-footer .bpay-next-channel-clear{order:-1;}
 #modal.ctms-modern-modal .bpay-next-pay-channel-footer .bpay-next-channel-clear:first-of-type{margin-right:auto;}
 #modal.ctms-modern-modal .bpay-next-channel-choice-confirm .is-refused{color:var(--ctms-modal-danger);border-color:var(--ctms-modal-danger);}

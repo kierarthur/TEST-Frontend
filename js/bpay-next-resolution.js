@@ -397,6 +397,25 @@ errors('55000','MODULE_NOT_ACTIVE',409);
 errors('55000','WORKBENCH_DATE_UNAVAILABLE RESOLUTION_CONTEXT_UNAVAILABLE',503,true);
 errors('23514','RESOLUTION_STALE RESOLUTION_POSITION_BASIS_CHANGED RESOLUTION_BASIS_CHANGED DAILY_REVISION_EVIDENCE_REQUIRED RESOLUTION_PUBLICATION_INCOMPATIBLE RESOLUTION_POSITION_INCOMPATIBLE',409,false,true);
 errors('23514','RESOLUTION_IDENTITY_INVALID RESOLUTION_BUCKET_MISSING RESOLUTION_COMPATIBILITY_AMBIGUOUS RESOLUTION_SOURCE_BASIS_UNAVAILABLE RESOLUTION_MODE_INVALID RESOLUTION_POLICY_WINDOW_MISSING RESOLUTION_QUOTE_RANGE_INVALID TARGET_POLICY_WINDOW_AMBIGUOUS RESOLUTION_VERSION_MISSING',409);
+const staleResolutionCodes=['BPAY_NEXT_RESOLUTION_STALE','BPAY_NEXT_RESOLUTION_POSITION_BASIS_CHANGED','BPAY_NEXT_RESOLUTION_BASIS_CHANGED'];
+function validateResolutionChangedEvidence(value,args,actorId){
+ const bad=()=>{throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');};
+ if(!args||!exact(value,['request_id','candidate_id','state','mappings','facts','unavailable_code'])||value.request_id!==args.request_id||value.candidate_id!==args.candidate_id||encoder.encode(JSON.stringify(value)).length>120000)bad();
+ if(value.state==='UNAVAILABLE'){if(value.mappings!==null||value.facts!==null||value.unavailable_code!=='BPAY_NEXT_RESOLUTION_CONTEXT_UNAVAILABLE')bad();return value;}
+ if(value.state!=='CURRENT'||value.unavailable_code!==null||!Array.isArray(value.mappings)||value.mappings.length!==args.works.reduce((n,w)=>n+w.rows.length,0))bad();
+ const seen=new Set(),works=[];
+ for(const m of value.mappings){
+  if(!exact(m,['work_id','based_on_revision_id','approved_line_id','rate_family','rate_code','component_key','current_revision_id','current_approved_line_id'])||![m.work_id,m.based_on_revision_id,m.current_revision_id,m.current_approved_line_id].every(id)||!identity(m)||!text(m.component_key)||[...m.component_key].length<1||[...m.component_key].length>256)bad();
+  const old=args.works.find(w=>w.work_id===m.work_id&&w.expected_revision_id===m.based_on_revision_id),original=old?.rows.find(r=>identityKey(r)===identityKey(m)),k=JSON.stringify([m.work_id,identityKey(m)]);if(!original||seen.has(k))bad();seen.add(k);
+  let w=works.find(w=>w.work_id===m.work_id);if(!w){w={work_id:m.work_id,expected_revision_id:m.current_revision_id,rows:[]};works.push(w);}if(w.expected_revision_id!==m.current_revision_id)bad();
+  w.rows.push({approved_line_id:m.current_approved_line_id,rate_family:m.rate_family,rate_code:m.rate_code,intent:null});
+ }
+ const read={resolution:{candidate_id:args.candidate_id,works,reason:null}};normalizeResolutionInput(read);validateResolutionResponse(value.facts,read,actorId);
+ if(['agency_id','actor_user_id','candidate_id','owner_epoch'].some(k=>value.facts.context[k]!==args.context[k]))bad();
+ for(const m of value.mappings){const w=value.facts.works.find(w=>w.work_id===m.work_id&&w.expected_revision_id===m.current_revision_id),r=w?.rows.find(r=>r.approved_line_id===m.current_approved_line_id&&r.rate_family===m.rate_family&&r.rate_code===m.rate_code);if(!r||r.original_basis.component_key!==m.component_key)bad();}
+ return value;
+}
+
 const commandPairs=new Map(nativePairs);
 function commandErrors(state,names,status,retryable=false){for(const name of names.split(' '))commandPairs.set(state+':BPAY_NEXT_'+name,{status,retryable});}
 commandErrors('22023','WORKBENCH_COMMAND_INPUT_INVALID SOURCE_BOOK_SEED_ID_REQUIRED',400);
@@ -404,12 +423,13 @@ commandErrors('23514','RESOLUTION_REPLAY_CONFLICT RESOLUTION_DUPLICATE_SCOPE RES
 commandErrors('42501','COMMAND_FORBIDDEN',403);
 commandErrors('55000','BINDING_NEXT_REQUIRED SOURCE_BOOK_CONTROL_REQUIRED SOURCE_BOOK_SEED_BASIS_UNAVAILABLE SOURCE_BOOK_SIGNED_SEED_UNAVAILABLE SOURCE_BOOK_TYPED_WITNESS_REQUIRED SOURCE_BOOK_ZERO_BASIS_UNAVAILABLE SOURCE_BOOK_ZERO_COMPONENT_UNAVAILABLE',409);
 commandErrors('55P03','CANDIDATE_FINANCIAL_FENCE_BUSY',409,true);
-function resolutionCommandNativeFault(payload){const rule=commandPairs.get(payload?.code+':'+payload?.message);return rule?fault(payload.message,rule.status,rule.retryable):null;}
-function validateResolutionCommandFault(value){
-  if(!exact(value,['ok','error_code','retryable','outcome_unknown'])||value.ok!==false||typeof value.outcome_unknown!=='boolean'||typeof value.retryable!=='boolean')throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+function resolutionCommandNativeFault(payload,args,actorId){const rule=commandPairs.get(payload?.code+':'+payload?.message);if(!rule)return null;const error=fault(payload.message,rule.status,rule.retryable);if(payload.code==='23514'&&staleResolutionCodes.includes(payload.message)&&typeof payload.details==='string'){try{if(encoder.encode(payload.details).length<=120000)error.changedEvidence=validateResolutionChangedEvidence(JSON.parse(payload.details),args,actorId);}catch{/* Known refusal stays definite; malformed detail grants no current authority. */}}return error;}
+function validateResolutionCommandFault(value,args,actorId){
+  if(!exact(value,Object.hasOwn(value??{},'changed_evidence')?['ok','error_code','retryable','outcome_unknown','changed_evidence']:['ok','error_code','retryable','outcome_unknown'])||value.ok!==false||typeof value.outcome_unknown!=='boolean'||typeof value.retryable!=='boolean')throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
   const rules=[...commandPairs].filter(([key])=>key.slice(6)===value.error_code).map(([,rule])=>rule);
   const generic={BPAY_NEXT_WORKBENCH_UNAVAILABLE:true,BPAY_NEXT_WORKBENCH_RESPONSE_INVALID:false,BPAY_NEXT_WORKBENCH_REQUEST_INVALID:false,BPAY_NEXT_WORKBENCH_FORBIDDEN:false,BPAY_NEXT_WORKBENCH_UNAUTHORIZED:false,BPAY_NEXT_WORKBENCH_METHOD_NOT_ALLOWED:false};
   if(rules.length?value.outcome_unknown||!rules.some(r=>r.retryable===value.retryable):!Object.hasOwn(generic,value.error_code)||generic[value.error_code]!==value.retryable)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
+  if(Object.hasOwn(value,'changed_evidence')){if(value.outcome_unknown||value.retryable||!staleResolutionCodes.includes(value.error_code))throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');validateResolutionChangedEvidence(value.changed_evidence,args,actorId);}
   return value;
 }
 const BPAY_NEXT_RESOLUTION_REFUSALS=Object.freeze([...new Set([...nativePairs.keys()].map(k=>k.slice(6)))]);
@@ -444,9 +464,10 @@ function createResolutionCommandController(options,context){
     }catch{throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);}
   }
   function authority(){if(!options.current()||String(options.currentActorId()||'').toLowerCase()!==namespace.actor_user_id)throw fault('BPAY_NEXT_WORKBENCH_ACTOR_CHANGED',409);}
-  function settle(){storage.removeItem(key);retained=null;absent=false;}
+  function journalOwner(){const raw=storage.getItem(key);if(raw===null)return null;if(encoder.encode(raw).length>65536)throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);let value;try{value=JSON.parse(raw);}catch{throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);}if(!exact(value,['version','namespace','body'])||value.version!==1||!Object.entries(namespace).every(([k,v])=>value.namespace?.[k]===v))throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);return value;}
+  function settle(){const owner=journalOwner();if(owner!==null&&owner.body!==retained)throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);if(owner!==null)storage.removeItem(key);retained=null;absent=false;}
   async function send(readback){
-    authority();const original=JSON.parse(retained),controller=new AbortController();let timer;
+    authority();const owner=journalOwner();if(!owner||owner.body!==retained)throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);const original=JSON.parse(retained),controller=new AbortController();let timer;
     const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(fault('BPAY_NEXT_WORKBENCH_UNAVAILABLE',503,true));},12000);});
     try{return await Promise.race([(async()=>{
       const response=await options.authFetch(options.api('/api/banking/pay/next/workbench-command'),{method:'POST',redirect:'error',auth401Mode:'return',signal:controller.signal,
@@ -460,27 +481,29 @@ function createResolutionCommandController(options,context){
       const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
       let value;try{value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');}
       authority();
-      if(!response.ok||value?.ok!==true){validateResolutionCommandFault(value);const e=fault(value.error_code,response.status,value.retryable);e.definite=!value.outcome_unknown;throw e;}
+      if(!response.ok||value?.ok!==true){validateResolutionCommandFault(value,original.args,namespace.actor_user_id);const e=fault(value.error_code,response.status,value.retryable);e.definite=!value.outcome_unknown;e.changedEvidence=value.changed_evidence??null;throw e;}
       if(!exact(value,['ok','action','receipt'])||value.ok!==true||value.action!==original.action)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');
       const receipt=validateResolutionCommandReceipt(value.receipt,original.action,original.args);
       if(!readback&&!receipt.received)throw fault('BPAY_NEXT_WORKBENCH_RESPONSE_INVALID');return receipt;
     })(),deadline]);}finally{clearTimeout(timer);controller.abort();}
   }
+  async function handoff(receipt){if(receipt.received&&typeof options.onResolutionReceived==='function'){authority();try{await options.onResolutionReceived(receipt,JSON.parse(retained));authority();}catch(e){e.acceptedReceipt=receipt;e.definite=false;throw e;}}}
   async function mutate(){
     absent=false;
-    try{const receipt=await send(false);settle();return receipt;}
+    try{const receipt=await send(false);await handoff(receipt);settle();return receipt;}
     catch(e){if(e?.definite&&e.code!=='BPAY_NEXT_RESOLUTION_REPLAY_CONFLICT')settle();throw e;}
   }
-  return Object.freeze({pending:()=>retained!==null,busy:()=>busy,canRetry:()=>retained!==null&&absent,
+  return Object.freeze({originalRequest:()=>retained===null?null:JSON.parse(retained),pending:()=>retained!==null,busy:()=>busy,canRetry:()=>retained!==null&&absent,
     async recover(){
       if(busy||!retained)return null;busy=true;absent=false;
-      try{const receipt=await send(true);if(receipt.received)settle();else absent=true;return receipt;}finally{busy=false;}
+      try{const receipt=await send(true);if(receipt.received){await handoff(receipt);settle();}else absent=true;return receipt;}finally{busy=false;}
     },
     async execute(action,args){
       if(busy)return null;authority();if(retained)throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);
       normalizeResolutionCommand(action,args,namespace.actor_user_id);
       if(args.candidate_id!==namespace.candidate_id||args.context.agency_id!==namespace.agency_id||!same(args.context,context))throw fault('BPAY_NEXT_RESOLUTION_REQUEST_INVALID',400);
       const body=JSON.stringify({action,args,readback:false});if(encoder.encode(body).length>32768)throw fault('BPAY_NEXT_RESOLUTION_SCOPE_TOO_LARGE',413);
+      if(journalOwner()!==null)throw fault('BPAY_NEXT_RESOLUTION_RECOVERY_REQUIRED',409);
       storage.setItem(key,JSON.stringify({version:1,namespace:{...namespace,owner_epoch:args.context.owner_epoch},body}));retained=body;busy=true;
       try{return await mutate();}finally{busy=false;}
     },
@@ -491,5 +514,5 @@ function createResolutionCommandController(options,context){
   });
 }
 
-return Object.freeze({normalizeResolutionInput,resolutionWriteContext,normalizeResolutionCommand,validateResolutionCommandReceipt,validateResolutionResponse,resolutionCommandNativeFault,validateResolutionCommandFault,BPAY_NEXT_RESOLUTION_REFUSALS,resolutionNativeFault,validateResolutionFault,createResolutionCommandController});
+return Object.freeze({validateResolutionChangedEvidence,normalizeResolutionInput,resolutionWriteContext,normalizeResolutionCommand,validateResolutionCommandReceipt,validateResolutionResponse,resolutionCommandNativeFault,validateResolutionCommandFault,BPAY_NEXT_RESOLUTION_REFUSALS,resolutionNativeFault,validateResolutionFault,createResolutionCommandController});
 });

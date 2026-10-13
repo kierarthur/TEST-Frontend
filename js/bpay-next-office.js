@@ -2947,6 +2947,36 @@ function caseListResult(payload,call,bad){
     const input = (label, type, value) => { const wrap = el('label', label); const n = el('input'); n.type=type; n.setAttribute('data-next-focus-key','input:'+label); n.value=value || ''; wrap.append(n); return [wrap,n]; };
     let netInput, resumeInput,workbenchShell=null,preparationBanners=null,issueLists=null,readyLists=null,issueWindow=null,candidateWindow=null,issueReadAvailable=false,readWindow=null,closed=false,started=false;
     const choiceStores=new Map();let submissionBusy=false;
+    const publications=new Map();
+    const publicationCurrent=()=>!closed&&readWindow?.alive()===true&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase();
+    function publicationParents(){return [workbenchShell,readyLists,issueLists,...(candidateWindow?.alive()?[candidateWindow]:[]),...(issueWindow?.alive()?[issueWindow]:[])].filter(Boolean);}
+    async function resolutionAccepted(record,onRestored=null){
+      if(!publicationCurrent()||!record?.receipt||!workbenchShell)throw Error('Banking Pay unavailable');
+      const request=JSON.parse(record.body),id=record.receipt.request_id;
+      if(publications.has(id)){publications.get(id).check?.();return;}
+      const context=workbenchShell.snapshot().context;if(!context||context.agency_id!==record.source.context.agency_id||context.owner_epoch!==record.source.context.owner_epoch)throw Error('Changed');
+      readyLists.ensureChoiceStore(context,workbenchShell.snapshot().headers.READY.rows[0].selection_mode);const parents=publicationParents();for(const parent of parents)parent.beginPublication(record);let readContext=null,readBytes=0;const readPages=new Map();
+      const continuation=win.CloudTMSBpayNextResolutionAdoption.create({...options,document:doc,window:win,client:workbenchShell.client,preparationTransport:transport,current:publicationCurrent,
+        selectionMemory:()=>readyLists?.choiceStore()?.memoryReference()??null,
+        publicationChoices:receipt=>readyLists?.choiceStore()?.publicationExclusions(receipt)??[]},
+        {candidate_id:record.receipt.candidate_id,work_id:record.root_work_id,context:record.source.context},record.parent_kind);
+      publications.set(id,continuation);
+      let operation;const startContinuation=()=>{try{operation=continuation.continuation(async(fresh,states,_record,budget)=>{
+        const start=Date.now(),active=publicationParents(),currentRead=()=>publicationCurrent()&&!doc.hidden&&budget.live()&&readContext===identity,identity=JSON.stringify(fresh.context);
+        if(readContext!==identity){readContext=identity;readPages.clear();readBytes=0;}
+        const reader={current:currentRead,selectionMemory:()=>readyLists?.choiceStore()?.memoryReference()??null,async loadWorkbenchPage(kind,args){if(!currentRead())throw Object.assign(Error('Changed'),{code:'BPAY_NEXT_WORKBENCH_CURSOR_STALE'});const key=JSON.stringify([kind,args]);if(readPages.has(key))return readPages.get(key);budget.take();const page=await workbenchShell.client.loadWorkbenchPage(kind,args);if(!currentRead())throw Object.assign(Error('Changed'),{code:'BPAY_NEXT_WORKBENCH_CURSOR_STALE'});const bytes=new TextEncoder().encode(JSON.stringify(page)).length;if(readPages.size>=512||readBytes+bytes>16777216)throw Error('Could not refresh');readPages.set(key,page);readBytes+=bytes;return page;}};
+        const stages=await Promise.all(active.map(parent=>parent.stagePublication(fresh.context,reader)));
+        if(!publicationCurrent()||doc.hidden||Date.now()-start>5000||stages.some(stage=>!stage.valid()))throw Object.assign(Error('Changed'),{code:'BPAY_NEXT_WORKBENCH_CURSOR_STALE'});
+        const store=readyLists.choiceStore(),choices=store.stagePublicationChoices(record.receipt,fresh.context,states.flatMap(state=>state.choice_rows),stages.flatMap(stage=>stage.observations??[]));
+        const estimates=await Promise.all(stages.map(stage=>stage.stageEstimate?.(choices)));
+        if(!publicationCurrent()||doc.hidden||Date.now()-start>5000||!choices.valid()||stages.some(stage=>!stage.valid())||estimates.some(stage=>stage&&!stage.valid()))throw Object.assign(Error('Changed'),{code:'BPAY_NEXT_WORKBENCH_CURSOR_STALE'});
+        if(onRestored)await onRestored(fresh,states,reader);if(!publicationCurrent()||doc.hidden||Date.now()-start>5000||!choices.valid()||stages.some(stage=>!stage.valid())||estimates.some(stage=>stage&&!stage.valid()))throw Object.assign(Error('Changed'),{code:'BPAY_NEXT_WORKBENCH_CURSOR_STALE'});
+        choices.apply();for(const stage of stages)stage.apply();for(const stage of estimates)stage?.apply();
+        for(const stage of stages)stage.paint();readyLists.joinHeader(workbenchShell.snapshot());readyLists.refreshSelection();workbenchShell.refreshSelectionLabel();
+        if(request.action==='RESOLUTION_CLEAR'){const key='cloudtms.bpay-next.clear-window.v1.'+JSON.stringify({agency_id:request.args.context.agency_id,actor_user_id:request.args.context.actor_user_id,candidate_id:request.args.candidate_id}),storage=options.storage??win.localStorage,raw=storage.getItem(key);if(raw!==null&&new TextEncoder().encode(raw).length<=327680&&JSON.parse(raw).body===record.body)storage.removeItem(key);}publications.delete(id);
+      },()=>{if(publicationCurrent())workbenchShell.publicationError('Rates saved; could not refresh the payments.');});}catch{if(publicationCurrent())workbenchShell.publicationError();}};publications.set(id,{close:()=>continuation.close(),check:()=>operation?operation.check():startContinuation()});startContinuation();
+    }
+    options={...options,onResolutionAccepted:resolutionAccepted};
     async function protectedMutation(action,args){
       const before=controller.snapshot();
       const identity=JSON.stringify([before.run_id,before.worker_id,before.candidate_id,before.pay_channel,workbenchShell?.snapshot().context??null]);
@@ -3067,8 +3097,8 @@ function caseListResult(payload,call,bad){
     async function loadCapabilities(){capabilities=null;capabilityError='';try{capabilities=await transport.capabilities();
       if(capabilities.environment_ready&&!issueLists){
         if(!win.CloudTMSBpayNextWorkbench||typeof win.CloudTMSBpayNextWorkbench.openIssueWindow!=='function')throw new Failure('SCHEMA_UNAVAILABLE');
-        workbenchShell=win.CloudTMSBpayNextWorkbench.mountWorkbenchShell({...options,host:issueHost,footerHost:officeFooter,debug:controller.debug,
-          choiceStoreForScope:(context,selectionMode)=>{if(!current())fail('ACTOR_CHANGED');const namespace={agency_id:context.agency_id,owner_epoch:context.owner_epoch,actor_user_id:context.actor_user_id,official_pay_date:context.official_pay_date,scope:{candidate_id:context.scope.candidate_id,client_id:context.scope.client_id,channel:context.scope.channel}},key='cloudtms.bpay-next.choices.v1.'+JSON.stringify(namespace);
+        workbenchShell=win.CloudTMSBpayNextWorkbench.mountWorkbenchShell({...options,onPublicationRetry:()=>{for(const publication of publications.values())publication.check?.();},host:issueHost,footerHost:officeFooter,debug:controller.debug,
+          choiceStoreForScope:(context,selectionMode)=>{if(!publicationCurrent())fail('ACTOR_CHANGED');const namespace={agency_id:context.agency_id,owner_epoch:context.owner_epoch,actor_user_id:context.actor_user_id,official_pay_date:context.official_pay_date,scope:{candidate_id:context.scope.candidate_id,client_id:context.scope.client_id,channel:context.scope.channel}},key='cloudtms.bpay-next.choices.v1.'+JSON.stringify(namespace);
             const active=readyLists?.choiceStore();if(active?.key===key)return active;let store=choiceStores.get(key);if(!store){store=win.CloudTMSBpayNextWorkbench.createChoiceStore({context,window:win,storage:options.choiceStorage,selectionMode});choiceStores.set(key,store);}return store;},
           onLocalSelectionReset:store=>{if(readyLists?.choiceStore()?.key===store.key){readyLists.refreshSelection();workbenchShell?.refreshSelectionLabel();}},
           onDecisionsClearAccepted:()=>{issueLists?.invalidate();workbenchShell?.invalidate();},
@@ -3080,10 +3110,10 @@ function caseListResult(payload,call,bad){
           currentNamespace:()=>workbenchShell?.snapshot().context,windowAlive:()=>readWindow?.alive()===true,canInteract:()=>readWindow?.active()===true});
         readyLists=win.CloudTMSBpayNextWorkbench.mountReadyCandidates({...options,host:workbenchShell.readyHost,client:workbenchShell.client,debug:controller.debug,windowAlive:()=>readWindow?.alive()===true,
           canInteract:()=>readWindow?.active()===true,onChoiceStore:store=>choiceStores.set(store.key,store),onSelection:()=>workbenchShell?.refreshSelectionLabel(),openBankRecord:id=>openCandidateRecord(options,id,close),
-          openCandidate:address=>{if(candidateWindow?.alive())return;candidateWindow=win.CloudTMSBpayNextWorkbench.openCandidateWindow({...options,host:workbenchShell.readyHost,client:workbenchShell.client,preparationTransport:transport,choiceStore:readyLists.choiceStore(),onSelection:()=>{readyLists?.refreshSelection();workbenchShell?.refreshSelectionLabel();},onChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);}});
+          openCandidate:address=>{if(candidateWindow?.alive())return;candidateWindow=win.CloudTMSBpayNextWorkbench.openCandidateWindow({...options,host:workbenchShell.readyHost,client:workbenchShell.client,preparationTransport:transport,choiceStore:readyLists.choiceStore(),onSelection:()=>{readyLists?.refreshSelection();workbenchShell?.refreshSelectionLabel();},onResolutionAccepted:resolutionAccepted,onChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);}});
         readyLists.joinHeader(workbenchShell.snapshot());
         issueLists=win.CloudTMSBpayNextWorkbench.mountIssueLists({...options,host:workbenchShell.issueHost,windowAlive:()=>readWindow?.alive()===true,client:workbenchShell.client,externalTabs:true,debug:controller.debug,parentContext:()=>workbenchShell.snapshot().context,parentAvailable:()=>workbenchShell.snapshot().available,parentReadError:()=>workbenchShell.snapshot().readError,canInteract:()=>readWindow?.active()===true,
-          openIssue:address=>{if(issueWindow?.alive())return;issueWindow=win.CloudTMSBpayNextWorkbench.openIssueWindow({...options,host:workbenchShell.issueHost,client:workbenchShell.client,windowAlive:()=>readWindow?.alive()===true,onIssueChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);},onAvailability:value=>{workbenchShell.setIssueAvailability(value);const header=workbenchShell.snapshot();issueReadAvailable=value.available&&header.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,header.context);if(host.isConnected)render();}});
+          openIssue:address=>{if(issueWindow?.alive())return;issueWindow=win.CloudTMSBpayNextWorkbench.openIssueWindow({...options,host:workbenchShell.issueHost,client:workbenchShell.client,windowAlive:()=>readWindow?.alive()===true,preparationTransport:transport,onResolutionAccepted:resolutionAccepted,onIssueChanged:()=>{issueLists?.invalidate();workbenchShell?.invalidate();}},address);},onAvailability:value=>{workbenchShell.setIssueAvailability(value);const header=workbenchShell.snapshot();issueReadAvailable=value.available&&header.available&&win.CloudTMSBpayNextWorkbench.sameWorkbenchRevision(value.context,header.context);if(host.isConnected)render();}});
       }
     }catch{capabilityError='Banking capabilities are unavailable. Re-check before continuing.';issueReadAvailable=false;}}
     function refusalCopy(e){
@@ -3209,7 +3239,7 @@ function caseListResult(payload,call,bad){
         controller.bind({run_id:address.run_id});controller.setDrafts(rows);controller.bindDraft({run_id:address.run_id,pay_channel:address.pay_channel});
         controller.bind({worker_id:address.run_worker_id,candidate_id:address.candidate_id});await loadStatus();render();
       }});
-    readWindow=options.showReadWindow({title:'Banking Pay',content:host,footer:officeFooter,beforeClose,canFocus:()=>same(options.currentActorId(),options.actorId)&&options.ownerReady()===true,onDismiss:dismiss,onMount:()=>{
+    readWindow=options.showReadWindow({title:'Banking Pay',content:host,footer:officeFooter,beforeClose,canFocus:()=>same(options.currentActorId(),options.actorId)&&options.ownerReady()===true,onDismiss:()=>{for(const continuation of publications.values())continuation.close();publications.clear();dismiss();},onMount:()=>{
       render();readyLists?.refreshSelection();if(!started){started=true;void act(async()=>{await loadCapabilities();if(capabilities?.environment_ready&&controller.snapshot().run_id){if(options.reviewRunId&&!controller.snapshot().selection_sealed)await applyReview(await controller.mutate('REVIEW',{run_id:options.reviewRunId}));await refresh();}});}
     }});
     return sheet;
