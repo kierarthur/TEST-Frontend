@@ -1548,3 +1548,28 @@
 #modal.ctms-modern-modal .bpay-next-pay-channel .candidate-office-badge{margin-left:8px;}
 @media(max-width:700px){#modal.ctms-modern-modal:has(.bpay-next-channel-choice-confirm) :is(button,.bpay-next-confirmation-footer .btn){min-height:44px;min-width:44px;}}
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalActions .bpay-next-pay-channel-footer button.bpay-next-channel-clear[data-next-destructive]{border-color:var(--ctms-modal-danger);color:#f5c1bd;background:transparent;box-shadow:none;}
+
+/* XD01: masked Stored credits use the same native dark list/window. */
+#modal.ctms-modern-modal:has(.bpay-next-stored-credits) { max-width:980px; }
+#modal.ctms-modern-modal .bpay-next-stored-credits > p:first-child { margin:0; color:#a9b7cb; }
+#modal.ctms-modern-modal .bpay-next-stored-credits td[data-label="Amount"],
+#modal.ctms-modern-modal .bpay-next-stored-credits th:nth-child(3) { text-align:right; font-variant-numeric:tabular-nums; }
+#modal.ctms-modern-modal .bpay-next-stored-credits td[data-label="Paid to"] { overflow-wrap:anywhere; }
+#modal.ctms-modern-modal .bpay-next-stored-credits td[data-label="Actions"] { white-space:nowrap; }
+#modal.ctms-modern-modal .bpay-next-stored-credits .bpay-next-case-list-scroll { max-height:calc(100dvh - 260px); border-radius:13px; }
+#modal.ctms-modern-modal .bpay-next-stored-credits td:first-child strong { font-weight:760; }
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-stored-credits .bpay-next-stored-credit-adopt { border:0; background:transparent; box-shadow:none; color:var(--ctms-modal-accent-bright); font-weight:760; }
+#modal.ctms-modern-modal .bpay-next-stored-credit-adopt span { color:var(--ctms-modal-accent-bright); }
+#modal.ctms-modern-modal .bpay-next-stored-credits th .btn span { color:var(--ctms-modal-table-head-text,#b9c7da); }
+#modal.ctms-modern-modal .bpay-next-stored-credits th .btn .bpay-next-stored-credit-sort-arrow { color:#38bdf8; }
+#modal.ctms-modern-modal:has(.bpay-next-stored-credits) #modalActions { display:none; }
+#modal.ctms-modern-modal .bpay-next-stored-credits table { table-layout:fixed; }
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-stored-credits th .btn { min-height:24px; color:var(--ctms-modal-table-head-text,#b9c7da); }
+#modal.ctms-modern-modal .bpay-next-stored-credits td[data-label="Amount"] strong { font-weight:760; }
+#modal.ctms-modern-modal .bpay-next-stored-credit-confirm p { overflow-wrap:anywhere; }
+#modal.ctms-modern-modal .bpay-next-stored-credits .ws-notice--success { border-color:var(--ctms-modal-success); background:color-mix(in srgb,var(--ctms-modal-success) 10%,var(--ctms-modal-panel)); color:var(--ctms-modal-text); }
+@media(max-width:700px){
+ #modal.ctms-modern-modal.ctms-kind-bpay-next-read .bpay-next-stored-credits .bpay-next-stored-credit-adopt { display:none; }
+ #modal.ctms-modern-modal .bpay-next-stored-credits td[data-label="Amount"] { text-align:left; }
+ #modal.ctms-modern-modal:has(.bpay-next-stored-credit-confirm) :is(button,.btn) { min-height:44px; }
+}
