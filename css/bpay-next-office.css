@@ -1550,6 +1550,24 @@
 #modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalActions .bpay-next-pay-channel-footer button.bpay-next-channel-clear[data-next-destructive]{border-color:var(--ctms-modal-danger);color:#f5c1bd;background:transparent;box-shadow:none;}
 
 /* XD01: masked Stored credits use the same native dark list/window. */
+/* DR23: native recovery-change question; the card supplies every shown value. */
+#modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-net-confirm) {width:min(600px,calc(100vw - 48px));color-scheme:dark;}
+#modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-net-confirm) #modalBody {padding:0;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-confirm {background:var(--ctms-modal-panel);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-confirm h2 {background:var(--ctms-modal-panel-raised);}
+#modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-net-confirm) #modalActions {background:var(--ctms-modal-canvas);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-changes {color:var(--ctms-modal-sub);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-confirm h2 {display:flex;gap:12px;align-items:center;font-size:15px;margin:0;padding:16px 18px;border-bottom:1px solid var(--ctms-modal-line);}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-confirm p {margin:16px 18px;line-height:1.6;overflow-wrap:anywhere;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-changes p {margin-bottom:8px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-confirm .bpay-next-draft-confirm-summary {margin-top:8px;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-confirm .bpay-next-draft-confirm-summary {font-weight:760;}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-confirm .bpay-next-question-icon {display:inline-flex;flex:0 0 30px;height:30px;justify-content:center;align-items:center;border-radius:50%;border:1px solid var(--ctms-modal-accent-bright);color:var(--ctms-modal-text);background:color-mix(in srgb,var(--ctms-modal-accent) 16%,var(--ctms-modal-panel-raised));}
+#modal.ctms-kind-bpay-next-read .bpay-next-paye-net-changes {max-height:45dvh;overflow:auto;overscroll-behavior:contain;}
+@media(max-width:700px){
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-net-confirm) {width:calc(100vw - 16px);}
+ #modal.ctms-kind-bpay-next-read:has(.bpay-next-paye-net-confirm) :is(button,.btn) {min-width:44px;min-height:44px;}
+}
 #modal.ctms-modern-modal:has(.bpay-next-stored-credits) { max-width:980px; }
 #modal.ctms-modern-modal .bpay-next-stored-credits > p:first-child { margin:0; color:#a9b7cb; }
 #modal.ctms-modern-modal .bpay-next-stored-credits td[data-label="Amount"],

@@ -4,10 +4,10 @@
  * only an explicit SAME-byte retry. Closing the sheet never clears it.
  */
 (function (root, factory) {
-  const api = factory(typeof module === 'object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates, typeof module === 'object' && module.exports ? require('./bpay-next-ui.js') : root.CloudTMSBpayNextUi, typeof module === 'object' && module.exports ? require('./bpay-next-case-preview.js') : root.CloudTMSBpayNextCasePreview);
+  const api = factory(typeof module === 'object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates, typeof module === 'object' && module.exports ? require('./bpay-next-ui.js') : root.CloudTMSBpayNextUi, typeof module === 'object' && module.exports ? require('./bpay-next-case-preview.js') : root.CloudTMSBpayNextCasePreview, typeof module === 'object' && module.exports ? require('./bpay-next-paye-net-contract.js') : root.CloudTMSBpayNextPayeNetContract);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.CloudTMSBpayNextOffice = api;
-})(typeof globalThis === 'object' ? globalThis : this, function (dates, ui, cases) {
+})(typeof globalThis === 'object' ? globalThis : this, function (dates, ui, cases, payeNets) {
   'use strict';
 
 // DR27: identical closed directory/count read contract in Worker and Office.
@@ -831,6 +831,7 @@ function field(v,type){
     if(action==='WRITE_OFF'&&args?.scope==='AMOUNT')schema={...schema,amount:'writeOffAmount'};
     if(action==='PREPARATION_DISCARD'&&Object.hasOwn(args||{},'reason'))schema={...schema,reason:'discardReason'};
     if (action === 'PAYE_NET' && Object.hasOwn(args || {}, 'expected_projection_revision')) schema = { ...schema, expected_projection_revision: 'projectionRevision' };
+    if (action === 'PAYE_NET' && Object.hasOwn(args || {}, 'preview_capacity_revision') && Object.hasOwn(args || {}, 'expected_projection_revision')) schema = { ...schema, preview_capacity_revision: 'integer' };
     if (action === 'CANCEL_REQUEST' && (Object.hasOwn(args || {}, 'run_id') || Object.hasOwn(args || {}, 'pay_channel'))) schema = {...schema,run_id:'uuid',pay_channel:'channel'};
     // Historical tokenless journals remain readable, byte-for-byte. A new
     // protected dispatch separately requires the completed helper below.
@@ -1330,6 +1331,14 @@ function caseListResult(payload,call,bad){
         return body;
       },
       async page(kind, args) {
+        if(kind==='PAYE_NET_PREVIEW'){
+          const contract=payeNets;if(!contract?.payeNetPreviewInput(args))fail('REQUEST_INVALID');
+          const query=new URLSearchParams({kind});for(const [key,value] of Object.entries(args))query.set(key,key==='after'?JSON.stringify(value):String(value));
+          if(encoder.encode(query.toString()).byteLength>32768)fail('REQUEST_INVALID');
+          const body=await call('/api/banking/pay/next/preparation-page?'+query.toString(),{method:'GET'},false,null,options.timeoutMs??LIMITS.timeout);
+          if(!record(body)||body.ok!==true||body.kind!==kind)fail();const {ok,kind:replyKind,...payload}=body;
+          if(!contract.payeNetPreviewResult(payload,args,options.actorId))fail();return body;
+        }
         if(['CASE_LIST','CASE_SUMMARY'].includes(kind)){
           if(!record(args)||Object.keys(args).some(key=>!['filters','after',...(kind==='CASE_LIST'?['sort','limit']:[])].includes(key)))fail('REQUEST_INVALID');
           const query=new URLSearchParams({kind});for(const [key,value]of Object.entries(args))query.set(key,['filters','after'].includes(key)?JSON.stringify(value):String(value));
@@ -2495,6 +2504,63 @@ function caseListResult(payload,call,bad){
     if(value===null||value===undefined)return '—';const negative=value.startsWith('-'),[whole,fraction='']=(negative?value.slice(1):value).split('.');
     return (negative?'−':'')+'£'+whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.padEnd(2,'0').slice(0,2);
   }
+  // DR23: the same native preview/confirmation is reused by DR22's entry host.
+  // Keep the original server continuation. Preview money is never intake.
+  async function reviewPayeNetChange(options,controller,header,enteredNet,current){
+    requireActor(options);
+    if(typeof current!=='function'||!current()||typeof options.showReadWindow!=='function'
+      ||header.target_pay_channel!=='PAYE'||header.net_pending||header.projection_input_kind==='CASE_PAYOUT')fail('REQUEST_INVALID');
+    const doc=options.document||document,win=options.window||window;
+    const el=(tag,text,cls)=>{const n=doc.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+    const changes=doc.createDocumentFragment(),labels={LOAN:'Payment Advance repayment',ADVANCE:'Payment Advance repayment',MANUAL_DEBT:'Manual Debt recovery',OVERPAYMENT:'Overpayment recovery'};
+    let after=null,terminal=null;
+    const own=()=>current()&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true
+      &&doc.visibilityState!=='hidden'&&controller.snapshot().pending===null
+      &&same(controller.snapshot().worker_id,header.run_worker_id)&&same(controller.snapshot().run_id,header.run_id);
+    do{
+      if(!own())fail('ACTOR_CHANGED');
+      const page=await controller.page('PAYE_NET_PREVIEW',{run_worker_id:header.run_worker_id,entered_paye_net:enteredNet,after,limit:100});
+      if(!own())fail('ACTOR_CHANGED');
+      const c=page.context;
+      if(!same(c.run_id,header.run_id)||!same(c.candidate_id,header.candidate_id)
+        ||c.selection_revision!==header.case_selection_revision||c.expected_projection_revision!==header.net_projection_revision)fail('READ_CHANGED');
+      for(const r of page.recovery_rows){if(r.before!==null&&r.before!==r.after)
+        changes.append(el('p',labels[r.case_kind]+' changes from '+formatCapturedMoney(r.before)+' to '+formatCapturedMoney(r.after)+'.'));}
+      if(page.complete){terminal=page;break;}
+      // Clone for ownership, without rebuilding or changing any carry operand.
+      after=JSON.parse(JSON.stringify(page.next_cursor));
+      await new Promise(resolve=>win.requestAnimationFrame(resolve));
+    }while(own());
+    if(!terminal||!own())fail('READ_CHANGED');
+    const facts=Object.freeze({context:Object.freeze({...terminal.context}),summary:Object.freeze({...terminal.summary})});
+    if(changes.childNodes.length===0)return facts;
+    const body=el('section',undefined,'bpay-next-paye-net-confirm'),heading=el('h2'),icon=el('span','?','bpay-next-question-icon');
+    icon.setAttribute('aria-hidden','true');heading.append(icon,el('span',options.candidateName?'Change the PAYE net for '+options.candidateName+'?':'Change the PAYE net?'));
+    const details=el('div',undefined,'bpay-next-paye-net-changes');details.append(changes);
+    const s=facts.summary,summary=el('p','PAYE net '+formatCapturedMoney(s.accepted_net)+' to '+formatCapturedMoney(s.proposed_net)
+      +' · '+(s.accepted_cash===s.proposed_cash?'Bank amount stays '+formatCapturedMoney(s.proposed_cash):'Bank amount '+formatCapturedMoney(s.accepted_cash)+' to '+formatCapturedMoney(s.proposed_cash)), 'bpay-next-draft-confirm-summary');
+    body.append(heading,details,summary);
+    const footer=el('div',undefined,'bpay-next-window-actions'),keep=el('button','Keep current net','btn'),accept=el('button','Accept new net','btn primary');
+    keep.type=accept.type='button';keep.dataset.nextSecondary='';footer.append(keep,accept);
+    const parentFrame=win.__modalStack?.at(-1),bounds=doc.getElementById('modal')?.getBoundingClientRect(),parentAnchor=bounds?{left:Math.round(bounds.left),top:Math.round(bounds.top)}:null;
+    let frame,approved=false;
+    keep.addEventListener('click',()=>{if(frame.active())void frame.close();});accept.addEventListener('click',()=>{if(own()&&frame.active()){approved=true;void frame.close();}});
+    const answer=await new Promise(resolve=>{frame=options.showReadWindow({title:'PAYE net change',content:body,footer,small:true,confirmation:true,canFocus:own,onDismiss:()=>{
+      if(current()&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true&&parentAnchor&&parentFrame?.kind==='bpay-next-read'&&win.__modalStack?.at(-1)===parentFrame){
+        const anchors=win.__modalAnchorsByKind;if(anchors&&typeof anchors==='object'){anchors[parentFrame.kind]={...parentAnchor};win.__modalAnchor={...parentAnchor};}
+      }
+      resolve(approved&&own());
+    }});});
+    return answer&&own()?facts:null;
+  }
+  async function savePayeNet(options,controller,header,enteredNet,current){
+    const facts=await reviewPayeNetChange(options,controller,header,enteredNet,current);
+    if(facts===null)return null;
+    requireActor(options);if(!current()||(options.document||document).visibilityState==='hidden'||!same(controller.snapshot().worker_id,facts.context.run_worker_id)||!same(controller.snapshot().run_id,facts.context.run_id))fail('ACTOR_CHANGED');
+    const args={command_id:controller.newId(),run_worker_id:facts.context.run_worker_id,entered_paye_net:facts.context.entered_paye_net};
+    if(facts.context.selection_revision!=='0'){args.expected_projection_revision=facts.context.expected_projection_revision;args.preview_capacity_revision=facts.context.capacity_revision;}
+    return controller.mutate('PAYE_NET',args);
+  }
   // DR21: read-only worksheet; later edit/import/export owners reuse this mount.
   function mountPayeWorksheet(options,address){
     requireActor(options);if(!shape(address,{run_id:'uuid',pay_channel:'worksheetChannel'})||options.ownerReady()!==true)fail('REQUEST_INVALID');
@@ -3293,6 +3359,9 @@ function caseListResult(payload,call,bad){
       }
     }catch{capabilityError='Banking capabilities are unavailable. Re-check before continuing.';issueReadAvailable=false;}}
     function refusalCopy(e){
+      if(e?.serverCode==='BPAY_NEXT_PAYE_NET_ENTRY_IN_PROGRESS')return 'PAYE net entry in progress.';
+      if(e?.serverCode==='BPAY_NEXT_PAYE_NET_REQUIRED')return 'Enter the PAYE nets before building payments.';
+      if(e?.serverCode==='BPAY_NEXT_NET_PREVIEW_CHANGED')return 'The payment figures changed; check them again.';
       if(e?.serverCode==='BPAY_NEXT_ENVIRONMENT_MISMATCH')return 'Banking environment does not match this request. Nothing was accepted. Re-check before continuing.';
       if(e?.refusal?.phase==='BEFORE_ACCEPTANCE'){
         const copy={EARLIER_ECONOMIC_PENDING:'An earlier financial command must finish before preparation can be accepted.',QUERY_UNAVAILABLE:'The Source Query check is unavailable. Preparation was not accepted.',QUERY_BLOCKED:'A Source Query blocks this selection. Preparation was not accepted.',QUERY_BUSY:'The Source Query check is busy. Preparation was not accepted.',INPUT_UNAVAILABLE:'A selected preparation input is unavailable. Preparation was not accepted.',SELECTION_INCOMPLETE:'Complete the selection before preparing.',ORIGIN_UNAVAILABLE:'An original payment or source obligation cannot be proved. Preparation was not accepted.',TRANSACTION_NOT_FRESH:'The preparation transaction could not accept a new command.'};return copy[e.refusal.reason];
@@ -3353,7 +3422,7 @@ function caseListResult(payload,call,bad){
         body.append(el('p',reservationDescription(h)),el('p','Reservation facts are shown once: the confirmed obligation while building, then individual original transfers. Each page is a live read; amounts are not summed across pages.'));
         body.append(button('Frozen payment lines',()=>loadLines(),locked),button('Check later approval flag',async()=>{comparisons=await controller.page('REVISION_COMPARISON',{run_worker_id:s.worker_id,after_work_id:null,limit:100});},locked));
         if(draftActionsAllowed(h)&&h.target_pay_channel==='PAYE'){
-          const [n,ni]=input('Enter PAYE payroll net (GBP, exact pence)','text',netInput?.value||'');netInput=ni;ni.inputMode='decimal';body.append(n,button('Accept PAYE net',async()=>{const args={command_id:controller.newId(),run_worker_id:s.worker_id,entered_paye_net:netInput.value};if(h.case_selection_revision!=='0')args.expected_projection_revision=h.net_projection_revision;await controller.mutate('PAYE_NET',args);await loadStatus();},locked));
+          const [n,ni]=input('PAYE net (£)','text',netInput?.value||'');netInput=ni;ni.inputMode='decimal';body.append(n,button('Accept PAYE net',async()=>{const value=netInput.value,receipt=await savePayeNet(options,controller,h,value,()=>!closed&&same(options.currentActorId(),options.actorId)&&options.ownerReady()===true);if(receipt!==null)await loadStatus();},locked||h.net_pending||h.projection_input_kind==='CASE_PAYOUT'));
           body.append(button('Build original transfer',async()=>{await controller.mutate('TRANSFER_BEGIN',{command_id:controller.newId(),run_worker_id:s.worker_id});await loadStatus();},locked||h.net_pending||h.projection_id===null));
         }
         if(draftActionsAllowed(h)&&(h.target_pay_channel==='PAYE'||(s.pay_channel==='UMBRELLA'&&h.worker_status==='READY'))){
@@ -3505,5 +3574,5 @@ function caseListResult(payload,call,bad){
       readCase:(case_id,receipt)=>transport.page('CASE_COMPONENTS',{candidate_id:candidateId,case_id,after_component_ordinal:null,limit:100,...(edit?{edit_command_id:receipt.command_id}:{})})
     });
   }
-  return Object.freeze({ mountPayeWorksheet, openPayeWorksheet, mountPreparationBanners, confirmReviewedDraft, showCreatedDrafts, openConfirmedChannel, openCaseProtectedDraft, readCaseEditContext, paintCaseEditCards, mountCasePreviewFooter, open, close, openStoredCredits, openBpayNextReauth, openBpayNextPaymentIssueReauth, openPayeSameWeekGuard, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openNotInDraft, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
+  return Object.freeze({ reviewPayeNetChange, savePayeNet, mountPayeWorksheet, openPayeWorksheet, mountPreparationBanners, confirmReviewedDraft, showCreatedDrafts, openConfirmedChannel, openCaseProtectedDraft, readCaseEditContext, paintCaseEditCards, mountCasePreviewFooter, open, close, openStoredCredits, openBpayNextReauth, openBpayNextPaymentIssueReauth, openPayeSameWeekGuard, createTransport, createController, createChoiceSubmission, openCreateDraftConfirmation, openBpayNextPreparationProgress, openWorkerReview, openNotInDraft, openFrozenWorkerDetail, printAdvice, openCandidateRecord, requestBody, capabilityReceipt, dailyHoursOnlyRefusal, dailyProcessingState, mountDailyProcessingNotice, Failure, LIMITS });
 });
