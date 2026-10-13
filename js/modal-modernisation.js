@@ -847,6 +847,7 @@
           (kindSlug === 'bpay-next-read' && button.matches('[data-next-focus-key="candidate-export"]')) ||
           (kindSlug === 'bpay-next-read' && button.matches('.bpay-next-reauth [data-next-secondary]')) ||
           (kindSlug === 'bpay-next-read' && button.matches('.bpay-next-worker-review [data-next-secondary]')) ||
+          (kindSlug === 'bpay-next-read' && button.matches('.bpay-next-pay-channel [data-next-secondary],.bpay-next-pay-channel-footer [data-next-secondary],.bpay-next-channel-choice-confirm [data-next-secondary]')) ||
           (kindSlug === 'timesheets' && body.querySelector('[data-daily-processing]') && button.matches('[data-ts-action="add-additional-manual"]'))) {
         button.classList.remove('ctms-action-danger', 'ctms-action-primary');
         return;
