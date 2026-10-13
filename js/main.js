@@ -305680,7 +305680,12 @@ function invoiceModalComputePreviewTotals(modalCtx) {
   // Add staged adjustments (preview VAT at invoice rate)
   for (const a of stagedAdjs) {
     const ex = Number(a?.amount_ex_vat || 0);
-    const vat = ex * (vatRatePct / 100);
+    const source = invData.weekly_source_invoice;
+    const helper = window.CloudTmsSourceInvoiceAdjustments;
+    const vat = source?.is_weekly_source_invoice === true
+      ? (Object.prototype.hasOwnProperty.call(a,'vat_amount') ? Number(a.vat_amount)
+        : Number(helper.defaultVat(a.amount_ex_vat,helper.context(source).default_vat_rate_pct)))
+      : ex * (vatRatePct / 100);
     subtotal_ex_vat += ex;
     vat_amount += vat;
     total_inc_vat += (ex + vat);
@@ -306008,7 +306013,9 @@ async function invoiceModalSaveEdits(modalCtx, { rerender, reload }) {
   const add_adjustments = (Array.isArray(e.add_adjustments) ? e.add_adjustments : []).map(a => ({
     client_token: a.client_token,
     description: a.description,
-    amount_ex_vat: a.amount_ex_vat
+    amount_ex_vat: a.amount_ex_vat,
+    ...(invoiceModalGetInvoiceData(modalCtx).weekly_source_invoice?.is_weekly_source_invoice === true
+      && Object.prototype.hasOwnProperty.call(a,'vat_amount') ? {vat_amount:a.vat_amount} : {})
   })).filter(a => (a && (a.amount_ex_vat != null || (a.description && String(a.description).trim()))));
 
   const normSeg = (r) => {
@@ -308379,7 +308386,15 @@ function invoiceModalNewClientToken() {
 }
 async function openInvoiceAddAdjustmentModal(modalCtx, { rerender }) {
   const parentCtx = modalCtx; // ✅ stable reference
-  const { invoice } = invoiceModalGetInvoiceData(parentCtx);
+  const sourceInvoiceData = invoiceModalGetInvoiceData(parentCtx);
+  const { invoice } = sourceInvoiceData;
+  if (sourceInvoiceData.weekly_source_invoice?.is_weekly_source_invoice === true) {
+    return window.CloudTmsSourceInvoiceAdjustments?.open(parentCtx,{
+      invoiceData:sourceInvoiceData,canEdit:invoiceModalIsEditable(invoice,parentCtx,'lines'),
+      showModal,document,newToken:invoiceModalNewClientToken,
+      close:()=>document.getElementById('btnCloseModal')?.click(),rerender
+    });
+  }
 
   // Ensure showModal uses the invoice modal ctx (shared context across modal stack)
   try { window.modalCtx = parentCtx; } catch {}
@@ -310754,6 +310769,10 @@ const hasRefEdits = (() => {
             + Add adjustment
           </button>
         ` : ''}
+        ${isEditing && weekly_source_invoice?.is_weekly_source_invoice === true
+          && window.CloudTmsSourceInvoiceAdjustments?.context(weekly_source_invoice) ? `
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-action="inv-add-adjustment" ${addDisabledAttr}>+ Add adjustment</button>
+        ` : ''}
       </div>
 
       ${isEditing && hasPendingEdits ? `
@@ -310955,6 +310974,8 @@ function renderInvoiceLinesTable(modalCtx, invoiceData, items) {
         <thead><tr><th>Date</th><th>Candidate</th><th>Source details</th><th>Hours</th><th>Break</th><th>Status</th>${isEditing ? '<th class="text-end">Move to another unissued invoice</th>' : ''}</tr></thead>
         <tbody>${sourceBody || `<tr><td colspan="${isEditing ? 7 : 6}" class="text-muted">No source lines remain on this invoice.</td></tr>`}</tbody>
       </table>
+      ${window.CloudTmsSourceInvoiceAdjustments?.rows(items,modalCtx.invoiceEdits?.add_adjustments,
+        removedSet,weeklySource,isEditing,esc,fmtMoneyLocal) || ''}
     </div>`;
   }
 

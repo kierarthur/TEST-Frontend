@@ -433,6 +433,8 @@
       selection_hash: null,
       weekly_source_snapshot_hash: null,
       weekly_source_rows: [],
+      healthroster_credit_notes: null,
+      credit_note_results: [],
       weekly_source_page: null,
       weekly_source_submission_results: [],
       source_submission_complete: false,
@@ -628,6 +630,10 @@
       });
       if (state.destroyed || serial !== state.request_serial) return null;
       state.candidate_page = payload;
+      if(state.mode==='GENERATE') {
+        state.healthroster_credit_notes=payload.healthroster_credit_notes||null;
+        window.CloudTmsAutomaticCreditNotes?.rows(state.healthroster_credit_notes);
+      }
       state.snapshot = asObject(payload.snapshot);
       state.query_hash = clean(payload.query_hash);
       state.filter_hash = clean(payload.filter_hash);
@@ -1009,8 +1015,9 @@
         <tbody>${rows.map(row => renderInvoiceBatchRow(row, state)).join('')}</tbody>
       </table></section>` : '';
     const source = state.mode === 'GENERATE' ? renderWeeklySourceInvoiceRows(state) : '';
-    if (!ordinary && !source) return '<div class="invbatch-empty">No matching items.</div>';
-    return `${source}${ordinary}`;
+    const credits=state.mode==='GENERATE'?window.CloudTmsAutomaticCreditNotes?.render(state.healthroster_credit_notes,escapeHtml)||'':'';
+    if (!ordinary && !source && !credits) return '<div class="invbatch-empty">No matching items.</div>';
+    return `${credits}${source}${ordinary}`;
   }
 
   function rowHeaderSelectionState(rows, state) {
@@ -1257,7 +1264,7 @@
       <footer class="invbatch-footer">
         <div><span><strong>${ready.toLocaleString('en-GB')}</strong> eligible</span><span><strong data-batch-selected-count>${escapeHtml(selected.label)}</strong> selected</span><span><strong>${blocked.toLocaleString('en-GB')}</strong> blocked</span></div>
         ${state.selection_summary_error ? `<div class="invbatch-error" role="alert">${escapeHtml(state.selection_summary_error)}</div>` : ''}
-        <div><button type="button" class="btn btn-outline" data-batch-action="close">Cancel</button><button type="button" class="btn btn-primary" data-batch-action="confirm-open" ${(selected.exact && selected.count > 0 && !state.submitting) ? '' : 'disabled'}>${escapeHtml(primary)}</button></div>
+        <div><button type="button" class="btn btn-outline" data-batch-action="close">Cancel</button><button type="button" class="btn btn-primary" data-batch-action="confirm-open" ${(selected.exact && (selected.count > 0 || (state.mode==='GENERATE' && window.CloudTmsAutomaticCreditNotes?.readyRows(state.healthroster_credit_notes).length>0)) && !state.submitting) ? '' : 'disabled'}>${escapeHtml(primary)}</button></div>
       </footer>`;
   }
 
@@ -1305,6 +1312,7 @@
     const early = state.filter.allow_early === true ? 'Batch early is included.' : 'Batch early is not included.';
     return `<section class="invbatch-confirmation" role="dialog" aria-modal="true" aria-label="Confirm invoice generation">
       <h3>Generate selected items?</h3>
+      ${state.healthroster_credit_notes?`<p>${window.CloudTmsAutomaticCreditNotes.readyRows(state.healthroster_credit_notes).length.toLocaleString('en-GB')} credit notes will also be prepared automatically. Blocked credits stay in this list until the original invoice or correction is checked.</p>`:''}
       <p><strong>${escapeHtml(selected.label)}</strong> items will be submitted.</p>
       <p>${Number(state.totals?.not_generated_total || state.totals?.not_generated || 0).toLocaleString('en-GB')} not generated.</p>
       <p>${Number(state.totals?.stale_total || state.totals?.stale || 0).toLocaleString('en-GB')} stale items will be regenerated.</p>
@@ -1546,7 +1554,9 @@
     if (!root || state.destroyed) return '';
     const viewport = captureInvoiceBatchViewport(root);
     let body;
-    if (state.source_submission_complete && !state.root_operation_id) body = renderWeeklySourceSubmissionResults(state, { close: true });
+    if (state.credit_note_results?.length && !state.root_operation_id && !state.weekly_source_submission_results?.length)
+      body=window.CloudTmsAutomaticCreditNotes.renderResults(state.credit_note_results,escapeHtml)+'<button type="button" class="btn btn-outline" data-batch-action="close">Close</button>';
+    else if (state.source_submission_complete && !state.root_operation_id) body = renderWeeklySourceSubmissionResults(state, { close: true });
     else if (state.result_page && TERMINAL.has(upper(state.progress?.status))) body = renderInvoiceBatchResultSummary(state);
     else if (state.root_operation_id) body = renderInvoiceBatchProgress(state);
     else if (state.confirmation) body = renderInvoiceBatchConfirmation(state);
@@ -1568,7 +1578,7 @@
       ${renderInvoiceBatchFilterDrawer(state)}
       ${renderRowDetails(state)}
       ${renderViewer(state)}`;
-    root.innerHTML = body;
+    root.innerHTML = body+(state.root_operation_id?window.CloudTmsAutomaticCreditNotes?.renderResults(state.credit_note_results,escapeHtml)||'':'');
     applyIndeterminateCheckboxes(root);
     restoreInvoiceBatchViewport(root, viewport);
     if (state.filter_drawer_open) {
@@ -1608,6 +1618,8 @@
     state.candidate_page = null;
     state.weekly_source_snapshot_hash = null;
     state.weekly_source_rows = [];
+    state.healthroster_credit_notes=null;
+    state.credit_note_results=[];
     state.weekly_source_page = null;
     state.weekly_source_submission_results = [];
     state.source_submission_complete = false;
@@ -1673,6 +1685,8 @@
         explicit_operation_ids: true
       }) || [];
       state.root_operation_id = clean(payload.root_operation_id || registered[0]?.operation_id).toLowerCase() || null;
+      state.credit_note_results=asArray(payload.credit_note_results);
+      window.CloudTmsAutomaticCreditNotes?.register(state.credit_note_results,window.registerInvoiceOperationsFromResponse,{modal_identity:state.id});
       state.weekly_source_submission_results = asArray(payload.weekly_source_per_row_results);
       state.source_submission_complete = state.weekly_source_submission_results.length > 0 && !state.root_operation_id;
       if (payload.partial === true && !state.root_operation_id) {
