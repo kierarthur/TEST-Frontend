@@ -99,14 +99,28 @@ function open(options,address){
  }
  async function recover(){if(busy||!controller?.pending()||!current())return;busy=true;error='';render();try{const receipt=await controller.recover();if(current()&&receipt?.received){await acceptReceipt(receipt);}else if(current())notice='The rates have not been saved. You can try again.';}catch(e){if(current())error=plainError(e);}finally{busy=false;if(viewAlive()&&(current()||result))render();}}
  async function retryOriginal(){if(busy||!controller?.canRetry()||!current())return;busy=true;error='';render();try{const receipt=await controller.retry();if(current()&&receipt){await acceptReceipt(receipt);}}catch(e){if(current())error=controller.pending()?'The result has not been confirmed.':plainError(e);}finally{busy=false;if(viewAlive()&&(current()||result))render();}}
+ async function openUmbrellaChange(next,ticket){
+  const work=next.context.works.find(w=>w.work_id===address.work_id);
+  if(!current()||ticket!==generation||!win.CloudTMSBpayNextPayChannel||next.context.target_pay_channel!=='UMBRELLA'||work?.source_pay_channel!=='UMBRELLA'||work.source_umbrella_id===next.context.target_umbrella_id)return false;
+  busy=false;const didClose=await frame.close();
+  if(didClose&&options.current()===true&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase())win.CloudTMSBpayNextPayChannel.open({...options,document:doc,window:win,client},address);
+  return true;
+ }
  async function reload(){
   if(busy||controller?.pending()||!current())return;if(changed()&&!(await beforeClose()))return;busy=true;error='';const ticket=++generation;render();
   try{const next=await client.loadWorkbenchPage('RESOLUTION_CONTEXT',{resolution:{bucket_review:{candidate_id:address.candidate_id,work_id:address.work_id,expected_revision_id:address.expected_revision_id??address.revision_id,approved_line_id:address.approved_line_id??null}}});if(!current()||ticket!==generation)return;
-   if(next.context.target_pay_channel==='UMBRELLA'&&next.context.works.some(w=>w.source_pay_channel==='UMBRELLA'&&w.source_umbrella_id!==next.context.target_umbrella_id)&&win.CloudTMSBpayNextPayChannel){busy=false;const didClose=await frame.close();if(didClose&&options.current()===true&&options.ownerReady()===true&&String(options.currentActorId()||'').toLowerCase()===options.actorId.toLowerCase())win.CloudTMSBpayNextPayChannel.open({...options,document:doc,window:win,client},address);return;}
+   if(await openUmbrellaChange(next,ticket))return;
    reply=next;result=null;expanded.clear();includeLinked=next.bucket_review.linked_count!=='0';inputRates=next.bucket_review.groups.map(g=>g.saved_target_rate??g.suggested_pay_rate??'');originalRates=[...inputRates];reason='';originalReason='';rateErrors.clear();
    const h=next.bucket_review.header;header.textContent=[h.candidate_display_name,h.candidate_reference,'Timesheet w/e '+dateText(h.week_ending_date),h.client_display_name].filter(Boolean).join(' · ');
    controller=api.createResolutionCommandController({...options,window:win,current},api.resolutionWriteContext(next.context));
-  }catch(e){if(current()&&ticket===generation)error=plainError(e);}finally{busy=false;if(current()&&ticket===generation)render();}
+  }catch(e){
+   // A saved Ready row is outside the unresolved bucket reader. The native channel
+   // owner alone establishes whether this exact original Work is an Umbrella change.
+   if(current()&&ticket===generation&&e?.code==='BPAY_NEXT_RESOLUTION_STALE'&&address.rate_set_pay_channel==='UMBRELLA'&&win.CloudTMSBpayNextPayChannel){
+    try{const native=await client.loadWorkbenchPage('RESOLUTION_CONTEXT',{resolution:{channel_review:{candidate_id:address.candidate_id,work_id:address.work_id,expected_revision_id:address.expected_revision_id??address.revision_id}}});if(await openUmbrellaChange(native,ticket))return;}catch{/* Keep the original refusal; never fetch a newer revision or retry a write. */}
+   }
+   if(current()&&ticket===generation)error=plainError(e);
+  }finally{busy=false;if(current()&&ticket===generation)render();}
  }
  // Original journal recovery precedes the live reader, which may currently be Processing.
  let recoveredContext=false,startFailed=false;
