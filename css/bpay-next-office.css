@@ -356,14 +356,41 @@
 #modal.ctms-modern-modal .bpay-next-header-actions {margin-left:auto;display:flex;gap:6px;}
 #modal.ctms-modern-modal .bpay-next-workbench-shell .ma-chips {display:flex;gap:8px;flex-wrap:wrap;}
 #modal.ctms-modern-modal .bpay-next-workbench-shell .ma-chip {border-radius:999px;border:1px solid var(--ctms-modal-line);padding:6px 10px;color:var(--ctms-modal-sub);background:var(--ctms-modal-panel-soft);font-size:12px;font-weight:680;}
-#modal.ctms-modern-modal .bpay-next-filter-content fieldset {border:0;margin:0 0 16px;padding:0;}
+#modal.ctms-modern-modal.ctms-kind-bpay-next-read #modalBody .bpay-next-filter-content fieldset {border:0;border-radius:0;background:transparent;box-shadow:none;margin:0 0 16px;padding:0;}
 #modal.ctms-modern-modal .bpay-next-filter-content legend,#modal.ctms-modern-modal .bpay-next-filter-content label {font-size:12px;font-weight:680;color:var(--ctms-modal-sub);}
 #modal.ctms-modern-modal .bpay-next-filter-content label {display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
-#modal.ctms-modern-modal .bpay-next-filter-content fieldset label {flex-direction:row;align-items:center;min-height:44px;margin:0;}
+#modal.ctms-modern-modal .bpay-next-filter-content fieldset label {flex-direction:row;align-items:center;min-height:24px;margin:0;}
 #modal.ctms-modern-modal .bpay-next-filter-content input[type=radio] {width:18px;height:18px;accent-color:var(--ctms-modal-accent);margin:4px 0;}
 #modal.ctms-modern-modal .bpay-next-filter-content input[type=search],#modal.ctms-modern-modal .bpay-next-filter-content label>.btn {box-sizing:border-box;width:100%;min-height:44px;text-align:left;}
 #modal.ctms-modern-modal .bpay-next-filter-count {padding:14px;border:1px solid var(--ctms-modal-line);border-radius:13px;background:var(--ctms-modal-panel-soft);}
 #modal.ctms-modern-modal .bpay-next-filter-count p {margin:4px 0 0;font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-filter-reset-actions {display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;}
+#modal.ctms-modern-modal .bpay-next-reset-heading {display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;}
+#modal.ctms-modern-modal .bpay-next-reset-heading p {margin:0;}
+#modal.ctms-modern-modal:has(:is(.bpay-next-reset-confirm,.bpay-next-clear-consent)) #modalDrag {display:none;}
+#modal.ctms-modern-modal .bpay-next-channel-question-icon.is-success {color:var(--ctms-modal-success);border-color:var(--ctms-modal-success);}
+#modal.ctms-modern-modal .bpay-next-clear-row .bpay-next-clear-row-success {color:var(--ctms-modal-success);}
+#modal.ctms-modern-modal .bpay-next-clear-row .bpay-next-clear-row-refused {color:var(--ctms-modal-danger);}
+#modal.ctms-modern-modal .bpay-next-clear-result-success,#modal.ctms-modern-modal .bpay-next-reset-result {color:var(--ctms-modal-success);}
+#modal.ctms-modern-modal .bpay-next-filter-reset-actions .btn {min-height:32px;font-size:13px;}
+#modal.ctms-modern-modal :is(.bpay-next-reset-confirm,.bpay-next-decisions-clear) p {overflow-wrap:anywhere;}
+#modal.ctms-modern-modal :is(.bpay-next-reset-confirm,.bpay-next-decisions-clear) .bpay-next-reset-question {font-size:16px;font-weight:700;margin:0 0 8px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal :is(.bpay-next-reset-confirm,.bpay-next-decisions-clear) .bpay-next-reset-scope {margin:0 0 16px;font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-reset-confirm .bpay-next-reset-scope {font-size:14px;color:var(--ctms-modal-text);}
+#modal.ctms-modern-modal .bpay-next-clear-facts {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px;}
+#modal.ctms-modern-modal .bpay-next-clear-facts>div {display:flex;flex-direction:column;gap:4px;}
+#modal.ctms-modern-modal .bpay-next-clear-facts span {font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-clear-list {max-height:280px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;margin:16px 0;}
+#modal.ctms-modern-modal .bpay-next-clear-row {display:flex;justify-content:space-between;gap:16px;border-top:1px solid var(--ctms-modal-line);padding:12px 0;}
+#modal.ctms-modern-modal .bpay-next-clear-row>div {display:flex;flex-direction:column;gap:4px;min-width:0;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-clear-row :is(span,small) {font-size:12px;color:var(--ctms-modal-sub);}
+#modal.ctms-modern-modal .bpay-next-clear-money {text-align:right;flex-shrink:0;}
+#modal.ctms-modern-modal .bpay-next-window-actions .primary.bpay-next-clear-destructive {order:-1;margin-right:auto;background:#5b202a;border-color:#d85667;color:#ffe7ea;box-shadow:none;}
+@media(max-width:700px){#modal.ctms-modern-modal .bpay-next-filter-reset-actions .btn {min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-filter-content fieldset label {min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-clear-facts {gap:12px 8px;}
+ #modal.ctms-modern-modal .bpay-next-clear-row {gap:8px;}
+ #modal.ctms-modern-modal:has(.bpay-next-decisions-clear) :is(#btnCloseModal,.bpay-next-window-actions .btn) {min-height:44px;min-width:44px;}}
 #modal.ctms-modern-modal .bpay-next-window-actions {display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;}
 #modal.ctms-modern-modal .bpay-next-picker-list {max-height:380px;overflow:auto;overscroll-behavior:contain;}
 #modal.ctms-modern-modal .bpay-next-picker-list table {min-width:0;}

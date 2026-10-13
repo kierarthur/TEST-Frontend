@@ -1,6 +1,7 @@
 /* WB09 bounded read client; typed failure is surfaced, never an empty GBP0 list. */
 (function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.CloudTMSBpayNextWorkbench=api;})(typeof globalThis==='object'?globalThis:this,function(){'use strict';
 const resolutionApi=typeof module==='object'&&module.exports?require('./bpay-next-resolution.js'):globalThis.CloudTMSBpayNextResolution;
+const decisionsClearApi=typeof module==='object'&&module.exports?require('./bpay-next-decisions-clear.js'):globalThis.CloudTMSBpayNextDecisionsClear;
 /** WB09 pure Office reads. Closed kinds, trusted admin actor, fixed RPC only.
  * No reconstruction, financial calculation, command or automatic page retry. */
 const BPAY_NEXT_WORKBENCH_LIMITS=Object.freeze({requestBytes:32768,responseBytes:131072,timeoutMs:4000});
@@ -927,17 +928,39 @@ function mountWorkbenchShell(options){
   return entry;
  }
  function openFilters(){
-  if(dialog||busy||!current())return;const entry=child('Filters'),draft={...scope},draftLabels={...labels};let countTicket=0,valid=false,closedFilter=false;
+  if(dialog||busy||!current())return;const entry=child('Filters'),draft={...scope},draftLabels={...labels};let countTicket=0,valid=false,closedFilter=false,countPage=null;
   const group=el('fieldset'),legend=el('legend','Pay channel');group.append(legend);
   for(const [key,text] of [['ALL','PAYE and Umbrella'],['PAYE','PAYE only'],['UMBRELLA','Umbrella only']]){const wrap=el('label'),radio=el('input');radio.type='radio';radio.name='bpay-next-filter-channel';radio.value=key;radio.checked=draft.channel===key;radio.addEventListener('change',()=>{if(radio.checked&&current()){draft.channel=key;void count();}});wrap.append(radio,el('span',text));group.append(wrap);}
   const candidateLabel=el('label','Candidate'),candidate=button(draftLabels.candidate??'All Candidates · type to search',()=>openPicker('PICK_CANDIDATES',entry,draft,draftLabels,()=>{updateLabels();void count();}));candidate.setAttribute('aria-label','All Candidates · type to search');candidateLabel.append(candidate);
   const clientLabel=el('label','Client'),clientButton=button(draftLabels.client??'All Clients · type to search',()=>openPicker('PICK_CLIENTS',entry,draft,draftLabels,()=>{updateLabels();void count();}));clientButton.setAttribute('aria-label','All Clients · type to search');clientLabel.append(clientButton);
   const card=el('div',undefined,'bpay-next-filter-count'),message=el('p');message.setAttribute('role','alert');message.setAttribute('data-next-live-copy','');const apply=button('Apply',()=>{if(!valid||!current())return;bundle=null;scope={...draft};labels={...draftLabels};closedFilter=true;entry.close();options.onScope?.({...scope});void load();});apply.classList.add('btn-primary');
   const clear=button('Clear filters',()=>{if(!current())return;bundle=null;scope={candidate_id:null,client_id:null,channel:'ALL'};labels={candidate:null,client:null};closedFilter=true;entry.close();options.onScope?.({...scope});void load();});
-  const retry=button('Try again',()=>void count());retry.hidden=true;entry.body.append(group,candidateLabel,clientLabel,card,message,retry);entry.footer.append(clear,apply);
+  const reset=button('Reset selection',()=>openReset()),clearDecisions=button('Clear all decisions',()=>openClear());
+  reset.disabled=true;clearDecisions.disabled=true;const resetActions=el('div',undefined,'bpay-next-filter-reset-actions');resetActions.append(reset,clearDecisions);
+  const retry=button('Try again',()=>void count());retry.hidden=true;entry.body.append(group,candidateLabel,clientLabel,card,resetActions,message,retry);entry.footer.append(clear,apply);
+  function target(){if(!valid||!countPage||!entry.active()||!current()||typeof options.choiceStoreForScope!=='function')throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);return options.choiceStoreForScope(countPage.context,countPage.rows[0].selection_mode);}
+  function openReset(){
+   if(!valid||!entry.active()||!current())return;let store;try{store=target();}catch{message.textContent='Refresh the list and try again.';return;}
+   const revision=store.snapshot().revision,scopeText=scopeLabel(draft,draftLabels),question=child('Reset selection',entry);question.body.classList.add('bpay-next-reset-confirm');
+   const heading=el('div',undefined,'bpay-next-reset-heading'),icon=el('span','?','bpay-next-channel-question-icon');icon.setAttribute('aria-hidden','true');heading.append(icon,el('p','Reset selection for '+scopeText+'?','bpay-next-reset-question'));
+   const candidateCount=countPage.rows[0].candidate_count;question.body.append(heading,el('p',(candidateCount==='1'?'1 Candidate goes':'All '+BigInt(candidateCount).toLocaleString('en-GB')+' Candidates go')+' back to their default ticks.','bpay-next-reset-scope'));
+   const result=el('p');result.setAttribute('data-next-live-copy','');result.setAttribute('role','status');question.body.append(result);
+   const cancel=button('Cancel',()=>question.close()),confirm=button('Reset selection',()=>{if(!question.active()||!current())return;
+    try{if(!store.resetDefaults(revision)){result.setAttribute('role','alert');result.textContent='Your ticks changed; close this window and try again.';confirm.disabled=true;return;}
+     options.onLocalSelectionReset?.(store);question.body.classList.remove('bpay-next-reset-confirm');question.body.classList.add('bpay-next-reset-result-window');const success=el('p','Selection reset.','bpay-next-reset-result');success.setAttribute('role','status');success.setAttribute('data-next-live-copy','');question.body.replaceChildren(success);question.footer.hidden=true;
+    }catch{result.setAttribute('role','alert');result.textContent='Could not save your ticks; try again.';}});confirm.classList.add('primary');question.footer.append(cancel,confirm);win.setTimeout(()=>{if(question.active()&&current())cancel.focus();},0);
+  }
+  function openClear(){
+   if(!valid||!entry.active()||!current())return;let store;try{store=target();}catch{message.textContent='Refresh the list and try again.';return;}
+   const page=countPage,question=child('Clear all decisions',entry);question.body.classList.add('bpay-next-decisions-clear');
+   try{decisionsClearApi.mountDecisionsClearWindow({...options,entry:question,context:page.context,choiceStore:store,scopeLabel:scopeLabel(draft,draftLabels),current:()=>question.alive()&&current(),
+     onRefreshScope:()=>void count(),onAccepted:(originalRevision,originalNamespace)=>{const resetApplied=originalNamespace.agency_id===page.context.agency_id&&originalNamespace.actor_user_id===page.context.actor_user_id
+       &&originalNamespace.owner_epoch===page.context.owner_epoch&&originalNamespace.official_pay_date===page.context.official_pay_date&&store.resetDefaults(originalRevision);if(resetApplied)options.onLocalSelectionReset?.(store);options.onDecisionsClearAccepted?.();void count();return resetApplied;}});
+   }catch{question.body.replaceChildren(el('p','Could not open saved decisions; close this window and try again.'));question.footer.hidden=true;}
+  }
   function updateLabels(){candidate.textContent=draftLabels.candidate??'All Candidates · type to search';clientButton.textContent=draftLabels.client??'All Clients · type to search';}
-  async function count(){const ticket=++countTicket,readScope={...draft};valid=false;apply.disabled=true;card.textContent='Loading…';message.textContent='';retry.hidden=true;
-   try{const page=await readPage('HEADER',{...readScope,section:'READY'});if(ticket!==countTicket||closedFilter||!entry.alive()||!current())return;const total=el('strong',BigInt(page.rows[0].candidate_count).toLocaleString('en-GB')+(page.rows[0].candidate_count==='1'?' Candidate · ':' Candidates · ')+displayPounds(page.rows[0].amount)+' ready, as authorised');total.setAttribute('data-next-formatted-money','');card.replaceChildren(total,el('p',scopeLabel(readScope,{...draftLabels})));valid=true;apply.disabled=false;
+  async function count(){const ticket=++countTicket,readScope={...draft};valid=false;countPage=null;apply.disabled=true;reset.disabled=true;clearDecisions.disabled=true;card.textContent='Loading…';message.textContent='';retry.hidden=true;
+   try{const page=await readPage('HEADER',{...readScope,section:'READY'});if(ticket!==countTicket||closedFilter||!entry.alive()||!current())return;const total=el('strong',BigInt(page.rows[0].candidate_count).toLocaleString('en-GB')+(page.rows[0].candidate_count==='1'?' Candidate · ':' Candidates · ')+displayPounds(page.rows[0].amount)+' ready, as authorised');total.setAttribute('data-next-formatted-money','');card.replaceChildren(total,el('p',scopeLabel(readScope,{...draftLabels})));countPage=page;valid=true;apply.disabled=false;reset.disabled=typeof options.choiceStoreForScope!=='function';clearDecisions.disabled=reset.disabled||!decisionsClearApi;
    }catch{if(ticket===countTicket&&entry.alive()&&current()){card.textContent='—';message.textContent='Could not load payments; try again.';retry.hidden=false;}}
   }
   void count();
@@ -1058,6 +1081,7 @@ function createChoiceStore(options){
   chooseWork:row=>put('works',row),
   chooseComponent(row){const at='components:'+row.approved_line_id,basis=seen.get(at);if(!basis)throw new WorkbenchReadError('BPAY_NEXT_SELECTION_RECONCILIATION_REQUIRED');const work=state.intent.works.find(x=>x.work_id===row.work_id);if(work?.selected===false&&row.selected){const workAt='works:'+row.work_id,workBasis=seen.get(workAt);if(!workBasis||work.expected_revision_id!==row.expected_revision_id)throw new WorkbenchReadError('BPAY_NEXT_SELECTION_RECONCILIATION_REQUIRED');const intent=clone(state.intent);intent.works=intent.works.map(x=>x.work_id===row.work_id?{...x,selected:true,mode:'SUBSET'}:x);intent.components=intent.components.filter(x=>x.approved_line_id!==row.approved_line_id);intent.components.push(clone(row));change(intent,{...state.observed,[at]:basis,[workAt]:workBasis},state.unresolved.filter(k=>k!==at&&k!==workAt));}else put('components',row);},chooseCase:row=>put('cases',row),
   setMode(mode){if(!['ALL_MATCHING','NONE'].includes(mode))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_REQUEST_INVALID');save({...state,intent:empty(mode),memory:ref(null),observed:{},unresolved:[],counters:{},revision:state.revision+1,dirty:true});},
+  resetDefaults(expectedRevision){if(expectedRevision!==state.revision)return false;counterFacts.clear();seen.clear();save({...state,intent:empty(),memory:ref(null),remembered:ref(null),remembered_mode:'ALL_MATCHING',observed:{},unresolved:[],counters:{},revision:state.revision+1,dirty:true});return true;},
   freeze(context){requireResolved();if(!shape(context,CONTEXT)||!same({agency_id:context.agency_id,owner_epoch:context.owner_epoch,actor_user_id:context.actor_user_id,official_pay_date:context.official_pay_date,scope:{candidate_id:context.scope.candidate_id,client_id:context.scope.client_id,channel:context.scope.channel}},namespace)||(state.memory.run_id!==null&&!same(context.selection_memory,state.memory)))throw new WorkbenchReadError('BPAY_NEXT_WORKBENCH_CURSOR_STALE',false,true);return immutable(clone({namespace,intent:state.intent,revision:state.revision,workbench_revision:context.workbench_revision,adoption_revision:context.adoption_revision,memory_baseline_run_id:state.memory.run_id}));},
   acknowledge(revision,runId){if(state.revision===revision&&field(runId,'uuid')){counterFacts.clear();save({...state,dirty:false,memory:ref(runId),remembered:ref(runId),remembered_mode:state.intent.mode,intent:empty(state.intent.mode),observed:{},unresolved:[],counters:{}});}},
   discard(){counterFacts.clear();save({...state,counters:{},intent:empty(state.remembered_mode),memory:state.remembered,revision:state.revision+1,dirty:false,observed:{},unresolved:[]});}
