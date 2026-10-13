@@ -1,4 +1,27 @@
 /* NEXT presentation only: full tables scroll inside a fixed reachable header. */
+/* WB33: native saved-choice confirmation; safe focus and a separate result state. */
+#modal.ctms-modern-modal:has(.bpay-next-clear-confirmation){width:min(600px,calc(100vw - 48px));color-scheme:dark;}
+#modal.ctms-modern-modal .bpay-next-clear-confirmation{display:flex;flex-direction:column;gap:16px;max-height:65vh;overflow:auto;overscroll-behavior:contain;font-size:14px;line-height:1.5;}
+#modal.ctms-modern-modal .bpay-next-clear-confirmation h2{display:flex;align-items:center;gap:12px;margin:0;font-size:15px;}
+#modal.ctms-modern-modal .bpay-next-clear-confirmation p{margin:0;}
+#modal.ctms-modern-modal .bpay-next-clear-list{display:flex;flex-direction:column;gap:12px;}
+#modal.ctms-modern-modal .bpay-next-clear-row{display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:0;}
+#modal.ctms-modern-modal .bpay-next-clear-row>div{min-width:0;overflow-wrap:anywhere;}
+#modal.ctms-modern-modal .bpay-next-clear-row>div:nth-child(2){text-align:right;font-variant-numeric:tabular-nums;}
+#modal.ctms-modern-modal .bpay-next-clear-row small{display:block;color:var(--ctms-modal-sub);font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-clear-linked{display:flex;align-items:center;gap:9px;min-height:28px;font-size:12px;}
+#modal.ctms-modern-modal .bpay-next-clear-linked input{width:18px;height:18px;accent-color:var(--ctms-modal-accent-bright);margin:0;}
+#modal.ctms-modern-modal .bpay-next-clear-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%;}
+#modal.ctms-modern-modal .bpay-next-clear-footer .btn-warn{order:-1;margin-right:auto;}
+#modal.ctms-modern-modal :is(.bpay-next-clear-confirmation,.bpay-next-clear-footer) [hidden]{display:none;}
+#modal.ctms-modern-modal .bpay-next-clear-confirmation.is-stale .bpay-next-clear-list{opacity:.6;}
+@media(max-width:700px){
+ #modal.ctms-modern-modal:has(.bpay-next-clear-confirmation){width:calc(100vw - 16px);}
+ #modal.ctms-modern-modal:has(.bpay-next-clear-confirmation) #btnCloseModal,#modal.ctms-modern-modal .bpay-next-clear-footer .btn{min-width:44px;min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-clear-linked{min-height:44px;}
+ #modal.ctms-modern-modal .bpay-next-clear-confirmation{max-height:60vh;}
+ #modal.ctms-modern-modal .bpay-next-clear-footer{flex-wrap:wrap;}
+}
 /* WB31: the original Office frame, one component and one footer action. */
 #modal.ctms-modern-modal:has(div.bpay-next-component-choice){width:min(600px,calc(100vw - 48px));color-scheme:dark;}
 #modal.ctms-modern-modal:has(div.bpay-next-component-choice) #modalDrag{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;}
