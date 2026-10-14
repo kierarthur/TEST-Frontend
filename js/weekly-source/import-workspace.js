@@ -93,6 +93,7 @@
     if (code === 'WEEKLY_SOURCE_GROUP_NOT_ACTIVE') return 'This source is no longer available. Choose another source.';
     if (code === 'WEEKLY_SOURCE_CLIENT_NOT_IN_GROUP') return 'This client is not available for the selected source and week.';
     if (code === 'WEEKLY_SOURCE_WORKSPACE_CURSOR_STALE') return 'This information has changed. Recheck before continuing.';
+    if (code === 'WEEKLY_SOURCE_CHECKLIST_QUERY_TARGET_STALE') return 'This query has changed. Return to Checklist and recheck before continuing.';
     if (code === 'WEEKLY_SOURCE_RECHECK_INCOMPLETE') return 'Your selection was saved, but the source recheck did not finish. Retry the saved recheck in Office Checks.';
     return 'Weekly source information is temporarily unavailable. Recheck or try again shortly.';
   }
@@ -1021,19 +1022,22 @@
   function queryFor(tab, extra = {}) {
     const selected = session.workspace?.selected || {};
     const sort = session.sort[tab] || {};
+    const checklistTarget = tab === 'queries' && session.checklistReturnLink && session.reviewSingleScope
+      ? session.checklistQueryTarget : null;
     return Object.fromEntries(Object.entries({
       tab,
       source_group_id: selected.source_group_id,
       source_cycle_id: selected.source_cycle_id,
       client_id: selected.client_id,
-      report_scope_id: selected.report_scope_id,
+      report_scope_id: checklistTarget ? null : selected.report_scope_id,
       sort_key: sort.key,
       sort_direction: sort.direction,
       ...(tab === 'queries' ? {
         ...session.query.filters
       } : {}),
       ...(tab === 'history' ? { cycle_filter: session.workspace?.history?.cycle_filter } : {}),
-      ...extra
+      ...extra,
+      ...(checklistTarget ? { row_key: checklistTarget } : {})
     }).filter(([, value]) => value !== null && value !== undefined && value !== ''));
   }
 
@@ -1103,6 +1107,7 @@
   async function returnToChecklist() {
     if(!session.openCurrent?.()||!currentFrame())return;
     session.checklistReturnLink=false;session.activeTab='checklist';session.loadedTab='checklist';
+    session.checklistQueryTarget=null;session.checklistQueryScrollPending=false;session.reviewSingleScope=false;
     await repaint();await session.checklist?.refresh();
   }
 
@@ -1135,7 +1140,11 @@
         session.checklistReturnLink=true;session.checklistOnReturn=false;
         session.workspace.selected={...session.workspace.selected,...row.scope,...target};
         if(action.kind==='QUERIES'){
+          session.workspace.selected.report_scope_id='';session.workspace.selected.projection_publication_id='';
           session.reviewSingleScope=true;session.query.filters={};session.checklistQueryTarget=target.row_key;
+          session.checklistQueryScrollPending=true;
+        } else {
+          session.checklistQueryTarget=null;session.checklistQueryScrollPending=false;
         }
         const tab=action.kind==='QUERIES'?'queries':action.kind==='FINALISE'?'finalise':'imports';
         session.activeTab=tab;session.loadedTab='';await repaint();
@@ -1168,9 +1177,13 @@
         const keys = new Set(current.rows.map((row) => asText(row.row_key || row.group_key || row.id)));
         nextPage.rows = [...current.rows, ...nextPage.rows.filter((row) => { const key = asText(row.row_key || row.group_key || row.id); if (!key || keys.has(key)) return false; keys.add(key); return true; })];
       }
-      if (tab === 'queries' && session.checklistQueryTarget) {
+      if (tab === 'queries' && session.checklistReturnLink && session.reviewSingleScope && session.checklistQueryTarget) {
         const target = next.queries.rows.find(row => asText(row.group_key || row.row_key) === session.checklistQueryTarget);
-        if (target) target.expanded = true;
+        if (!target || next.queries.rows.length !== 1) {
+          const error = new Error('WEEKLY_SOURCE_CHECKLIST_QUERY_TARGET_STALE');
+          error.code='WEEKLY_SOURCE_CHECKLIST_QUERY_TARGET_STALE';throw error;
+        }
+        target.expanded = true;session.checklistQueryScrollPending=true;
       }
       session.workspace = next; syncUploadProfile(next); session.activeTab = availableTab(next, tab); session.loadedTab = session.activeTab; session.loading = false;
       session.reloadOnReturn = !currentFrame();
@@ -2024,7 +2037,7 @@
     if(['imports','queries','history'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope){bindCommon(host);bindCombinedReview(host,tab);return;}
     if(tab==='queries'&&session.reviewSingleScope){
       const back=document.createElement('button');back.className='btn btn-outline';back.textContent='Back to all queries';host.prepend(back);
-      back.addEventListener('click',()=>{session.reviewSingleScope=false;loadCombinedReview('queries');});
+      back.addEventListener('click',()=>{session.reviewSingleScope=false;session.checklistQueryTarget=null;session.checklistQueryScrollPending=false;loadCombinedReview('queries');});
     }
     host.querySelector('[data-wsc-back]')?.addEventListener('click',()=>{
       session.combined.singleScope=false; session.workspace.combined_source_workspace=true; loadCombinedFinalise();
@@ -2035,9 +2048,10 @@
       scroll.scrollTop = Number(session.scrollByTab[tab] || 0);
       scroll.addEventListener('scroll', () => { session.scrollByTab[tab] = scroll.scrollTop; }, { passive: true });
     }
-    if(tab==='queries'&&session.checklistQueryTarget){
+    if(tab==='queries'&&tab===session.activeTab&&session.checklistReturnLink&&session.reviewSingleScope
+      &&session.checklistQueryScrollPending&&session.openCurrent?.()){
       const target=[...host.querySelectorAll('[data-ws-group-key]')].find(row=>row.dataset.wsGroupKey===session.checklistQueryTarget);
-      if(target){target.scrollIntoView({block:'nearest'});session.checklistQueryTarget=null;}
+      if(target){target.scrollIntoView?.({block:'nearest'});session.checklistQueryScrollPending=false;}
     }
     host.querySelector('[data-ws-history-cycle]')?.addEventListener('change', (event) => { session.workspace.history.cycle_filter = event.target.value; session.scrollByTab.history = 0; loadWorkspace('history'); }); bindInfiniteScroll(host);
   }

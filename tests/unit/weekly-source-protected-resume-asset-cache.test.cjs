@@ -12,6 +12,6 @@ test('the protected-pay retry publishes both changed Office assets with new expl
   assert.ok(index.indexOf(editor) < index.indexOf(actions), 'the editor must load before its action owner');
   assert.ok(index.includes('css/weekly-source.css?v=20261010-contact-policy-r2'));
   assert.ok(index.includes('js/weekly-source/combined-review.js?v=20261013-contact-policy-next-r1'));
-  assert.ok(index.includes('js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r2'));
+  assert.ok(index.includes('js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3'));
   assert.doesNotMatch(index, /protected-shift-editor\.js\?v=20261003-r2|workspace-actions\.js\?v=20261003-r3/);
 });
