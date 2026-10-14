@@ -64,6 +64,18 @@
       }catch(error){if(current()&&stamp===generation)state.error=error.code==='WEEKLY_SOURCE_CHECKLIST_ANCHORED_REFRESH_REQUIRED'?'Checklist information has changed. Recheck to keep your place.':'Checklist information could not be loaded. Try again.';}
       finally{if(stamp===generation){state.busy=false;notify();}}
     }
+    function survivingAnchor(previous, rows, key, anchor) {
+      if (!anchor) return null;
+      const live = new Set(rows.map(row => row[key]));
+      if (live.has(anchor)) return anchor;
+      const index = previous.findIndex(row => row[key] === anchor);
+      for (let distance = 1; index >= 0 && distance < previous.length; distance++) {
+        const next = previous[index + distance]?.[key], before = previous[index - distance]?.[key];
+        if (next && live.has(next)) return next;
+        if (before && live.has(before)) return before;
+      }
+      return rows[0]?.[key] ?? null;
+    }
     // Refresh every previously consumed prefix, plus the surviving visible
     // anchor. New rows before a consumed keyset are discovered from the origin.
     // Commit only one consistent native revision; never publish a partial reset.
@@ -75,7 +87,7 @@
         if(binding!==null&&(value.binding!==binding||value.read_revision!==revision))fail();
         binding=value.binding;revision=value.read_revision;
         rows=appendRows(rows,key==='row_id'?value.rows:value.items,key);
-        if(!value.has_more||(rows.length>=previous.length&&(!anchor||rows.some(row=>row[key]===anchor))))return {rows,binding,revision,next:value.next_cursor,more:value.has_more};
+        if(!value.has_more||(rows.length>=previous.length&&(!anchor||rows.some(row=>row[key]===anchor))))return {rows,binding,revision,next:value.next_cursor,more:value.has_more,anchor:survivingAnchor(previous,rows,key,anchor)};
         if(cursors.has(value.next_cursor))fail();cursors.add(value.next_cursor);cursor=value.next_cursor;
       }fail();
     }

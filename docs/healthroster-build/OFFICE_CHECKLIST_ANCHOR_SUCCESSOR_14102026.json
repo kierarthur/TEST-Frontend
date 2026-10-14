@@ -1,0 +1,37 @@
+{
+  "status": "SOURCE_ANCHOR_SUCCESSOR_NATIVE_NOT_RUN",
+  "parent": "767db513ad52fe00ea1ebc3038b59ca0b812d302",
+  "recordedAt": "2026-10-14T12:24:35.594Z",
+  "pins": [
+    {
+      "file": "js/weekly-source/checklist.js",
+      "sha256": "9b729819e54b45e84301ca7a568015ef464e966f78c6f78a70fe609df4e48aca"
+    },
+    {
+      "file": "tests/unit/weekly-source-checklist.test.cjs",
+      "sha256": "b8d8f078be62ea4ca5e7f4356e6845005145d39550fb66a661f9d91a86e03610"
+    }
+  ],
+  "wholeReverseCheck": true,
+  "completeDiffSha256": "5c390992f57fcc1d3b7b6b848e12e53cf8cb752c7d693c265d7f367d78e80468",
+  "syntax": [
+    {
+      "file": "js/weekly-source/checklist.js",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/weekly-source-checklist.test.cjs",
+      "exitCode": 0
+    }
+  ],
+  "credentialFindings": 0,
+  "rawWhitespaceExitCode": 0,
+  "tests": {
+    "controllerAndMounted": 19,
+    "fail": 0
+  },
+  "semantics": "Visible removed row/item uses closest surviving prior-order identity with following ties; retains pixel offset/scroll and independent expansions. Actual native prefix/consistent revision remains complete; missing old anchor still reads to true end or refuses safety limit, never fabricates completion.",
+  "native": false,
+  "browser": false,
+  "publication": false
+}
