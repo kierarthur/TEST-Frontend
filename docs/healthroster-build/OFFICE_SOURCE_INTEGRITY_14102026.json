@@ -1,0 +1,180 @@
+{
+  "sourceOnly": true,
+  "steps": [
+    {
+      "name": "tracked-secrets",
+      "exitCode": 0,
+      "outputSha256": "7c900d857b954330caea7ce8e51b7fcb35ccb3077f300793de158f3a3a9c58cd",
+      "summary": [
+        "Tracked source credential scan: PASS (420 files)"
+      ]
+    },
+    {
+      "name": "full-merge-whitespace",
+      "exitCode": 2,
+      "outputSha256": "cc8f4444af3784af97d1e5a3fa4b622c9e40fadfa268022dc0e08a4b9c88346c",
+      "summary": [
+        "index.html:38: trailing whitespace.",
+        "+ ",
+        "index.html:80: trailing whitespace.",
+        "+#modal, .modal { ",
+        "index.html:2043: trailing whitespace.",
+        "+    ",
+        "index.html:2608: trailing whitespace.",
+        "+   ",
+        "index.html:2758: trailing whitespace.",
+        "+    ",
+        "js/bpay-next-pay-channel.js:69: trailing whitespace.",
+        "+  function updateReason(){reasonField.hidden=!hasManual();} ",
+        "js/bpay-next-pay-channel.js:155: new blank line at EOF."
+      ]
+    },
+    {
+      "name": "own-delta-whitespace",
+      "exitCode": 2,
+      "outputSha256": "78dc66018fcd3cfe86fd2c83fff9f03d3d83dafbc6759854c937aa972ae0d9da",
+      "summary": [
+        "docs/healthroster-wp0-20261013/WP0_JOURNEY_FEASIBILITY.md:171: new blank line at EOF.",
+        "index.html:38: trailing whitespace.",
+        "+ ",
+        "index.html:80: trailing whitespace.",
+        "+#modal, .modal { ",
+        "index.html:2043: trailing whitespace.",
+        "+    ",
+        "index.html:2608: trailing whitespace.",
+        "+   ",
+        "index.html:2758: trailing whitespace.",
+        "+    ",
+        "tests/unit/healthroster-automatic-credit-presentation.test.cjs:14: new blank line at EOF."
+      ]
+    }
+  ],
+  "incomingWhitespacePreserved": false,
+  "noHostedCall": true,
+  "preexistingWhitespaceEvidence": [
+    {
+      "file": "index.html",
+      "line": 38,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 80,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 2043,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 2608,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 2758,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "js/bpay-next-pay-channel.js",
+      "line": 69,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "js/bpay-next-pay-channel.js",
+      "line": 155,
+      "finding": "new blank line at EOF.",
+      "preexistingParents": [
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "docs/healthroster-wp0-20261013/WP0_JOURNEY_FEASIBILITY.md",
+      "line": 171,
+      "finding": "new blank line at EOF.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 38,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 80,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 2043,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 2608,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "index.html",
+      "line": 2758,
+      "finding": "trailing whitespace.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7",
+        "413cea9b35975c6ccac0b084327ef109b05c1c48"
+      ]
+    },
+    {
+      "file": "tests/unit/healthroster-automatic-credit-presentation.test.cjs",
+      "line": 14,
+      "finding": "new blank line at EOF.",
+      "preexistingParents": [
+        "1b7dff8c6312f711cceac628bb195a61a5e5f8b7"
+      ]
+    }
+  ],
+  "preexistingParentWhitespacePreserved": true,
+  "status": "SOURCE_SECRETS_PASS_PREEXISTING_WHITESPACE_RETAINED_NOT_WHITESPACE_PASS"
+}

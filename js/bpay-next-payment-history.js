@@ -1,0 +1,520 @@
+/* Informational NEXT payment history. Explicit open only, no preparation,
+ * selection, financial sums, pricing, accounts, CSV download or provider call.
+ * One complete bounded page at a time; every declared child section is linked.
+ * LIVE keyset refresh catches late commits; current caches are labelled.
+ */
+(function(root,factory) {
+  const api=factory(typeof module==='object' && module.exports ? require('./bpay-next-dates.js') : root.CloudTMSBpayNextDates,typeof module==='object' && module.exports ? require('./bpay-next-ui.js') : root.CloudTMSBpayNextUi);
+  if(typeof module==='object' && module.exports) module.exports=api;
+  else root.CloudTMSBpayNextHistory=api;
+})(typeof globalThis==='object' ? globalThis : this,function(dates,ui) {
+  'use strict';
+  const RAW_SECTIONS={"WORKS":{"parent":"SCOPE","keys":[["week_ending_date","date"],["id","uuid"]],"fields":["id","candidate_id","contract_id","original_timesheet_id","booking_id","work_kind","week_ending_date","approval_state","current_revision_id","applied_revision_id","current_revision_no","created_at_utc","updated_at_utc"],"amount_scope":"CURRENT"},
+"REVISIONS":{"parent":"WORK","keys":[["revision_no","bigint"]],"fields":["id","work_id","revision_no","source_kind","source_head_id","source_event_id","physical_timesheet_id","physical_timesheet_version","financial_snapshot_id","source_pay_channel","valuation_policy_id","currency","week_ending_date","detail_kind","expected_line_count","expected_rate_schedule_count","certified_zero","approved_source_ex_vat","source_inventory_digest","approved_at_utc","sealed_at_utc","created_at_utc","candidate_display_name","candidate_reference","client_display_name","job_title","band_label","timesheet_reference"],"amount_scope":"IMMUTABLE_SOURCE"},
+"LINES":{"parent":"REVISION","keys":[["line_no","bigint"]],"fields":["id","revision_id","line_no","component_key","component_kind","tax_treatment","source_component_id","work_date","approved_quantity","approved_unit_rate","unit_label","source_pay_ex_vat","evidence_ref","expected_rate_detail_count","created_at_utc"],"amount_scope":"IMMUTABLE_SOURCE"},
+"SHIFTS":{"parent":"LINE","keys":[["detail_no","integer"]],"fields":["id","approved_line_id","detail_no","work_date","shift_start_at","shift_end_at","shift_start_local","shift_end_local","shift_overnight","submitted_minutes","approved_minutes","approved_hours","hours_day","hours_night","hours_sat","hours_sun","hours_bh","pay_excluded","segment_pay_ex_vat","detail_label","immutable_evidence_ref"],"amount_scope":"IMMUTABLE_SOURCE"},
+"BREAKS":{"parent":"SHIFT","keys":[["break_no","integer"]],"fields":["id","shift_detail_id","break_no","break_minutes","break_start_at","break_end_at","break_start_local","break_end_local"],"amount_scope":"IMMUTABLE_SOURCE"},
+"RATES":{"parent":"LINE","keys":[["bucket","text"]],"fields":["id","approved_line_id","bucket","approved_hours","source_pay_rate"],"amount_scope":"IMMUTABLE_SOURCE"},
+"SCHEDULE":{"parent":"REVISION","keys":[["rate_family","text"],["rate_code","text"]],"fields":["id","revision_id","rate_family","rate_code","paye_rate","umbrella_rate","charge_rate","unit_label"],"amount_scope":"IMMUTABLE_SOURCE"},
+"POSITIONS":{"parent":"WORK","keys":[["component_key","text"]],"fields":["work_id","component_key","applied_revision_id","source_basis_channel","approved_source_ex_vat","realised_source_ex_vat","held_source_ex_vat","realised_target_ex_vat","realised_target_vat","realised_target_inc_vat","held_target_ex_vat","held_target_vat","held_target_inc_vat","updated_at_utc"],"amount_scope":"CURRENT_SOURCE_AND_TARGET_CACHE"},
+"COLLECTIONS":{"parent":"WORK","keys":[["component_key","text"]],"fields":["id","work_id","component_key","candidate_id","original_effect_id","original_run_line_id","original_revision_id","original_approved_line_id","original_transfer_id","original_source_pay_channel","original_valuation_policy_id","original_tax_treatment","paid_basis_qualified","qualification_state","observed_revision_id","observed_approved_source_ex_vat","observed_realised_source_ex_vat","case_id","case_component_id","reconcile_revision","last_job_id","last_effect_id","created_at_utc","updated_at_utc"],"amount_scope":"CURRENT_COLLECTION_CACHE"},
+"EFFECTS":{"parent":"WORK","keys":[["occurred_at_utc","timestamptz"],["id","uuid"]],"fields":["id","operation_id","operation_item_id","effect_kind","candidate_id","work_id","component_key","case_id","original_timesheet_id","original_transfer_id","source_disposition_ex_vat","target_amount_ex_vat","target_amount_vat","target_amount_inc_vat","occurred_at_utc"],"amount_scope":"IMMUTABLE_SOURCE_DISPOSITION_AND_TARGET"},
+"PUBLICATIONS":{"parent":"WORK","keys":[["revision_no","bigint"]],"fields":["command_id","work_id","candidate_id","revision_id","predecessor_revision_id","revision_no","status","phase","applied_at_utc"],"amount_scope":"RECEIPT_CURRENT_STATUS"},
+"RUN_WORKS":{"parent":"WORK","keys":[["id","uuid"]],"fields":["id","run_worker_id","candidate_id","work_id","captured_revision_id","created_at_utc"],"amount_scope":"IMMUTABLE_CAPTURE"},
+"RUN_POSITIONS":{"parent":"RUN_WORK","keys":[["component_key","text"]],"fields":["id","run_work_id","run_worker_id","work_id","captured_revision_id","component_key","approved_line_id","source_pay_channel","source_basis_channel","approved_source_ex_vat","realised_source_ex_vat","held_source_ex_vat","residual_source_ex_vat","realised_target_ex_vat","realised_target_vat","realised_target_inc_vat","held_target_ex_vat","held_target_vat","held_target_inc_vat","needs_financial_resolution","work_collection_id","work_collection_revision","managed_capture_completed","captured_at_utc"],"amount_scope":"FROZEN_SOURCE_AND_TARGET"},
+"RUN_LINES":{"parent":"RUN_WORK","keys":[["component_key","text"]],"fields":["id","run_worker_id","run_work_id","line_no","approved_line_id","captured_revision_id","work_id","component_key","source_consumed_ex_vat","source_pay_channel","target_pay_channel","valuation_policy_id","policy_window_id","frozen_ex_vat","frozen_vat","frozen_inc_vat"],"amount_scope":"FROZEN_SOURCE_CONSUMPTION_AND_TARGET"},
+"HOLD":{"parent":"RUN_LINE","keys":[["id","uuid"]],"fields":["id","run_line_id","work_id","component_key","source_reserved_ex_vat","target_amount_ex_vat","target_amount_vat","target_amount_inc_vat","status","created_at_utc","finished_at_utc"],"amount_scope":"SOURCE_AND_TARGET_HOLD_CURRENT_STATUS"},
+"WORKER":{"parent":"WORKER","keys":[["id","uuid"]],"fields":["id","run_id","candidate_id","target_pay_channel","target_umbrella_id","target_umbrella_vat_chargeable","status","gross_ex_vat","gross_vat","gross_inc_vat","entered_paye_net","net_request_revision","net_projection_revision","preparation_revision","case_selection_revision","captured_line_count","captured_position_count","review_issue_code","review_issue_work_id"],"amount_scope":"WHOLE_WORKER_NET_CURRENT_STATUS"},
+"PROJECTIONS":{"parent":"WORKER","keys":[["projection_no","bigint"]],"fields":["id","run_worker_id","request_command_id","projection_no","input_kind","gross_ex_vat","gross_vat","gross_inc_vat","entered_paye_net","accepted_recoveries","accepted_net_additions","accepted_gross_additions","accepted_gross_deductions","cash_amount","accepted_at_utc","retired_at_utc"],"amount_scope":"WHOLE_WORKER_FROZEN_NET_CASH"},
+"TRANSFERS":{"parent":"WORKER","keys":[["transfer_no","bigint"]],"fields":["id","run_worker_id","candidate_id","projection_id","build_command_id","transfer_no","beneficiary_kind","beneficiary_id","destination_rail","currency","cash_amount","member_count","member_cash_sum","status","original_transfer_id","return_cash_id","execution_kind","created_at_utc"],"amount_scope":"WHOLE_TRANSFER_CASH_CURRENT_STATUS"},
+"MEMBERS":{"parent":"TRANSFER","keys":[["member_no","bigint"]],"fields":["transfer_id","member_no","run_worker_id","subject_kind","run_line_id","case_hold_id","case_instruction_id","case_allocation_result_id","signed_cash_contribution"],"amount_scope":"TRANSFER_MEMBER_CONTRIBUTION_NOT_TIMESHEET_ALLOCATION"},
+"OUTCOMES":{"parent":"TRANSFER","keys":[["occurred_at_utc","timestamptz"],["id","uuid"]],"fields":["id","transfer_id","receipt_id","outcome_kind","whole_transfer_amount","occurred_at_utc","received_at_utc"],"amount_scope":"WHOLE_TRANSFER_IMMUTABLE_OUTCOME"},
+"RETURN_CASH":{"parent":"TRANSFER","keys":[["id","uuid"]],"fields":["id","original_transfer_id","candidate_id","amount_owed","amount_held","amount_reissued_paid","created_at_utc"],"amount_scope":"CURRENT_RETURN_CASH_NOT_SOURCE_DISPOSITION"},
+"CSV":{"parent":"TRANSFER","keys":[["id","uuid"]],"fields":["id","transfer_id","run_worker_id","actor_user_id","cash_amount","csv_sha256","issued_at_utc"],"amount_scope":"WHOLE_TRANSFER_IMMUTABLE_CSV_RECEIPT"},
+"INTERNAL_RECEIPT":{"parent":"TRANSFER","keys":[["id","uuid"]],"fields":["id","command_id","transfer_id","run_worker_id","candidate_id","actor_user_id","projection_id","execution_kind","cash_amount","occurred_at_utc","received_at_utc"],"amount_scope":"WHOLE_TRANSFER_IMMUTABLE_INTERNAL_RECEIPT"},
+"GROUP_LEGS":{"parent":"TRANSFER","keys":[["transfer_id","uuid"]],"fields":["anchor_transfer_id","transfer_id","leg_kind","destination_id"],"amount_scope":"TRANSFER_GROUP_PROVENANCE"},
+"EXPIRY":{"parent":"WORKER","keys":[["command_id","uuid"]],"fields":["command_id","candidate_id","run_id","run_worker_id","job_id","member_no","draft_state_id","preparation_revision","selection_revision","original_job_id","original_job_status","original_job_phase","original_worker_status","original_review_issue_code","original_review_issue_work_id","expected_work_count","expected_case_hold_count","released_work_count","released_case_hold_count","status","stage","checkpoint","created_at_utc","started_at_utc","finished_at_utc"],"amount_scope":"EXPIRY_RECEIPT_CURRENT_STATUS"},
+"CASES":{"parent":"SCOPE","keys":[["id","uuid"]],"fields":["id","candidate_id","case_kind","tax_treatment","status","principal_approved","principal_funded","principal_recovered","principal_written_off","principal_paid_credit","active_hold_amount","active_payout_hold_amount","active_recovery_hold_amount","current_rule_id","current_rule_revision","case_revision","due_date","updated_at_utc"],"amount_scope":"CURRENT_CASE_SOURCE_CACHE"},
+"COMPONENTS":{"parent":"CASE","keys":[["component_ordinal","bigint"]],"fields":["id","case_id","candidate_id","component_key","component_ordinal","component_revision","rule_id","case_kind","case_subtype","tax_treatment","instruction_kind","direction","payroll_stage","source_pay_channel","currency","approved_source_ex_vat","funded_source_ex_vat","recovered_source_ex_vat","paid_credit_source_ex_vat","written_off_source_ex_vat","active_payout_source_ex_vat","active_recovery_source_ex_vat","resolution_state","target_pay_channel","target_ex_vat","target_vat","target_inc_vat","valuation_policy_id","valuation_window_id","resolution_ref","updated_at_utc"],"amount_scope":"CURRENT_CASE_SOURCE_AND_TARGET_CACHE"},
+"RULES":{"parent":"CASE","keys":[["rule_revision","bigint"]],"fields":["id","case_id","candidate_id","rule_revision","case_kind","case_subtype","tax_treatment","case_created_at_utc","original_funded_at_utc","original_funding_event_id","schedule_start_monday","schedule_week_count","weekly_due_source_ex_vat","minimum_earnings_threshold","take_home_floor_override","next_due_monday","captured_at_utc"],"amount_scope":"CAPTURED_CASE_RULE"},
+"CASE_EVENTS":{"parent":"CASE","keys":[["occurred_at_utc","timestamptz"],["id","uuid"]],"fields":["id","case_id","operation_id","operation_item_id","event_kind","approved_delta","funded_delta","recovered_delta","written_off_delta","paid_credit_delta","original_transfer_id","original_effect_id","occurred_at_utc","candidate_id","case_component_id","instruction_id","allocation_result_id","run_worker_id","event_case_kind","hold_purpose","pay_week_start","source_amount_ex_vat","target_amount_ex_vat","target_amount_vat","target_amount_inc_vat","shortfall_source_ex_vat","cap_reason"],"amount_scope":"IMMUTABLE_CASE_SOURCE_AND_TARGET_EVENT"},
+"INSTRUCTIONS":{"parent":"COMPONENT","keys":[["pay_week_start","date"],["id","uuid"]],"fields":["id","run_worker_id","run_id","candidate_id","case_id","case_component_id","component_ordinal","rule_id","rule_revision","captured_case_revision","captured_component_revision","captured_period_revision","preparation_revision","selection_revision","is_selected","case_kind","case_subtype","tax_treatment","instruction_kind","direction","payroll_stage","hold_purpose","allocation_channel","source_pay_channel","target_pay_channel","currency","nominal_source_ex_vat","capacity_source_ex_vat","nominal_target_ex_vat","nominal_target_vat","nominal_target_inc_vat","capacity_target_ex_vat","capacity_target_vat","capacity_target_inc_vat","valuation_policy_id","valuation_window_id","pay_week_start","minimum_earnings_threshold","resolved_take_home_floor","resolution_ref","explanation","captured_at_utc","work_collection_id"],"amount_scope":"FROZEN_CASE_SOURCE_AND_TARGET_INSTRUCTION"},
+"CASE_HOLDS":{"parent":"COMPONENT","keys":[["pay_week_start","date"],["id","uuid"]],"fields":["id","run_worker_id","candidate_id","case_id","case_component_id","instruction_id","projection_id","allocation_result_id","purpose","pay_week_start","amount","source_reserved_ex_vat","target_amount_ex_vat","target_amount_vat","target_amount_inc_vat","status","created_at_utc","finished_at_utc"],"amount_scope":"CASE_SOURCE_AND_TARGET_HOLD_CURRENT_STATUS"},
+"RESULTS":{"parent":"INSTRUCTION","keys":[["state_id","uuid"]],"fields":["id","state_id","instruction_id","result_no","run_worker_id","candidate_id","preparation_revision","selection_revision","pass_kind","hold_purpose","allocation_channel","nominal_target_ex_vat","usable_capacity_target_ex_vat","allocated_source_ex_vat","allocated_target_ex_vat","allocated_target_vat","allocated_target_inc_vat","shortfall_target_ex_vat","cap_reason","affordability_reason","capacity_reason","channel_headroom_before","channel_headroom_after","worker_take_home_before","worker_take_home_after","created_at_utc"],"amount_scope":"FROZEN_CASE_ALLOCATION_SOURCE_AND_TARGET"},
+"COMMANDS":{"parent":"SCOPE","keys":[["command_id","uuid"]],"fields":["command_id","candidate_id","member_no"],"amount_scope":"COMMAND_MEMBERSHIP"},
+"COMMAND":{"parent":"COMMAND","keys":[["id","uuid"]],"fields":["id","agency_sequence","module_epoch","command_kind","status","expected_member_count","enrolled_member_count","created_at_utc","sealed_at_utc"],"amount_scope":"COMMAND_RECEIPT_CURRENT_STATUS"},
+"JOBS":{"parent":"COMMAND","keys":[["job_kind","text"]],"fields":["id","command_id","candidate_id","command_sequence","job_kind","status","phase","attempt_count","applied_line_count","last_error_code","available_at_utc","queue_wake_after_utc"],"amount_scope":"JOB_RECEIPT_CURRENT_STATUS"},
+"NET_REQUEST":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","run_worker_id","candidate_id","actor_user_id","request_no","input_kind","entered_paye_net","frozen_gross_inc_vat","expected_projection_revision","preparation_revision","selection_revision","case_draft_state_id","accepted_at_utc"],"amount_scope":"WHOLE_WORKER_IMMUTABLE_NET_REQUEST"},
+"OUTCOME_REQUEST":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","outcome_id","transfer_id","run_worker_id","candidate_id","actor_user_id","posted_member_count","posting_complete","internal_receipt_id"],"amount_scope":"OUTCOME_RECEIPT_CURRENT_STATUS"},
+"RETURN_REQUEST":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","outcome_id","transfer_id","run_worker_id","candidate_id","actor_user_id","posting_complete"],"amount_scope":"RETURN_RECEIPT_CURRENT_STATUS"},
+"REISSUE_REQUEST":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","return_cash_id","run_worker_id","candidate_id","actor_user_id","transfer_id"],"amount_scope":"REISSUE_RECEIPT_CURRENT_STATUS"},
+"CANCEL_REQUEST":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","run_worker_id","candidate_id","status","expected_line_count","released_line_count","blocked_code","started_at_utc","finished_at_utc"],"amount_scope":"CANCEL_RECEIPT_CURRENT_STATUS"},
+"REISSUE_CANCEL":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","transfer_id","return_cash_id","run_worker_id","candidate_id","actor_user_id","amount","status","blocked_code","accepted_at_utc","completed_at_utc"],"amount_scope":"WHOLE_TRANSFER_REISSUE_CANCEL_RECEIPT"},
+"WRITE_OFF":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","candidate_id","case_id","case_component_id","work_collection_id","actor_user_id","expected_component_revision","basis_case_revision","basis_principal","basis_recovered","basis_written_off","basis_protected","requested_scope","input_amount","requested_amount","reason","accepted_at_utc","status","applied_amount","remaining_amount","protected_amount","event_id","issue_code","completed_at_utc"],"amount_scope":"SOURCE_FORGIVENESS_NOT_PAID_DISPOSITION"},
+"CASE_CREATE":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","case_id","candidate_id","actor_user_id","case_kind","case_subtype","tax_treatment","source_pay_channel","currency","principal_source_ex_vat","due_date","minimum_earnings_threshold","take_home_floor_override","approval_reason","rule_id","primary_component_id","recovery_component_id","valuation_policy_id","opening_pay_week_start","schedule_week_count","weekly_due_source_ex_vat","accepted_at_utc"],"amount_scope":"IMMUTABLE_CASE_APPROVAL_RECEIPT"},
+"EXPIRY_REQUEST":{"parent":"COMMAND","keys":[["command_id","uuid"]],"fields":["command_id","run_id","original_prepare_command_id","actor_user_id","initiator_kind","captured_deadline","expected_candidate_count","enrolled_candidate_count","completed_candidate_count","status","accepted_at_utc","finished_at_utc"],"amount_scope":"EXPIRY_COMMAND_RECEIPT_CURRENT_STATUS"},
+"CASE":{"parent":"CASE","keys":[["id","uuid"]],"fields":["id","candidate_id","case_kind","tax_treatment","status","principal_approved","principal_funded","principal_recovered","principal_written_off","principal_paid_credit","active_hold_amount","active_payout_hold_amount","active_recovery_hold_amount","current_rule_id","current_rule_revision","case_revision","due_date","updated_at_utc"],"amount_scope":"CURRENT_CASE_SOURCE_CACHE"},
+"PROTECTED_RECEIPT":{"parent":"REVISION","keys":[["orchestration_run_id","uuid"]],"fields":["orchestration_run_id","family_id","generation_id","approval_id","accepted_family_bound_version","source_manifest_sha256","prepared_request_sha256","publication_request_sha256","work_id","revision_id","command_id","agency_sequence","actor_user_id","accepted_at_utc"],"amount_scope":"IMMUTABLE_APPROVAL_PROVENANCE"},
+"SOURCE_DETAIL":{"parent":"LINE","keys":[["component_id","uuid"]],"fields":["head_id","component_id","decision_bundle_id","bundle_revision","component_sha256","detail_sha256","created_at_utc"],"amount_scope":"IMMUTABLE_SOURCE_CERTIFICATE_REFERENCES_NOT_RAW_PAYLOAD"},
+"POLICY":{"parent":"RUN_LINE","keys":[["source_window_id","uuid"]],"fields":["policy_id","source_window_id","date_from","date_to","erni_pct","vat_rate_pct"],"amount_scope":"IMMUTABLE_CAPTURED_POLICY_NOT_LIVE_SETTINGS"},
+"CHOICE":{"parent":"RUN_WORK","keys":[["work_id","uuid"]],"fields":["run_id","work_id","expected_revision_id","selection_mode","selection_state","page_count","component_count"],"amount_scope":"CAPTURED_SELECTION_CURRENT_STATUS"},
+"SELECTION":{"parent":"RUN_WORK","keys":[["selection_no","bigint"]],"fields":["run_id","work_id","approved_line_id","expected_revision_id","component_key","selection_no","page_no","page_item_no"],"amount_scope":"CAPTURED_COMPONENT_SELECTION"},
+"WORKER_CASE_HOLDS":{"parent":"WORKER","keys":[["id","uuid"]],"fields":["id","run_worker_id","candidate_id","case_id","case_component_id","instruction_id","projection_id","allocation_result_id","purpose","pay_week_start","amount","source_reserved_ex_vat","target_amount_ex_vat","target_amount_vat","target_amount_inc_vat","status","created_at_utc","finished_at_utc"],"amount_scope":"HOLD_CURRENT_STATUS_UNTYPED_SOURCE_TARGET_MAY_BE_NULL"},
+"COMMAND_WORKER":{"parent":"COMMAND","keys":[["id","uuid"]],"fields":["id","run_id","candidate_id","target_pay_channel","target_umbrella_id","target_umbrella_vat_chargeable","status","gross_ex_vat","gross_vat","gross_inc_vat","entered_paye_net","net_request_revision","net_projection_revision","preparation_revision","case_selection_revision","captured_line_count","captured_position_count","review_issue_code","review_issue_work_id"],"amount_scope":"WHOLE_WORKER_NET_CURRENT_STATUS"}};
+  const BPAY_NEXT_HISTORY_SECTIONS=Object.freeze(Object.fromEntries(Object.entries(RAW_SECTIONS).map(([name,definition])=>[name,Object.freeze({
+    ...definition,fields:Object.freeze(definition.fields),keys:Object.freeze(definition.keys.map(key=>Object.freeze(key)))
+  })])));
+const VERSION = 'PAYMENT_HISTORY_V1';
+const CONSISTENCY = 'LIVE_KEYSET_REFRESH_FOR_LATE_COMMIT';
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const ENCODER = new TextEncoder();
+const REQUEST_KEYS = ['version','candidate_id','timesheet_id','section','parent_id','context_id','component_key','after','upper','limit'];
+const CURSOR_KEYS = ['version','scope_kind','scope_id','section','parent_id','context_id','component_key','upper','key'];
+const UNAVAILABLE = ['MOVED_ROOT_FLAT_PAID_BINDING','CANONICAL_MULTI_CHANNEL_VECTOR',
+  'MOVE_COMPARISON_RECEIPT','GENERAL_APPROVAL_ACTOR_REASON_NOT_CAPTURED_IN_NEXT_ROWS'];
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const exact = (value, keys) => record(value) && Object.keys(value).length === keys.length
+  && keys.every(key => Object.hasOwn(value, key));
+const uuid = value => typeof value === 'string' && UUID.test(value);
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const bytes = value => ENCODER.encode(value).byteLength;
+class HistoryError extends Error {
+  constructor(code, status = 502, retryable = false) {
+    super(code); this.code = code; this.status = status; this.retryable = retryable;
+  }
+}
+const fail = (code, status, retryable) => { throw new HistoryError(code,status,retryable); };
+const invalidRequest = () => fail('BPAY_NEXT_HISTORY_REQUEST_INVALID',400);
+const invalidResponse = () => fail('BPAY_NEXT_HISTORY_RESPONSE_INVALID');
+function projectBpayNextMemberOrigin(data) {
+  if (!record(data) || !uuid(data.transfer_id) || !uuid(data.run_worker_id)
+    || typeof data.signed_cash_contribution !== 'string'
+    || !/^-?[0-9]{1,16}\.[0-9]{2}$/.test(data.signed_cash_contribution)) invalidResponse();
+  const line=uuid(data.run_line_id), instruction=uuid(data.case_instruction_id), result=uuid(data.case_allocation_result_id);
+  const hold=data.case_hold_id===null || uuid(data.case_hold_id);
+  let origin;
+  if(data.subject_kind==='WORK' && line && data.case_hold_id===null && data.case_instruction_id===null && data.case_allocation_result_id===null)
+    origin={kind:'FROZEN_RUN_LINE',id:data.run_line_id};
+  else if(data.subject_kind==='CASE' && data.run_line_id===null && instruction && result && hold
+    && (data.case_hold_id!==null || /^-?0\.00$/.test(data.signed_cash_contribution)))
+    origin={kind:'FROZEN_CASE_RESULT',instruction_id:data.case_instruction_id,result_id:data.case_allocation_result_id,hold_id:data.case_hold_id};
+  else if(['NET_ADJUSTMENT','CASH_REISSUE'].includes(data.subject_kind)
+    && [data.run_line_id,data.case_hold_id,data.case_instruction_id,data.case_allocation_result_id].every(value=>value===null))
+    origin={kind:data.subject_kind==='NET_ADJUSTMENT'?'ACCEPTED_PROJECTION_ON_TRANSFER':'RETURN_CASH_ON_TRANSFER',id:data.transfer_id};
+  else invalidResponse();
+  return Object.freeze({kind:data.subject_kind,transfer_id:data.transfer_id,run_worker_id:data.run_worker_id,
+    signed_cash_contribution:data.signed_cash_contribution,origin:Object.freeze(origin)});
+}
+function keyTuple(value, definition) {
+  if (!Array.isArray(value) || value.length !== definition.keys.length) return false;
+  return value.every((item, index) => {
+    if (typeof item !== 'string' || bytes(item) < 1 || bytes(item) > 256) return false;
+    const type = definition.keys[index][1];
+    if (type === 'uuid') return uuid(item);
+    if (type === 'integer' || type === 'bigint') return /^(0|[1-9][0-9]{0,18})$/.test(item)
+      && BigInt(item) <= (type === 'integer' ? 2147483647n : 9223372036854775807n);
+    if (type === 'date') return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(item)
+      && Number.isFinite(Date.parse(item+'T00:00:00Z'))
+      && new Date(item+'T00:00:00Z').toISOString().slice(0,10) === item;
+    if (type === 'timestamptz') return /^[0-9]{4}-[0-9]{2}-[0-9]{2} (?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?\+00(?::00)?$/.test(item)
+      && Number.isFinite(Date.parse(item.replace(' ','T').replace(/\+00$/,'+00:00')));
+    return type === 'text';
+  });
+}
+function cursor(value, request, upper, definition) {
+  return exact(value, CURSOR_KEYS) && value.version === 'PAYMENT_HISTORY_CURSOR_V1'
+    && value.scope_kind === (request.timesheet_id ? 'TIMESHEET' : 'CANDIDATE')
+    && value.scope_id === (request.timesheet_id || request.candidate_id)
+    && ['section','parent_id','context_id','component_key'].every(key => value[key] === request[key])
+    && same(value.upper,upper) && keyTuple(value.upper,definition) && keyTuple(value.key,definition);
+}
+function validateBpayNextHistoryRequest(value) {
+  if (!exact(value,REQUEST_KEYS) || value.version !== VERSION
+    || typeof value.section !== 'string' || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > 100
+    || (value.candidate_id === null) === (value.timesheet_id === null)
+    || !['candidate_id','timesheet_id','parent_id','context_id'].every(key => value[key] === null || uuid(value[key]))) invalidRequest();
+  const definition = Object.hasOwn(BPAY_NEXT_HISTORY_SECTIONS,value.section) ? BPAY_NEXT_HISTORY_SECTIONS[value.section] : null;
+  if (value.section === 'MANIFEST') {
+    if (['parent_id','context_id','component_key','after','upper'].some(key => value[key] !== null)) invalidRequest();
+  } else {
+    if (!definition || (definition.parent === 'SCOPE') !== (value.parent_id === null)
+      || (value.timesheet_id !== null && ['CASES','COMMANDS'].includes(value.section))
+      || (value.context_id !== null && (value.timesheet_id === null || !['WORKER','TRANSFER','COMMAND'].includes(definition.parent)))
+      || (value.section === 'EFFECTS' ? typeof value.component_key !== 'string' || bytes(value.component_key) < 1 || bytes(value.component_key) > 256
+        : value.component_key !== null)) invalidRequest();
+    if (value.after === null ? value.upper !== null : !cursor(value.after,value,value.upper,definition)) invalidRequest();
+  }
+  return value;
+}
+function classifyBpayNextNet(section,data) {
+  if(!record(data))invalidResponse();
+  if(['RUN_LINES','RUN_WORKS','LINES','SHIFTS'].includes(section)) {
+    if(['entered_paye_net','cash_amount','allocated_net','timesheet_net','client_net'].some(key=>Object.hasOwn(data,key)))invalidResponse();
+    return Object.freeze({state:'UNALLOCATED',value:null});
+  }
+  const current=['WORKER','COMMAND_WORKER'].includes(section);
+  if(!current && !['PROJECTIONS','NET_REQUEST'].includes(section))return null;
+  const kind=current?data.target_pay_channel:data.input_kind,value=data.entered_paye_net;
+  if(section==='NET_REQUEST'&&!['PAYE_MANUAL','CASE_PAYOUT'].includes(kind))invalidResponse();
+  const applicable=current?kind==='PAYE':['PAYE_MANUAL','PAYE_IMPORT'].includes(kind);
+  const notApplicable=current?kind==='UMBRELLA':['UMBRELLA','CASE_PAYOUT'].includes(kind);
+  if(!applicable&&!notApplicable)invalidResponse();
+  if(notApplicable) {
+    if(value!==null)invalidResponse();
+    return Object.freeze({state:'NOT_APPLICABLE',value:null});
+  }
+  if(value===null) {
+    if(!current)invalidResponse();
+    return Object.freeze({state:'NOT_ENTERED',value:null});
+  }
+  if(typeof value!=='string'||!/^(?:0|[1-9][0-9]{0,15})(?:\.[0-9]{1,2})?$/.test(value))invalidResponse();
+  return Object.freeze({state:current?'CURRENT_ENTERED':'RECORDED',value});
+}
+
+function validateBpayNextHistoryResponse(value, request) {
+  if (!record(value) || value.version !== VERSION || value.consistency !== CONSISTENCY
+    || !uuid(value.candidate_id) || (request.timesheet_id ? !uuid(value.work_id)
+      : value.candidate_id !== request.candidate_id || value.work_id !== null)) invalidResponse();
+  if (request.section === 'MANIFEST') {
+    if (!exact(value,['version','candidate_id','work_id','sections','terminal','next_cursor','consistency','scalar_encoding','unavailable'])
+      || value.terminal !== true || value.next_cursor !== null || value.scalar_encoding !== 'STRING_OR_NULL'
+      || !same(value.unavailable,UNAVAILABLE.concat(request.timesheet_id ? ['TIMESHEET_COMMAND_WITHOUT_WORK_OR_CASE_ANCESTRY'] : []))
+      || !Array.isArray(value.sections) || value.sections.length !== 52) invalidResponse();
+    const seen = new Set();
+    for (const section of value.sections) {
+      const definition = typeof section?.section === 'string' && Object.hasOwn(BPAY_NEXT_HISTORY_SECTIONS,section.section) ? BPAY_NEXT_HISTORY_SECTIONS[section.section] : null;
+      if (!definition || seen.has(section.section)
+        || !exact(section,['section','parent','keys','fields','amount_scope','applicability'])
+        || section.parent !== definition.parent || section.amount_scope !== definition.amount_scope
+        || !same(section.keys,definition.keys) || !same(section.fields,definition.fields)
+        || section.applicability !== (request.timesheet_id && ['CASES','COMMANDS'].includes(section.section)
+          ? 'CANDIDATE_ONLY_USE_REFERENCED_PARENT' : 'SCOPE_QUALIFIED')) invalidResponse();
+      seen.add(section.section);
+    }
+  } else {
+    const definition = BPAY_NEXT_HISTORY_SECTIONS[request.section];
+    if (!exact(value,['version','candidate_id','work_id','section','parent_id','context_id','component_key','amount_scope','consistency','rows','upper','terminal','next_cursor'])
+      || !['section','parent_id','context_id','component_key'].every(key => value[key] === request[key])
+      || value.amount_scope !== definition.amount_scope || typeof value.terminal !== 'boolean'
+      || !Array.isArray(value.rows) || value.rows.length > request.limit
+      || !(value.upper === null ? value.rows.length === 0 && value.terminal : keyTuple(value.upper,definition))
+      || (request.upper !== null && !same(request.upper,value.upper))) invalidResponse();
+    const fields = definition.fields.concat(request.section === 'POSITIONS' ? ['current_residual_source_ex_vat'] : []);
+    const seen = new Set();
+    for (const row of value.rows) {
+      if (!exact(row,['key','data']) || !keyTuple(row.key,definition) || !exact(row.data,fields)
+        || !fields.every(field => row.data[field] === null || typeof row.data[field] === 'string')
+        || !definition.keys.every(([field], index) => row.data[field] === row.key[index])
+        || seen.has(JSON.stringify(row.key)) || (request.after && same(row.key,request.after.key))) invalidResponse();
+      if(request.section==='MEMBERS') {if(row.data.transfer_id!==request.parent_id)invalidResponse();projectBpayNextMemberOrigin(row.data);}
+      classifyBpayNextNet(request.section,row.data);
+      seen.add(JSON.stringify(row.key));
+    }
+    if (value.terminal ? value.next_cursor !== null : value.rows.length === 0
+      || !cursor(value.next_cursor,request,value.upper,definition)
+      || !same(value.next_cursor.key,value.rows.at(-1)?.key)) invalidResponse();
+  }
+  return value;
+}
+
+  const MAX_BYTES=128*1024;
+  const scopeRequest=scope=>({version:VERSION,candidate_id:scope.candidate_id,timesheet_id:scope.timesheet_id,
+    section:'MANIFEST',parent_id:null,context_id:null,component_key:null,after:null,upper:null,limit:50});
+  function frozen(value) {
+    if(value && typeof value==='object' && !Object.isFrozen(value)) { Object.values(value).forEach(frozen); Object.freeze(value); }
+    return value;
+  }
+  async function boundedReply(response,signal) {
+    if(!(response instanceof Response) || !response.body) invalidResponse();
+    const reader=response.body.getReader(),chunks=[];let size=0;
+    const cancel=()=>{void reader.cancel().catch(()=>{});};
+    signal.addEventListener('abort',cancel,{once:true});
+    try {
+      while(true) {
+        if(signal.aborted) throw new DOMException('Aborted','AbortError');
+        const part=await reader.read();if(part.done)break;
+        size+=part.value.byteLength;if(size>MAX_BYTES){cancel();invalidResponse();}
+        chunks.push(part.value);
+      }
+      const all=new Uint8Array(size);let offset=0;
+      for(const chunk of chunks){all.set(chunk,offset);offset+=chunk.byteLength;}
+      try{return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(all));}catch{invalidResponse();}
+    } finally {signal.removeEventListener('abort',cancel);reader.releaseLock();}
+  }
+  function createClient(options) {
+    const base=scopeRequest(options.scope);
+    validateBpayNextHistoryRequest(base);
+    if(!uuid(options.actorId) || typeof options.currentActorId!=='function' || typeof options.authFetch!=='function' || !['TEST','LIVE'].includes(options.environment??'TEST')) invalidRequest();
+    let manifest=null,page=null,request=null,closed=false,busy=false,epoch=0,controller=null;
+    const transfers=new Map(),projections=new Map();
+    const retain=(cache,data)=>{cache.delete(data.id);cache.set(data.id,data);if(cache.size>128)cache.delete(cache.keys().next().value);};
+    function originContext(data) {
+      actor();
+      projectBpayNextMemberOrigin(data);
+      const transfer=transfers.get(data.transfer_id)||null;
+      if(transfer && (transfer.id!==data.transfer_id || transfer.run_worker_id!==data.run_worker_id
+        || transfer.candidate_id!==manifest?.candidate_id))invalidResponse();
+      const projection=transfer?.projection_id?projections.get(transfer.projection_id)||null:null;
+      if(projection && (projection.id!==transfer.projection_id || projection.run_worker_id!==data.run_worker_id))invalidResponse();
+      return {transfer,projection};
+    }
+    function netContext(data) {
+      actor();
+      if(!uuid(data.id)||!uuid(data.run_worker_id)||data.candidate_id!==manifest?.candidate_id||transfers.get(data.id)!==data)invalidResponse();
+      const projection=data.projection_id?projections.get(data.projection_id)||null:null;
+      if(projection&&(projection.id!==data.projection_id||projection.run_worker_id!==data.run_worker_id))invalidResponse();
+      return projection;
+    }
+    function actor() {if(closed || options.currentActorId()!==options.actorId) {close();fail('BPAY_NEXT_HISTORY_ACTOR_CHANGED',401);} }
+    function close(){closed=true;epoch++;controller?.abort();page=null;manifest=null;request=null;transfers.clear();projections.clear();}
+    async function read(call) {
+      actor();if(busy)fail('BPAY_NEXT_HISTORY_READ_PENDING',409);
+      validateBpayNextHistoryRequest(call);busy=true;const ownEpoch=epoch;
+      controller=new AbortController();let timer;
+      try {
+        const timed=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new HistoryError('BPAY_NEXT_HISTORY_DEPENDENCY_TIMEOUT',503));},12000);});
+        const invoke=async()=>{
+          const response=await options.authFetch(String(options.api).replace(/\/+$/,'')+'/api/banking/pay/next/history-page',{
+            method:'POST',headers:{'content-type':'application/json','accept':'application/json','X-CloudTMS-Banking-Environment':options.environment??'TEST'},body:JSON.stringify(call),signal:controller.signal,auth401Mode:'return'
+          });
+          const result=await boundedReply(response,controller.signal);
+          if(!response.ok || !exact(result,['ok','page']) || result.ok!==true) {
+            const allowed=['BPAY_NEXT_HISTORY_FORBIDDEN','BPAY_NEXT_HISTORY_UNAUTHORIZED','BPAY_NEXT_HISTORY_SCOPE_NOT_FOUND',
+              'BPAY_NEXT_HISTORY_REQUEST_INVALID','BPAY_NEXT_HISTORY_DEPENDENCY_TIMEOUT','BPAY_NEXT_HISTORY_DEPENDENCY_UNAVAILABLE',
+              'BPAY_NEXT_HISTORY_RESPONSE_INVALID','BPAY_NEXT_HISTORY_PAGE_TOO_LARGE'];
+            fail(allowed.includes(result?.error_code)?result.error_code:'BPAY_NEXT_HISTORY_RESPONSE_INVALID',response.status);
+          }
+          return validateBpayNextHistoryResponse(result.page,call);
+        };
+        const result=await Promise.race([invoke(),timed]);actor();
+        if(ownEpoch!==epoch) fail('BPAY_NEXT_HISTORY_ACTOR_CHANGED',401);
+        if(manifest && (result.candidate_id!==manifest.candidate_id || result.work_id!==manifest.work_id)) invalidResponse();
+        if(call.section==='MANIFEST') {manifest=frozen(result);page=null;request=null;}
+        else {
+          page=frozen(result);request=frozen({...call});
+          if(call.section==='TRANSFERS')for(const row of page.rows)retain(transfers,row.data);
+          if(call.section==='PROJECTIONS')for(const row of page.rows)retain(projections,row.data);
+        }
+        return snapshot();
+      } finally {clearTimeout(timer);controller?.abort();busy=false;}
+    }
+    function snapshot(){return {manifest,page,request,busy,closed};}
+    return {
+      manifest:()=>read(base),
+      section:link=>read({...base,...link,after:null,upper:null}),
+      next:()=>{if(!page || page.terminal)invalidRequest();return read({...request,after:page.next_cursor,upper:page.upper});},
+      refresh:()=>read(request?{...request,after:null,upper:null}:base),
+      snapshot,originContext,netContext,close
+    };
+  }
+  // Only captured typed FK links, not arbitrary UUID entry or current-owner guesses.
+  const ROW_KIND={WORKS:'WORK',REVISIONS:'REVISION',LINES:'LINE',SHIFTS:'SHIFT',
+    RUN_WORKS:'RUN_WORK',RUN_LINES:'RUN_LINE',WORKER:'WORKER',COMMAND_WORKER:'WORKER',
+    TRANSFERS:'TRANSFER',CASES:'CASE',CASE:'CASE',COMPONENTS:'COMPONENT',
+    INSTRUCTIONS:'INSTRUCTION',COMMAND:'COMMAND'};
+  function childLinks(section,row,request) {
+    const links=[];const data=row.data;
+    const add=(name,id,context=null,component=null)=>{
+      if(!uuid(id) || !Object.hasOwn(BPAY_NEXT_HISTORY_SECTIONS,name))return;
+      const definition=BPAY_NEXT_HISTORY_SECTIONS[name];
+      if(context!==null && !['WORKER','TRANSFER','COMMAND'].includes(definition.parent))context=null;
+      const link={section:name,parent_id:id,context_id:context,component_key:component};
+      if(!links.some(item=>same(item,link)))links.push(link);
+    };
+    const group=(kind,id,context=null)=>{
+      for(const [name,definition] of Object.entries(BPAY_NEXT_HISTORY_SECTIONS))
+        if(definition.parent===kind && name!=='EFFECTS' && name!==section)add(name,id,context);
+    };
+    const kind=ROW_KIND[section];
+    if(kind)group(kind,data.id,request.context_id);
+    if(section==='COMMANDS')group('COMMAND',data.command_id);
+    if(section==='POSITIONS')add('EFFECTS',data.work_id,null,data.component_key);
+    if(section==='COLLECTIONS')add('CASE',data.case_id);
+    if(section==='RUN_WORKS')add('WORKER',data.run_worker_id);
+    if(section==='INSTRUCTIONS')add('WORKER',data.run_worker_id,request.timesheet_id?data.id:null);
+    if(['CASE_HOLDS','RESULTS','CASE_EVENTS','WORKER_CASE_HOLDS'].includes(section) && (!request.timesheet_id || uuid(data.instruction_id)))
+      add('WORKER',data.run_worker_id,request.timesheet_id?data.instruction_id:null);
+    if(['PUBLICATIONS','PROTECTED_RECEIPT','EXPIRY','INTERNAL_RECEIPT'].includes(section))add('COMMAND',data.command_id,request.context_id);
+    if(section==='PROJECTIONS')add('COMMAND',data.request_command_id,request.context_id);
+    if(section==='TRANSFERS') {
+      add('COMMAND',data.build_command_id,request.context_id);
+      add('PROJECTIONS',data.run_worker_id,request.context_id);
+      if(uuid(data.original_transfer_id))add('RETURN_CASH',data.original_transfer_id,request.context_id);
+    }
+    if(section==='MEMBERS') {
+      const member=projectBpayNextMemberOrigin(data);
+      if(member.kind==='WORK')group('RUN_LINE',data.run_line_id);
+      else if(member.kind==='CASE')group('INSTRUCTION',data.case_instruction_id);
+      else {
+        add('TRANSFERS',data.run_worker_id,request.context_id);
+        if(member.kind==='NET_ADJUSTMENT')add('PROJECTIONS',data.run_worker_id,request.context_id);
+      }
+    }
+    // A group leg is a whole-transfer reference, never a cash allocation.
+    if(section==='GROUP_LEGS')group('TRANSFER',data.transfer_id,request.context_id);
+    return links;
+  }
+  const escape=value=>String(value==null?'':value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");
+  const label=value=>String(value).replaceAll('_',' ').toLowerCase();
+  function displayScalar(value,field,section=null,data=null) {
+    if(field==='entered_paye_net' && section && data) {
+      const net=classifyBpayNextNet(section,data);
+      if(!net)invalidResponse();
+      if(net.state==='NOT_ENTERED')return 'NET not entered';
+      if(net.state==='NOT_APPLICABLE')return 'PAYE NET not applicable';
+      return net.value;
+    }
+    if(value===null)return 'Not recorded';
+    if(['case_kind','case_subtype','advance_kind'].includes(field)&&value==='LOAN')return 'Payment Advance';
+    if(/(?:_at|_at_utc)$/.test(field)||['captured_deadline','queue_wake_after_utc'].includes(field))return dates.formatTimestamp(value);
+    if(/(?:_date|_monday|_week_start)$/.test(field)||['date_from','date_to'].includes(field))return dates.formatDate(value);
+    return value;
+  }
+  const copy={
+    BPAY_NEXT_HISTORY_FORBIDDEN:'Payment history is available only to an authorised Office administrator.',
+    BPAY_NEXT_HISTORY_UNAUTHORIZED:'Please sign in again to read payment history.',
+    BPAY_NEXT_HISTORY_ACTOR_CHANGED:'The signed-in user changed. Close and reopen payment history.',
+    BPAY_NEXT_HISTORY_SCOPE_NOT_FOUND:'No NEXT payment history is available for this record.',
+    BPAY_NEXT_HISTORY_PAGE_TOO_LARGE:'This recorded detail exceeds the safe page limit. No facts have been omitted.',
+    BPAY_NEXT_HISTORY_DEPENDENCY_TIMEOUT:'History could not be read in time. Use Refresh to try this read again.',
+    BPAY_NEXT_HISTORY_READ_PENDING:'A history page is already loading.'
+  };
+  const unavailableCopy={
+    MOVED_ROOT_FLAT_PAID_BINDING:'Cross-contract paid-continuity bindings are not implemented.',
+    CANONICAL_MULTI_CHANNEL_VECTOR:'Multi-channel disposition vectors are not implemented.',
+    MOVE_COMPARISON_RECEIPT:'Move-comparison receipts are not implemented.',
+    GENERAL_APPROVAL_ACTOR_REASON_NOT_CAPTURED_IN_NEXT_ROWS:'General approval actor/reason is not captured in these NEXT rows.',
+    TIMESHEET_COMMAND_WITHOUT_WORK_OR_CASE_ANCESTRY:'Unrelated or unbound Candidate commands are not Timesheet history.'
+  };
+  function amountNotice(value,section=null) {
+    if(['RUN_LINES','RUN_WORKS','LINES','SHIFTS'].includes(section))return 'NET unallocated per Timesheet/Client, even when Candidate NET is recorded. Frozen earnings and recoveries are workings before payroll deductions; they do not determine PAYE cash.';
+    if(value.includes('TRANSFER'))return 'Whole-transfer cash and provenance; no Timesheet cash allocation.';
+    if(value.includes('WORKER'))return 'Whole-worker NET/cash; not a Timesheet allocation.';
+    if(value.startsWith('CURRENT') || value.includes('CURRENT_STATUS'))return 'Current cache/status is labelled separately from immutable payments; it is not a payable total.';
+    return 'Recorded source, target ex VAT, VAT, NET and cash fields retain their distinct units. No conversion or totals are calculated here.';
+  }
+  function memberDescription(data,context={transfer:null,projection:null}) {
+    const member=projectBpayNextMemberOrigin(data),transfer=context.transfer,projection=context.projection;
+    if(transfer && (transfer.id!==member.transfer_id || transfer.run_worker_id!==member.run_worker_id))invalidResponse();
+    if(projection && (!transfer || projection.id!==transfer.projection_id || projection.run_worker_id!==member.run_worker_id))invalidResponse();
+    if(member.kind==='WORK')return 'WORK · frozen run line '+member.origin.id;
+    if(member.kind==='CASE')return 'CASE · frozen instruction '+member.origin.instruction_id+' · allocation result '+member.origin.result_id
+      +(member.origin.hold_id?' · hold '+member.origin.hold_id:' · zero allocation; no hold');
+    if(member.kind==='NET_ADJUSTMENT') {
+      if(!transfer)return 'NET adjustment · accepted projection/request on transfer '+member.transfer_id+'. Open Transfers, then its recorded Projections to read those exact references.';
+      if(!uuid(transfer.projection_id)||transfer.original_transfer_id!==null)invalidResponse();
+      if(projection && !uuid(projection.request_command_id))invalidResponse();
+      return 'NET adjustment · accepted projection '+transfer.projection_id+(projection?' · accepted request '+projection.request_command_id:'. Open Projections to read this exact projection and its accepted request.');
+    }
+    if(!transfer)return 'Cash reissue · original transfer and return cash on transfer '+member.transfer_id+'. Open Transfers to read those exact references.';
+    if(!uuid(transfer.original_transfer_id)||!uuid(transfer.return_cash_id)||transfer.projection_id!==null)invalidResponse();
+    return 'Cash reissue · original transfer '+transfer.original_transfer_id+' · return cash '+transfer.return_cash_id+' · request '+transfer.build_command_id;
+  }
+  function transferNetDescription(transfer,projection=null) {
+    if(!record(transfer)||!uuid(transfer.id)||!uuid(transfer.run_worker_id))invalidResponse();
+    if(transfer.original_transfer_id!==null) {
+      if(!uuid(transfer.original_transfer_id)||transfer.projection_id!==null)invalidResponse();
+      return 'Cash reissue: no new payroll NET entry. Original transfer '+transfer.original_transfer_id+' retains its recorded NET and return-cash history.';
+    }
+    if(!uuid(transfer.projection_id))invalidResponse();
+    if(!projection)return 'Recorded NET reference: projection '+transfer.projection_id+'. Open Projections to read that exact accepted record; it has not been loaded here.';
+    if(projection.id!==transfer.projection_id||projection.run_worker_id!==transfer.run_worker_id)invalidResponse();
+    const net=classifyBpayNextNet('PROJECTIONS',projection);
+    return net.state==='NOT_APPLICABLE'?'PAYE NET not applicable to this recorded transfer.':'Recorded Candidate NET (GBP): '+net.value+'. Once for this transfer; NET unallocated per Timesheet/Client. Complete frozen workings are linked below.';
+  }
+  let active=null;
+  function close(){active?.close();active=null;}
+  function open(options) {
+    if(typeof options.ownerReady!=='function'||options.ownerReady()!==true)fail('BPAY_NEXT_HISTORY_FORBIDDEN',403);
+    close();
+    if(typeof options.showModal!=='function')invalidRequest();
+    const client=createClient(options);const navigation=[];let error='',loading=true,links=[],disposed=false;
+    const document=options.document||globalThis.document;const window=options.window||globalThis;
+    const rootId='bpayNextPaymentHistory';let frame=null;
+    const previousFocus=document.activeElement,parentFrame=window.__getModalFrame?.(),shell=document.getElementById('modal');
+    const focus=ui.continuity(shell,document,()=>document.getElementById('btnCloseModal'));
+    const isCurrent=()=>!disposed && window.__getModalFrame?.()===frame && frame?.kind==='banking-pay-history';
+    const onKey=event=>{if(isCurrent())ui.trap(event,shell,document);};
+    const onDismiss=()=>{if(disposed)return;disposed=true;client.close();document.getElementById('modalBody')?.removeEventListener('click',onClick);shell?.removeEventListener('keydown',onKey);if(active?.client===client)active=null;
+      // Observe the actual parent chrome after async mounting; stop at return
+      // or user navigation. Do not wrap/replace the shared frame's methods.
+      if(parentFrame && shell && typeof window.MutationObserver==='function'){
+        const stop=()=>{observer.disconnect();shell.removeEventListener('pointerdown',onReturnIntent,true);shell.removeEventListener('keydown',onReturnIntent,true);};
+        const onReturnIntent=()=>{if(window.__getModalFrame?.()!==frame)stop();};
+        const observer=new window.MutationObserver(()=>{
+          const current=window.__getModalFrame?.();if(current===frame)return;
+          if(active || current!==parentFrame){stop();return;}
+          const opener=previousFocus?.id?document.getElementById(previousFocus.id):previousFocus;
+          if(ui.available(opener)){stop();opener.focus();}
+        });
+        observer.observe(shell,{attributes:true,childList:true,subtree:true});
+        shell.addEventListener('pointerdown',onReturnIntent,true);shell.addEventListener('keydown',onReturnIntent,true);
+      }
+    };
+    const render=()=>{
+      const state=client.snapshot();links=[];
+      const button=(text,action,index)=>'<button type="button" class="btn mini" data-payment-history-action="'+action+'"'+(index==null?'':' data-history-index="'+index+'"')+' data-next-focus-key="'+escape(action+(index==null?'':':'+JSON.stringify(links[index])))+'" data-history-busy="'+(loading?'1':'0')+'"'+(loading?' disabled':'')+'>'+escape(text)+'</button>';
+      const linkButton=link=>{const index=links.push(link)-1;return button(label(link.section),'child',index);};
+      let html='<div class="tabc" id="'+rootId+'"><div class="card"><h3>Payment history · '+(options.scope.timesheet_id?'Timesheet':'Candidate')+'</h3><p>Recorded payment history. Earlier Draft and payment figures stay unchanged. Not recorded is different from zero.</p><p>Refresh to see newly recorded events; current statuses may change.</p>'+button('Refresh this section','refresh')+' '+button('All sections','home')+(navigation.length?' '+button('Back','back'):'')+'<div role="status" aria-live="polite">'+(loading?'Loading payment history…':'')+'</div>'+(error?'<p role="alert">'+escape(error)+'</p>':'');
+      if(state.manifest) {
+        html+='<details><summary data-next-focus-key="summary:scope">Scope and unavailable evidence</summary><p>Candidate '+escape(state.manifest.candidate_id)+(state.manifest.work_id?' · WORK '+escape(state.manifest.work_id):'')+'</p><ul>'+state.manifest.unavailable.map(code=>'<li>'+escape(unavailableCopy[code])+'</li>').join('')+'</ul></details>';
+        if(!state.page) {
+          html+='<p>Open a group, then use the linked records below each entry. Continue with Next page until End to see every entry. Other groups load only when you open them.</p>';
+          for(const section of state.manifest.sections.filter(item=>item.parent==='SCOPE')) {
+            html+=section.applicability==='SCOPE_QUALIFIED'?linkButton({section:section.section,parent_id:null,context_id:null,component_key:null}):'<p>'+escape(label(section.section))+' is Candidate-only; use actual referenced parents for this Timesheet.</p>';
+          }
+          html+='<details><summary data-next-focus-key="summary:groups">All history groups and linked records</summary><ul>'+state.manifest.sections.map(item=>'<li>'+escape(label(item.section))+' — '+escape(label(item.parent))+' · '+escape(label(item.amount_scope))+(item.applicability!=='SCOPE_QUALIFIED'?' · Candidate-only':'')+'</li>').join('')+'</ul></details>';
+        } else {
+          html+='<h4>'+escape(label(state.page.section))+'</h4><p>'+escape(amountNotice(state.page.amount_scope,state.page.section))+'</p><p>'+escape(label(state.page.amount_scope))+'</p>';
+          if(state.page.rows.length===0)html+='<p>No records in this section.</p>';
+          for(const row of state.page.rows) {
+            if(state.page.section==='TRANSFERS')html+='<p>'+escape(transferNetDescription(row.data,client.netContext(row.data)))+'</p>';
+            if(state.page.section==='MEMBERS')html+='<p>'+escape(memberDescription(row.data,client.originContext(row.data)))+'</p><p>Signed member contribution (GBP): '+escape(row.data.signed_cash_contribution)+'. This is a recorded constituent of the transfer; no Timesheet or Client cash allocation is made.</p>';
+            html+='<div class="card"><details><summary data-next-focus-key="'+escape('row:'+state.page.section+':'+JSON.stringify(row.key))+'">'+escape(label(state.page.section))+' · '+escape(row.key.map((value,index)=>displayScalar(value,BPAY_NEXT_HISTORY_SECTIONS[state.page.section].keys[index][0])).join(' / '))+'</summary><dl>'+Object.entries(row.data).map(([key,value])=>'<dt>'+escape(label(key))+'</dt><dd style="overflow-wrap:anywhere">'+escape(displayScalar(value,key,state.page.section,row.data))+'</dd>').join('')+'</dl></details><div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">'+childLinks(state.page.section,row,state.request).map(linkButton).join('')+'</div></div>';
+          }
+          html+=state.page.terminal?'<p data-history-terminal="true">End of this section.</p>':button('Next page','next');
+        }
+      }
+      return html+'</div></div>';
+    };
+    async function repaint() {
+      if(disposed)return;
+      if(!frame)frame=window.__getModalFrame?.();
+      if(!frame || frame.kind!=='banking-pay-history')return;
+      const token=focus.before();
+      if(document.getElementById(rootId))await frame.setTab(frame.currentTabKey||'history');
+      if(!isCurrent())return;frame._updateButtons?.();focus.after(token);
+    }
+    async function perform(action) {
+      if(loading || disposed)return;
+      loading=true;error='';await repaint();
+      try {await action();}
+      catch(failure){error=copy[failure?.code]||'History could not be validated. No financial facts have been changed. Refresh to retry this read.';}
+      finally {loading=false;await repaint();}
+    }
+    async function onClick(event) {
+      const button=event.target?.closest?.('[data-payment-history-action]');
+      if(!button || !document.getElementById(rootId)?.contains(button) || loading)return;
+      event.preventDefault();event.stopPropagation();
+      const action=button.dataset.paymentHistoryAction;
+      if(action==='child') {
+        const link=links[Number(button.dataset.historyIndex)];if(!link)return;
+        const prior=client.snapshot().request;if(navigation.length===32)navigation.shift();
+        navigation.push({request:prior,focus:ui.capture(shell,document)});await perform(()=>client.section(link));
+      } else if(action==='next')await perform(()=>client.next());
+      else if(action==='refresh')await perform(()=>client.refresh());
+      else if(action==='home') {navigation.length=0;await perform(()=>client.manifest());}
+      else if(action==='back') {const previous=navigation.pop();await perform(()=>previous?.request?client.section(previous.request):client.manifest());if(isCurrent()&&previous?.focus)ui.restore(shell,previous.focus,document.getElementById('btnCloseModal'));}
+    }
+    options.showModal('Payment history',[{key:'history',label:'History'}],render,null,false,null,{
+      kind:'banking-pay-history',frameEntity:'payment-history',noParentGate:true,showSave:false,showApply:false,onDismiss
+    });
+    frame=window.__getModalFrame?.();shell?.addEventListener('keydown',onKey);document.getElementById('btnCloseModal')?.focus();
+    document.getElementById('modalBody')?.addEventListener('click',onClick);
+    active={client,close:onDismiss};
+    loading=false;void perform(()=>client.manifest());
+    return active;
+  }
+  return Object.freeze({createClient,childLinks,open,close,sections:BPAY_NEXT_HISTORY_SECTIONS,escape,amountNotice,displayScalar,
+    projectMemberOrigin:projectBpayNextMemberOrigin,memberDescription,classifyNet:classifyBpayNextNet,transferNetDescription,validateRequest:validateBpayNextHistoryRequest,validateResponse:validateBpayNextHistoryResponse});
+});

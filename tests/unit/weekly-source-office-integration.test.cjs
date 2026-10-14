@@ -107,7 +107,7 @@ test('approved-hours changes use the single Weekly Source command boundary and r
   assert.match(main, /refreshSimpleWeeklySourcePresentation/);
   assert.match(main, /refreshBulkWeeklySourcePresentation/);
   assert.match(main, /refreshBulkAuthoriseActiveContext/);
-  assert.match(main, /Number\(error\?\.status \|\| error\?\.response\?\.status \|\| 0\) === 409/);
+  assert.match(main, /definite && !localOwnerRequired && status === 409/);
   assert.match(main, /bulkAuthActionRowManageApprovedHoursBtn/);
   assert.match(main, /bindSimpleWeeklySourceApprovedHoursAction/);
   assert.doesNotMatch(main, /weekly-source\/v1\/commands[^\n]+banking/i);

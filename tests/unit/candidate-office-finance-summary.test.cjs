@@ -3,15 +3,19 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const main=fs.readFileSync(path.join(__dirname,'../../js/main.js'),'utf8');
 const start=main.indexOf('function renderAdvancesSummary(summary)');
 const end=main.indexOf('async function openCandidate(row)',start);
-function harness(entry) {
+function harness(entry, owner = { actor: 'fixture-actor', active_owner: 'LEGACY' }) {
   const summary={innerHTML:''};
+  const nextCalls=[];
   const context=vm.createContext({
-    window:{appState:{candidateAdvances:{fixture:entry}}},
+    window:{appState:{candidateAdvances:{fixture:entry}}, __candidateFinanceOwners:{fixture:owner}},
+    SESSION:{user:{id:'fixture-actor'}},
+    bankingNextOwnerClient:()=>({peek:()=>({active_owner:'LEGACY'})}),
+    paintNextCandidateFinance:(...args)=>nextCalls.push(args),
     document:{getElementById:id=>id==='candidateAdvancesSummary'?summary:null},
     escapeHtml:value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
   });
   vm.runInContext(main.slice(start,end),context);
-  return {context,summary};
+  return {context,summary,nextCalls};
 }
 test('finance balances retain each existing source field, count and two-decimal formatting',()=>{
   const {context}=harness({});
@@ -54,6 +58,15 @@ test('failed refresh retains last-known amounts and the existing stale warning',
   assert.match(summary.innerHTML,/£35\.00/);
   assert.match(summary.innerHTML,/last successful refresh and may be out of date/);
   assert.match(summary.innerHTML,/candidateFinanceReportRetryBtn/);
+});
+test('an absent or foreign Legacy qualification cannot render stored financial balances',()=>{
+  for(const owner of [null,{actor:'other-actor',active_owner:'LEGACY'},{actor:'fixture-actor',active_owner:'UNKNOWN'}]){
+    const {context,summary,nextCalls}=harness({report:{summary:{overpayments_outstanding_total:35}}},owner);
+    context.updateCandidateAdvancesUI('fixture');
+    assert.equal(nextCalls.length,1);
+    assert.equal(nextCalls[0][0],'fixture');
+    assert.doesNotMatch(summary.innerHTML,/£35\.00|£0\.00|candidate-finance-balances/);
+  }
 });
 test('report and retry keep their original read-only actions',()=>{
   const source=main.slice(start,end);

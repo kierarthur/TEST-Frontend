@@ -847,3 +847,22 @@
 [data-weekly-source-schedule-withheld="1"] .weekly-source-v1__notice {
   border-style: dashed;
 }
+#modal.ctms-modern-modal .weekly-source-v1__later-change-actions .btn[data-weekly-source-decision] {
+  min-height: 44px;
+  min-width: 44px;
+}
+#modal.ctms-modern-modal [data-weekly-source-right-pane] {
+  min-width: 0;
+  max-width: 100%;
+}
+#modal.ctms-modern-modal [data-weekly-source-right-pane] .weekly-source-v1__later-change {
+  min-width: 0;
+  max-width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+#modal.ctms-modern-modal [data-weekly-source-right-pane] .weekly-source-v1__later-change-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+#modal.ctms-modern-modal [data-weekly-source-right-pane] .weekly-source-v1__later-change-grid > * {
+  min-width: 0;
+}

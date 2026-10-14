@@ -1,0 +1,59 @@
+{
+  "sourceOnly": true,
+  "version": "healthroster=20261014-r1",
+  "incomingMain": "413cea9b35975c6ccac0b084327ef109b05c1c48",
+  "allIncomingVersionParametersPreserved": true,
+  "markers": [
+    {
+      "file": "css/weekly-source.css",
+      "before": "./css/weekly-source.css?v=20261010-contact-policy-r2",
+      "after": "./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/invoice-batch-modal.js",
+      "before": "./js/invoice-batch-modal.js?v=20260803-invoice-reference-policy-r2",
+      "after": "./js/invoice-batch-modal.js?v=20260803-invoice-reference-policy-r2&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/main.js",
+      "before": "./js/main.js?v=20261012-sp10-r1&healthroster=20261014-r1",
+      "after": "./js/main.js?v=20261012-sp10-r1&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/weekly-source/agency-invoice-credit-ui.js",
+      "before": "./js/weekly-source/agency-invoice-credit-ui.js?v=20261013-r1",
+      "after": "./js/weekly-source/agency-invoice-credit-ui.js?v=20261013-r1&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/weekly-source/combined-review.js",
+      "before": "./js/weekly-source/combined-review.js?v=20261013-contact-policy-next-r1",
+      "after": "./js/weekly-source/combined-review.js?v=20261013-contact-policy-next-r1&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/weekly-source/import-workspace.js",
+      "before": "./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2",
+      "after": "./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2"
+    },
+    {
+      "file": "js/weekly-source/rule-set-validation.js",
+      "before": "./js/weekly-source/rule-set-validation.js?v=20261013-r1",
+      "after": "./js/weekly-source/rule-set-validation.js?v=20261013-r1&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/weekly-source/rule-settings.js",
+      "before": "./js/weekly-source/rule-settings.js?v=20261013-r1",
+      "after": "./js/weekly-source/rule-settings.js?v=20261013-r1&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/weekly-source/settings.js",
+      "before": "./js/weekly-source/settings.js?v=20261013-r1",
+      "after": "./js/weekly-source/settings.js?v=20261013-r1&healthroster=20261014-r1"
+    },
+    {
+      "file": "js/weekly-source/source-invoice-adjustments.js",
+      "before": "./js/weekly-source/source-invoice-adjustments.js?v=20261013-r1",
+      "after": "./js/weekly-source/source-invoice-adjustments.js?v=20261013-r1&healthroster=20261014-r1"
+    }
+  ],
+  "noPublication": true
+}

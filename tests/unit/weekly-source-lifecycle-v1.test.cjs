@@ -382,20 +382,27 @@ test('a single-root decision uses the same member shape as an A-to-B decision', 
   assert.doesNotMatch(markup, /Old root|New root/);
 });
 
-test('the decision command posts command_payload unchanged plus the actor and the decision', () => {
+test('the decision command retains descriptor bytes in the current actor-injected server command', () => {
   const vm = vmFor('UI-008');
   const command = presentation.buildLaterChangeDecisionCommand(vm, {
     decision: 'APPROVE_UPDATED_HOURS',
     actor_user_id: 'd1000000-0000-4000-8000-000000000001',
-    idempotency_key: 'wp12-decision-1'
+    idempotency_key: 'wp12-decision-current-1'
   });
   assert.equal(command.endpoint, vm.proposal.decision.endpoint);
   for (const [key, value] of Object.entries(vm.proposal.decision.command_payload)) {
-    assert.deepEqual(command.body[key], value, `${key} is posted unchanged`);
+    assert.deepEqual(command.body.payload[key], value, `${key} is posted unchanged`);
   }
-  assert.equal(command.body.actor_user_id, 'd1000000-0000-4000-8000-000000000001');
-  assert.equal(command.body.decision, 'APPROVE_UPDATED_HOURS');
-  assert.equal(command.body.idempotency_key, 'wp12-decision-1');
+  assert.equal(command.body.action, 'LATER_CHANGE_DECISION');
+  assert.equal(command.body.payload.decision, 'APPROVE_UPDATED_HOURS');
+  assert.equal(command.body.payload.idempotency_key, 'wp12-decision-current-1');
+  assert.equal('actor_user_id' in command.body, false);
+  assert.equal('actor_user_id' in command.body.payload, false);
+  assert.throws(() => presentation.buildLaterChangeDecisionCommand(vm, {
+    decision: 'APPROVE_UPDATED_HOURS',
+    actor_user_id: 'd1000000-0000-4000-8000-000000000001',
+    idempotency_key: 'too-short'
+  }), /could not be safely prepared/);
 
   assert.throws(() => presentation.buildLaterChangeDecisionCommand(vm, {
     decision: 'SOMETHING_ELSE',

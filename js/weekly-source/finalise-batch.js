@@ -7,6 +7,15 @@
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildBatch() {
   'use strict';
+  const SOURCE_ADMISSION_BUSY_MESSAGE = 'Another Source update is in progress. Try again in a moment.';
+  function isSourceAdmissionBusy(error) {
+    const body = error?.json || error?.response || error;
+    return error?.status === 409 && body && !Array.isArray(body)
+      && (body.error_code || body.code) === 'WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY'
+      && body.retryable === true && body.failed_rpc_outcome === 'ROLLED_BACK'
+      && body.automatic_retry === false;
+  }
+
   const uuid = value => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(value || ''));
   const hash = value => /^[0-9a-f]{64}$/.test(String(value || ''));
   const payloadKeys = new Set(['source_cycle_id', 'authority_scope_kind', 'report_scope_id',
@@ -55,14 +64,16 @@
     return { items, running: false };
   }
 
-  async function run(batch, command, onProgress = () => {}) {
+  async function run(batch, command, onProgress = () => {}, isCurrent = () => true) {
     if (!batch || batch.running || typeof command !== 'function') throw new Error('A finalisation is already running or unavailable.');
     batch.running = true;
     try {
       for (const item of batch.items) {
+        if (!isCurrent()) break;
         if (terminal.has(item.state)) continue;
-        item.state = 'RUNNING'; item.error = '';
+        item.state = 'RUNNING'; item.error = ''; item.sourceAdmissionBusy = false;
         await onProgress(batch);
+        if (!isCurrent()) break;
         try {
           // Serial calls preserve pool capacity. An unknown result is retried
           // only on a later explicit run, with the identical reviewed payload.
@@ -77,14 +88,16 @@
           item.result = result;
           item.state = result.status === 'FINALISED' ? 'COMPLETE' : 'SOURCE_COMPLETE_PAY_PENDING';
         } catch (error) {
-          item.state = 'CHECK_REQUIRED';
-          item.error = String(error?.message || 'The result is not confirmed. Check the saved request.');
+          item.sourceAdmissionBusy = isSourceAdmissionBusy(error);
+          item.state = item.sourceAdmissionBusy ? 'READY' : 'CHECK_REQUIRED';
+          item.error = item.sourceAdmissionBusy ? SOURCE_ADMISSION_BUSY_MESSAGE
+            : String(error?.message || 'The result is not confirmed. Check the saved request.');
           if ([401, 403].includes(Number(error?.status))) {
-            await onProgress(batch);
+            if (isCurrent()) await onProgress(batch);
             break; // Do not continue an expired or revoked Office session.
           }
         }
-        await onProgress(batch);
+        if (isCurrent()) await onProgress(batch);
       }
     } finally { batch.running = false; }
     return batch;

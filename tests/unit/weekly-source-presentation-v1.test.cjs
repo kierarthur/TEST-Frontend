@@ -148,10 +148,12 @@ test('NEXT activity unknown retains only an independently verified existing sing
     assert.doesNotMatch(html, /LATER_CHANGE_PENDING_PAID|LATER_CHANGE_PENDING_UNPAID/);
   }
   const command = presentation.buildLaterChangeDecisionCommand(vm,
-    { actor_user_id: 'd1000000-0000-4000-8000-000000000001', decision: 'APPROVE_UPDATED_HOURS' });
+    { actor_user_id: 'd1000000-0000-4000-8000-000000000001', decision: 'APPROVE_UPDATED_HOURS',
+      idempotency_key: 'next-independent-decision-1' });
   assert.equal(command.endpoint, source.proposal.decision.endpoint);
-  assert.deepEqual(command.body, { ...source.proposal.decision.command_payload,
-    actor_user_id: 'd1000000-0000-4000-8000-000000000001', decision: 'APPROVE_UPDATED_HOURS' });
+  assert.deepEqual(command.body, { action: 'LATER_CHANGE_DECISION', payload: {
+    ...source.proposal.decision.command_payload, decision: 'APPROVE_UPDATED_HOURS',
+    idempotency_key: 'next-independent-decision-1' } });
 });
 
 test('NEXT proposal exception refuses wrong roots, stale/invalid tuples and all non-informational errors', () => {
@@ -257,7 +259,7 @@ test('NEXT displays only the genuine current read-only withdrawal refusal withou
 
 test('the dormant foundation loads before the existing application owner', () => {
   const index = fs.readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8');
-  const styleMarker = './css/weekly-source-presentation-v1.css?v=20260915-r1';
+  const styleMarker = './css/weekly-source-presentation-v1.css?v=20261012-sp10-r1';
   const scriptMarker = (index.match(/\.\/js\/weekly-source-presentation-v1\.js\?v=[^"']+/g) || [])[0];
   assert.ok(scriptMarker, 'the versioned presentation script is present');
   const existingOwnerMarker = './js/main.js?';

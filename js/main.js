@@ -5056,10 +5056,137 @@ async function refreshOpenWeeklyImportSummariesAfterContractSave() {
 }
 
 
+let bpayNextOwnerClient = null;
+let bpayNextOwnerActor = null;
+function bankingNextOwnerClient() {
+  const actor = SESSION?.user?.id || null;
+  if (!actor || SESSION?.user?.role !== 'admin' || !window.CloudTMSBpayNextOwner) return null;
+  if (bpayNextOwnerActor !== actor) {
+    bpayNextOwnerClient?.close(); bpayNextOwnerActor = actor;
+    bpayNextOwnerClient = window.CloudTMSBpayNextOwner.create({api:API,authFetch,actorId:actor,
+      currentActorId:()=>SESSION?.user?.id || null,
+      onChange:()=>queueMicrotask(()=>{
+        if (SESSION?.user?.id !== actor) return;
+        try { currentFrame()?._updateButtons?.(); } catch {}
+        window.dispatchEvent(new CustomEvent('cloudtms:bpay-next-owner-changed'));
+      })});
+  }
+  return bpayNextOwnerClient;
+}
+// SP-03: these two labels require the current actor's positive F-15 NEXT status.
+// They explain an actual authorisation refusal; they never choose its owner or retry it.
+function weeklySourceAuthoriseRefusalCode(value) {
+  const body = value?.json || value?.response || value || {};
+  if (body.success === true || body.ok === true) return '';
+  const codes = [body.error_code, body.code, body.error, body.message, value?.message];
+  return codes.map(code => String(code || '').trim()).find(code =>
+    code === 'WEEKLY_SOURCE_CANDIDATE_BUSY' || code === 'BPAY_NEXT_SOURCE_FIRST_ADDITIONAL_UNMAPPED') || '';
+}
+function weeklySourceAuthoriseRefusalPresentation(value, actor) {
+  const code = weeklySourceAuthoriseRefusalCode(value);
+  if (!code || !actor || SESSION?.user?.id !== actor || bankingNextOwnerClient()?.peek()?.active_owner !== 'NEXT') return null;
+  return code === 'WEEKLY_SOURCE_CANDIDATE_BUSY'
+    ? {code, retryable: true, message: 'A payment step for this Candidate is running. Try again in a moment.'}
+    : {code, retryable: false, message: 'An Additional item cannot be authorised because its approved units are missing or do not match. Review the Additional item before trying again.'};
+}
+async function weeklySourceQualifyAuthoriseRefusal(values, actor) {
+  if (!values.some(value => weeklySourceAuthoriseRefusalCode(value))) return null;
+  if (!actor || SESSION?.user?.id !== actor) return null;
+  const client = bankingNextOwnerClient();
+  if (!actor || !client) return null;
+  try { await client.qualify('source:authorise-refusal:' + actor); } catch {}
+  return SESSION?.user?.id === actor ? actor : null;
+}
+async function weeklySourceMapAuthoriseError(error, requestActor) {
+  const daily = bpayNextDailyHoursOnlyPresentation(error, requestActor);
+  if (daily) {
+    const mapped = Object.assign(new Error(daily.message, {cause: error}), error, daily);
+    mapped.message = daily.message;
+    return mapped;
+  }
+  const actor = await weeklySourceQualifyAuthoriseRefusal([error], requestActor);
+  const copy = weeklySourceAuthoriseRefusalPresentation(error, actor);
+  if (!copy) return error;
+  const mapped = Object.assign(new Error(copy.message, {cause: error}), error);
+  mapped.message = copy.message;
+  mapped.retryable = copy.retryable;
+  return mapped;
+}
+function weeklySourcePresentAuthoriseResult(value, actor) {
+  const copy = weeklySourceAuthoriseRefusalPresentation(value, actor);
+  return copy ? {...value, reason: copy.message, message: copy.message, retryable: copy.retryable} : value;
+}
+// DY-08: qualify the existing Office refusal copy against the current actor.
+function bpayNextDailyHoursOnlyPresentation(value, actor) {
+  if (!actor || SESSION?.user?.id !== actor) return null;
+  return window.CloudTMSBpayNextOffice?.dailyHoursOnlyRefusal?.(value) || null;
+}
+// WB-01: a definite typed refusal uses the real Contract rates screen.
+function bpayNextMissingRatePresentation(value, actor) {
+  const body = value?.json || value?.response || value || {};
+  if (!actor || SESSION?.user?.id !== actor || body.ok === true || body.success === true
+      || ![body.code, body.error_code, body.error].includes('BPAY_NEXT_ORDINARY_USED_RATE_MISSING')
+      || typeof body.bucket !== 'string' || !body.bucket.length || body.bucket.length > 245
+      || typeof body.contract_id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.contract_id)) return null;
+  const labels = { DAY: 'Day', NIGHT: 'Night', SAT: 'Saturday', SUN: 'Sunday', BH: 'Bank Holiday', MILE: 'Mileage' };
+  return { code: 'BPAY_NEXT_ORDINARY_USED_RATE_MISSING', bucket: body.bucket, contract_id: body.contract_id,
+    message: 'Pay rate missing for ' + (Object.prototype.hasOwnProperty.call(labels, body.bucket) ? labels[body.bucket] : body.bucket) + '; set the rate on the Contract, then authorise again.' };
+}
+function bpayNextPresentMissingRateResult(value, actor) {
+  const copy = bpayNextDailyHoursOnlyPresentation(value, actor) || bpayNextMissingRatePresentation(value, actor);
+  return copy ? { ...value, ...copy, reason: copy.message, retryable: false } : value;
+}
+async function bpayNextOpenMissingRateContract(refusal, actor, parentFrame) {
+  if (!bpayNextMissingRatePresentation(refusal, actor) || _currentFrame() !== parentFrame) return false;
+  const fresh = await getContract(refusal.contract_id);
+  if (SESSION?.user?.id !== actor || _currentFrame() !== parentFrame) return false;
+  const contract = fresh?.contract || fresh;
+  if (String(contract?.id || '').toLowerCase() !== refusal.contract_id.toLowerCase()) throw new Error('The Contract rates could not be loaded.');
+  openContract(fresh);
+  const frame = _currentFrame();
+  if (SESSION?.user?.id !== actor || !frame || frame === parentFrame
+      || window.modalCtx?.entity !== 'contracts'
+      || String(window.modalCtx?.data?.id || '').toLowerCase() !== refusal.contract_id.toLowerCase()) return false;
+  frame.currentTabKey = 'rates';
+  await frame.setTab('rates');
+  return SESSION?.user?.id === actor && _currentFrame() === frame
+    && window.modalCtx?.entity === 'contracts'
+    && String(window.modalCtx?.data?.id || '').toLowerCase() === refusal.contract_id.toLowerCase();
+}
+async function bpayNextShowMissingRateRefusal(value, actor, parentFrame) {
+  const copy = bpayNextMissingRatePresentation(value, actor);
+  if (!copy) return null;
+  // A late response from a dismissed frame never opens an unrelated window.
+  if (_currentFrame() !== parentFrame) return { ok: false, handled: true, ...copy };
+  const answer = await openUiConfirmModal({ title: 'Pay rate missing', message: copy.message,
+    confirm_label: 'Open Contract rates', cancel_label: 'Close' });
+  if (answer?.confirmed === true && SESSION?.user?.id === actor && _currentFrame() === parentFrame) {
+    try { await bpayNextOpenMissingRateContract(copy, actor, parentFrame); }
+    catch (error) { if (SESSION?.user?.id === actor && _currentFrame() === parentFrame) window.alert(error?.message || 'The Contract rates could not be loaded.'); }
+  }
+  return { ok: false, handled: true, ...copy };
+}
+function bankingNextOwnerMessage(status, legacy=false) {
+  return window.CloudTMSBpayNextOwner?.message(status,legacy) || 'Banking ownership is unavailable. Money controls are disabled.';
+}
 async function authFetch(input, init = {}) {
+  const url = (typeof input === 'string') ? input : (input?.url || '');
+  const nextBankingPath = (() => {
+    try {
+      const path = '/' + new URL(url, 'https://local.invalid').pathname.split('/').filter(Boolean).join('/');
+      const method = String(init?.method || input?.method || 'GET').toUpperCase();
+      return (method === 'POST' && ['/api/banking/pay/next/command','/api/banking/pay/next/preparation','/api/banking/pay/next/history-page','/api/banking/pay/next/frozen-detail'].includes(path))
+        || (method === 'GET' && ['/api/banking/pay/next/preparation-page','/api/banking/pay/next/workbench-page','/api/banking/pay/next/owner-status'].includes(path))
+        || (method === 'GET' && /^\/api\/banking\/pay\/next\/advice\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(path));
+    }
+    catch { return false; }
+  })();
+  // NEXT raw pages/advice must remain streaming even when opt-in API debug
+  // logging is enabled. Never clone.text() or log their financial payloads.
   const APILOG =
-    (typeof window !== 'undefined' && !!window.__LOG_API) ||
-    (typeof __LOG_API !== 'undefined' && !!__LOG_API);
+    !nextBankingPath && ((typeof window !== 'undefined' && !!window.__LOG_API) ||
+    (typeof __LOG_API !== 'undefined' && !!__LOG_API));
 
   const {
     auth401Mode,
@@ -5069,7 +5196,6 @@ async function authFetch(input, init = {}) {
   const headers = new Headers(fetchInit.headers || {});
   if (SESSION?.accessToken) headers.set('Authorization', `Bearer ${SESSION.accessToken}`);
 
-  const url = (typeof input === 'string') ? input : (input?.url || '');
   const method = String(fetchInit.method || 'GET').trim().toUpperCase() || 'GET';
 
   const auth401ModeNorm = String(auth401Mode || '').trim().toLowerCase();
@@ -6329,6 +6455,13 @@ function initAuthUI() {
 
 
 function clearSession() {
+  // Close only the isolated NEXT sheet; its actor-namespaced uncertainty
+  // journal is deliberately retained for an explicit same-request retry.
+  try { if (typeof window !== 'undefined') window.CloudTMSBpayNextOffice?.close?.(); } catch {}
+  try { if (typeof window !== 'undefined') window.CloudTMSBpayNextHistory?.close?.(); } catch {}
+  try { if (currentFrame()?.kind === 'banking-pay-history') closeModal(); } catch {}
+  try { bpayNextOwnerClient?.close(); } catch {}
+  bpayNextOwnerClient = null; bpayNextOwnerActor = null;
   // stop refresh timers
   try { clearTimeout(refreshTimer); } catch {}
   refreshTimer = 0;
@@ -6982,12 +7115,39 @@ function renderTopNav(){
         menu.setAttribute('role', 'menu');
         menu.setAttribute('aria-label', 'Banking destinations');
         menu.innerHTML = `
+          <button type="button" role="menuitem" data-banking-destination="pay_next" hidden disabled>Banking Pay NEXT</button>
+          <button type="button" role="menuitem" data-banking-destination="cases_next" hidden disabled>Payment Advances / Snoozes</button>
+          <button type="button" role="menuitem" data-banking-destination="advance_next" hidden disabled>New Payment Advance</button>
+          <button type="button" role="menuitem" data-banking-destination="credit_next" hidden disabled>New Manual Credit</button>
+          <button type="button" role="menuitem" data-banking-destination="debt_next" hidden disabled>New Manual Debt</button>
           <button type="button" role="menuitem" data-banking-destination="pay">Banking Pay</button>
           <button type="button" role="menuitem" data-banking-destination="payment_batches">Payment Batches</button>
           <button type="button" role="menuitem" data-banking-destination="loans_snoozes">Loans and Snoozes</button>
           <button type="button" role="menuitem" data-banking-destination="id">Invoice Discounting</button>
         `;
         document.body.appendChild(menu);
+        const ownerClient = bankingNextOwnerClient();
+        const ownerNotice = document.createElement('p'); ownerNotice.setAttribute('role','status');
+        ownerNotice.textContent = 'Reading Banking ownership…'; menu.appendChild(ownerNotice);
+        for (const item of menu.querySelectorAll('[data-banking-destination]')) {
+          if (item.dataset.bankingDestination !== 'id') item.disabled = true;
+        }
+        const ownerScope = 'banking:' + crypto.randomUUID();
+        const ownerActor = SESSION?.user?.id || null;
+        const ownerRead = ownerClient ? ownerClient.begin(ownerScope) : Promise.reject(new Error('OWNER_UNAVAILABLE'));
+        void ownerRead.then(status=>{
+          if (!menu.isConnected || SESSION?.user?.id !== ownerActor || ownerClient.snapshot().scope !== ownerScope) return;
+          ownerNotice.textContent = bankingNextOwnerMessage(status);
+          const nextItem=menu.querySelector('[data-banking-destination="pay_next"]');
+          nextItem.hidden=status.active_owner!=='NEXT'; nextItem.disabled=status.active_owner!=='NEXT';
+          const casesItem=menu.querySelector('[data-banking-destination="cases_next"]');casesItem.hidden=status.active_owner!=='NEXT';casesItem.disabled=status.active_owner!=='NEXT';
+          const advanceItem=menu.querySelector('[data-banking-destination="advance_next"]');advanceItem.hidden=status.active_owner!=='NEXT';advanceItem.disabled=status.active_owner!=='NEXT';
+          const creditItem=menu.querySelector('[data-banking-destination="credit_next"]');creditItem.hidden=status.active_owner!=='NEXT';creditItem.disabled=status.active_owner!=='NEXT';
+          const debtItem=menu.querySelector('[data-banking-destination="debt_next"]');debtItem.hidden=status.active_owner!=='NEXT';debtItem.disabled=status.active_owner!=='NEXT';
+          for(const item of menu.querySelectorAll('[data-banking-destination]')) {
+            if(!['id','pay_next','cases_next','advance_next','credit_next','debt_next'].includes(item.dataset.bankingDestination)) item.disabled=status.active_owner==='DISABLED';
+          }
+        }).catch(()=>{if(menu.isConnected && SESSION?.user?.id===ownerActor)ownerNotice.textContent=bankingNextOwnerMessage(null);});
         const rect = b.getBoundingClientRect();
         menu.style.left = `${Math.round(window.scrollX + rect.left)}px`;
         menu.style.top = `${Math.round(window.scrollY + rect.bottom + 6)}px`;
@@ -7005,11 +7165,89 @@ function renderTopNav(){
           }
 
           try {
+            const ownerClient = bankingNextOwnerClient();
+            const owner = ownerClient?.peek() || null;
+            if (destination !== 'id' && (!['pay_next','cases_next','advance_next','credit_next','debt_next'].includes(destination) || owner?.active_owner !== 'NEXT')) {
+              alert(bankingNextOwnerMessage(owner, destination !== 'pay_next')); return;
+            }
+            if(destination==='cases_next'){await openBankingNextCases();return;}
+            if(destination==='advance_next'){await openBankingPaymentAdvanceModal({});return;}
+            if(destination==='credit_next'){await openBankingManualCreditAdjustmentModal({});return;}
+            if(destination==='debt_next'){await openBankingManualDebtAdjustmentModal({});return;}
+            if (destination === 'pay_next') {
+              if (!window.CloudTMSBpayNextOffice || !SESSION?.user?.id) {
+                alert('Banking Pay NEXT is unavailable. Please sign in again.');
+                return;
+              }
+              const openNextIssueTimesheet = async (issue,review=false) => {
+                    const actor = String(SESSION?.user?.id || '').toLowerCase(),uuid=id=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id||'');
+                    const captured=review&&issue.reader_kind==='PREPARE_ISSUES';
+                    if (actor !== issue.context.actor_user_id || ownerClient.peek()?.active_owner !== 'NEXT'
+                        || !issue.physical_timesheet_id || (review
+                          ? captured
+                            ? ![issue.accepted_run_id,issue.work_id,issue.expected_revision_id,issue.candidate_id,issue.physical_timesheet_id].every(uuid)
+                              || !(issue.run_worker_id===null||uuid(issue.run_worker_id))
+                              || !/^[1-9][0-9]{0,18}$/.test(issue.physical_timesheet_version||'')
+                              || issue.context.owner_epoch!==ownerClient.peek()?.owner_epoch
+                              || !['CANDIDATE','SKIPPED_WORK','SYSTEM_RELEASE','OFFICE_RELEASE','EXPIRED','DISCARDED'].includes(issue.origin)
+                              || !/^(?:(?:SKIP|RELEASE|CANDIDATE|EXPIRED|DISCARDED):|PAGE:[1-9][0-9]{0,18}:)[0-9a-f-]{36}$/.test(issue.row_key||'')
+                            : ![issue.accepted_run_id,issue.run_worker_id,issue.work_id,issue.candidate_id,issue.physical_timesheet_id].every(uuid)
+                              || !['SOURCE_PAY_QUERY_OPEN','SOURCE_PAY_QUERY_EVIDENCE_UNAVAILABLE'].includes(issue.reason_code)
+                          : issue.accepted_run_id)) throw new Error('Payment unavailable');
+                    const parentFooter = document.querySelector('[data-next-window-footer]');
+                    const parent = window.__modalStack?.at(-1);
+                    if (!parent || parent.kind !== 'bpay-next-read') throw new Error('Payment unavailable');
+                    const opening = openTimesheet({ timesheet_id: issue.physical_timesheet_id,
+                      __bpayNextExactPhysicalId: issue.physical_timesheet_id,
+                      __bpayNextExactPhysicalVersion: issue.physical_timesheet_version ?? null,
+                      candidate_id: issue.candidate_id, reference_number: issue.timesheet_reference ?? null, source_root_timesheet_id: issue.source_root_timesheet_id ?? null,
+                      source_week_ending_date: issue.source_week_ending_date ?? null });
+                    const child = window.__modalStack?.at(-1);
+                    if (!child || child === parent || child.kind !== 'timesheets') {
+                      await opening; throw new Error('Timesheet unavailable');
+                    }
+                    // Parent's managed footer and hidden-tab chrome belong only
+                    // to that frame. Its onMount restores them on child close.
+                    child._bpayNextEvidenceNavigation = true;
+                    document.getElementById('modal').classList.add('bpay-next-timesheet-evidence');
+                    parentFooter?.remove();
+                    const tabs = document.getElementById('modalTabs');
+                    tabs.hidden = false; tabs.style.display = '';
+                    document.getElementById('modal').classList.remove('ctms-kind-bpay-next-read',
+                      'bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');
+                    const dismissed = new Promise(resolve => {
+                      const previousDismiss = child._onDismiss;
+                      child._onDismiss = function (...args) {
+                        try { previousDismiss?.apply(this, args); } finally {
+                          document.getElementById('modal')?.classList.remove('bpay-next-timesheet-evidence'); resolve();
+                        }
+                      };
+                    });
+                    await opening; await dismissed;
+                    if (String(SESSION?.user?.id || '').toLowerCase() !== actor
+                        || ownerClient.peek()?.active_owner !== 'NEXT'
+                        || !window.__modalStack?.includes(parent)) throw new Error('Payment unavailable');
+              };
+              window.CloudTMSBpayNextOffice.open({
+                document, window, api: API, authFetch, actorId: SESSION.user.id,
+                showReadWindow: window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
+                currentActorId: () => SESSION?.user?.id || null,
+                pickCandidate: (onPick) => openCandidatePicker(onPick, { ignoreMembership: true }),
+                openCandidateRecord: (candidateId) => openCandidate({ id: candidateId }),
+                issueOwners: {
+                  timesheet: issue => openNextIssueTimesheet(issue),
+                  reviewTimesheet: issue => openNextIssueTimesheet(issue,true)
+                },
+                ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT' && ownerClient.peek()?.owner_epoch === owner.owner_epoch,
+                onOwnerStale: (code) => ownerClient.invalidate(code)
+              });
+              return;
+            }
             if (typeof openBanking !== 'function') {
               alert('Banking modal not yet implemented.');
               return;
             }
-            await openBanking(destination);
+            await openBanking(destination, {ownerQualified:true});
           } catch (e) {
             console.error('[NAV][BANKING] openBanking failed', e);
             alert(e?.message || 'Failed to open Banking.');
@@ -12763,7 +13001,49 @@ async function bankingExportSnoozesPdf(filters = {}) {
 }
 
 
+async function openBankingNextCases(){
+ const actor=String(SESSION?.user?.id??'').toLowerCase(),parent=currentFrame(),prefix=window.__modalStack?.slice()??[],client=bankingNextOwnerClient();
+ const current=()=>String(SESSION?.user?.id??'').toLowerCase()===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame);
+ try{const owner=await client.begin('case-list:'+crypto.randomUUID());if(!current()||currentFrame()!==parent||owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextCaseList)throw Error();
+  const options={document,window,actorId:actor,api:API,authFetch,currentActorId:()=>String(SESSION?.user?.id??'').toLowerCase(),current,
+   ownerReady:()=>client.peek()?.active_owner==='NEXT'&&client.peek()?.owner_epoch===owner.owner_epoch,
+   showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
+   pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),pickClient:onPick=>openClientPicker(onPick)};
+  options.openSnoozedTimesheet=async(row,bound)=>{
+   const caller=currentFrame(),callerContext=caller?._ctxRef,qualified=()=>current()&&bound.current()&&options.ownerReady()===true&&window.__modalStack?.includes(caller)&&caller._ctxRef===callerContext;
+   if(!qualified()||caller.kind!=='bpay-next-read')throw Error('Timesheet unavailable');const reader=window.CloudTMSBpayNextWorkbench.createWorkbenchClient(bound),point=await reader.loadWorkbenchPage('SNOOZES',{snooze_id:row.snooze_id,limit:1});
+   if(!qualified()||currentFrame()!==caller||point.rows.length!==1||point.rows[0].candidate_id!==row.candidate_id||point.rows[0].work_id!==row.work_id||!point.rows[0].physical_timesheet_id)throw Error('Timesheet unavailable');
+   const item=point.rows[0],footer=document.querySelector('[data-next-window-footer]'),opening=openTimesheet({timesheet_id:item.physical_timesheet_id,__bpayNextExactPhysicalId:item.physical_timesheet_id,candidate_id:item.candidate_id,reference_number:item.timesheet_reference??null});
+   const child=currentFrame();if(!child||child===caller||child.kind!=='timesheets'){await opening;throw Error('Timesheet unavailable');}
+   child._bpayNextEvidenceNavigation=true;document.getElementById('modal').classList.add('bpay-next-timesheet-evidence');footer?.remove();const tabs=document.getElementById('modalTabs');tabs.hidden=false;tabs.style.display='';document.getElementById('modal').classList.remove('ctms-kind-bpay-next-read','bpay-next-small-window','bpay-next-wide-window','bpay-next-confirmation');
+   const dismissed=new Promise(resolve=>{const previous=child._onDismiss;child._onDismiss=function(...args){try{previous?.apply(this,args);}finally{document.getElementById('modal')?.classList.remove('bpay-next-timesheet-evidence');resolve();}};});await opening;await dismissed;if(!qualified()||currentFrame()!==caller)throw Error('Timesheet unavailable');
+  };
+  return window.CloudTMSBpayNextCaseList.open(options);
+ }catch{if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'Payment Advances / Snoozes',message:'Could not open the payments list; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-cases-notice'});return null;}
+}
+
 async function openBankingPaymentAdvanceModal(seed = {}) {
+  { // FC09 qualifies both create and edit before any legacy reader.
+    const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+    const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+    const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
+      &&(!parent||parent._ctxRef===boundContext);
+    try {
+      const owner=await ownerClient.begin('advance:case:'+crypto.randomUUID());
+      if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return null;
+      if(owner.active_owner==='NEXT') {
+        if(SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextPaymentAdvance)throw Error();
+        return await window.CloudTMSBpayNextPaymentAdvance.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+          ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+          pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),
+          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated,onCaseEdited:seed.onCaseEdited},seed);
+      }
+      if(owner.active_owner!=='LEGACY')throw Error();
+    } catch {
+      if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'New Payment Advance',message:'Could not open the Payment Advance window; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-advance-notice'});
+      return null;
+    }
+  }
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -14266,6 +14546,27 @@ async function openBankingPaymentAdvanceModal(seed = {}) {
 
 
 async function openBankingManualCreditAdjustmentModal(seed = {}) {
+  { // FC09 qualifies both create and edit before any legacy reader.
+    const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+    const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+    const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
+      &&(!parent||parent._ctxRef===boundContext);
+    try {
+      const owner=await ownerClient.begin('credit:case:'+crypto.randomUUID());
+      if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return null;
+      if(owner.active_owner==='NEXT') {
+        if(SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextManualCredit)throw Error();
+        return await window.CloudTMSBpayNextManualCredit.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+          ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+          pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),
+          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated,onCaseEdited:seed.onCaseEdited},seed);
+      }
+      if(owner.active_owner!=='LEGACY')throw Error();
+    } catch {
+      if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'New Manual Credit',message:'Could not open the Manual Credit window; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-credit-notice'});
+      return null;
+    }
+  }
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -15312,6 +15613,27 @@ async function openBankingManualCreditAdjustmentModal(seed = {}) {
 
 
 async function openBankingManualDebtAdjustmentModal(seed = {}) {
+  { // FC09 qualifies both create and edit before any legacy reader.
+    const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+    const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+    const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
+      &&(!parent||parent._ctxRef===boundContext);
+    try {
+      const owner=await ownerClient.begin('debt:case:'+crypto.randomUUID());
+      if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return null;
+      if(owner.active_owner==='NEXT') {
+        if(SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextManualDebt)throw Error();
+        return await window.CloudTMSBpayNextManualDebt.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+          ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+          pickCandidate:onPick=>openCandidatePicker(onPick,{ignoreMembership:true}),
+          showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseCreated:seed.onCaseCreated,onCaseEdited:seed.onCaseEdited},seed);
+      }
+      if(owner.active_owner!=='LEGACY')throw Error();
+    } catch {
+      if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'New Manual Debt',message:'Could not open the Manual Debt window; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-debt-notice'});
+      return null;
+    }
+  }
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -16643,7 +16965,27 @@ function bankingPayCandidatePreviewMatchesFinanceCaseTransitionV1(candidatePrevi
     });
 }
 
+async function openBankingNextCaseRestructure(seed){
+  const channelChange=String(seed?.modal_mode??seed?.resolution_family??'').toUpperCase()==='TAXABLE_CHANNEL_RESTRUCTURE';
+  const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+  const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+  const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)&&(!parent||parent._ctxRef===boundContext);
+  try{const owner=await ownerClient.begin('case-restructure:'+crypto.randomUUID());
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return {handled:true,result:null};
+    if(owner.active_owner==='LEGACY')return {handled:false};
+    const screen=channelChange?window.CloudTMSBpayNextCaseChannel:window.CloudTMSBpayNextCaseRestructure;
+    if(owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!screen)throw Error();
+    const contextPage=await window.CloudTMSBpayNextOffice.createTransport({actorId:actor,currentActorId:()=>SESSION?.user?.id??null,api:API,authFetch}).page('CASE_LIST',
+      {filters:{candidate_id:seed.candidate_id,client_id:null,case_subtype:'ALL',view:'ALL',snooze:'ALL',hide_completed:false},sort:'CASE_ID_ASC',after:null,limit:5});
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext||contextPage.context.owner_epoch!==owner.owner_epoch)throw Error();
+    const result=await screen.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+      restructureNamespace:{agency_id:contextPage.context.agency_id,owner_epoch:contextPage.context.owner_epoch},channelNamespace:{agency_id:contextPage.context.agency_id,owner_epoch:contextPage.context.owner_epoch},ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+      showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseChanged:seed?.onCaseChanged},seed);
+    return {handled:true,result};
+  }catch{if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'Restructure',message:'Could not open this arrangement; refresh and try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-case-restructure-notice'});return {handled:true,result:null};}
+}
 async function openBankingFinanceCaseRestructureModal(seed = {}) {
+  const next=await openBankingNextCaseRestructure(seed);if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -20301,7 +20643,29 @@ function sanitizeBankingPaymentIssueError(errorOrJson, context = '') {
 
 
 
+// FC10 qualifies the original NEXT Case before any legacy Case/state lookup.
+async function openBankingNextCaseStatus(seed,action) {
+  const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+  const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+  const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)
+    &&(!parent||parent._ctxRef===boundContext);
+  try {
+    const owner=await ownerClient.begin('case-status:'+crypto.randomUUID());
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return {handled:true,result:null};
+    if(owner.active_owner==='LEGACY')return {handled:false};
+    if(owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextCasePause)throw Error();
+    const result=await window.CloudTMSBpayNextCasePause.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+      ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+      showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseChanged:seed?.onCaseChanged},seed,action);
+    return {handled:true,result};
+  } catch {
+    if(current()&&currentFrame()===parent)await openUiConfirmModal({title:action==='CASE_PAUSE'?'Pause recovery':'Resume recovery',message:'Could not open this Case; refresh and try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-case-status-notice'});
+    return {handled:true,result:null};
+  }
+}
+
 async function confirmBankingFinanceCasePause(seed = {}) {
+  const next=await openBankingNextCaseStatus(seed,'CASE_PAUSE');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -20459,6 +20823,7 @@ async function confirmBankingFinanceCasePause(seed = {}) {
 }
 
 async function confirmBankingFinanceCaseResume(seed = {}) {
+  const next=await openBankingNextCaseStatus(seed,'CASE_RESUME');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -20614,7 +20979,25 @@ async function confirmBankingFinanceCaseResume(seed = {}) {
     }
   );
 }
+async function openBankingNextCaseWriteOff(seed){
+  const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,ownerClient=bankingNextOwnerClient();
+  const prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef;
+  const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)&&(!parent||parent._ctxRef===boundContext);
+  try{const owner=await ownerClient.begin('case-write-off:'+crypto.randomUUID());
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return {handled:true,result:null};
+    if(owner.active_owner==='LEGACY')return {handled:false};
+    if(owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextWriteOff)throw Error();
+    const contextPage=await window.CloudTMSBpayNextOffice.createTransport({actorId:actor,currentActorId:()=>SESSION?.user?.id??null,api:API,authFetch}).page('CASE_LIST',
+      {filters:{candidate_id:seed.candidate_id,client_id:null,case_subtype:'ALL',view:'ALL',snooze:'ALL',hide_completed:false},sort:'CASE_ID_ASC',after:null,limit:5});
+    if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext||contextPage.context.owner_epoch!==owner.owner_epoch)throw Error();
+    const result=await window.CloudTMSBpayNextWriteOff.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+      writeOffNamespace:{agency_id:contextPage.context.agency_id,owner_epoch:contextPage.context.owner_epoch},ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,
+      showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),onCaseChanged:seed?.onCaseChanged},seed);
+    return {handled:true,result};
+  }catch{if(current()&&currentFrame()===parent)await openUiConfirmModal({title:'Write off',message:'Could not open this recovery; refresh and try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-case-write-off-notice'});return {handled:true,result:null};}
+}
 async function confirmBankingFinanceCaseWriteOff(seed = {}) {
+  const next=await openBankingNextCaseWriteOff(seed);if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -49398,7 +49781,39 @@ async function openBankingFinanceSnoozeModal(seed = {}) {
 }
 
 
+
+// FC14: owner qualification precedes any native/legacy finance reader or cache.
+async function candidateFinanceOwner(candidateId) {
+ const actor=SESSION?.user?.id,parent=currentFrame(),boundContext=parent?._ctxRef,prefix=window.__modalStack?.slice()??[],client=bankingNextOwnerClient();
+ const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)&&(!parent||parent._ctxRef===boundContext);
+ const cache=(window.__candidateFinanceOwners ||= {}),cid=String(candidateId??'');cache[cid]={active_owner:'UNKNOWN',actor};
+ let owner;try{owner=await client.begin('candidate-finance:'+crypto.randomUUID());}catch{if(current())paintNextCandidateFinance(cid,'Could not load the finance report; try again.');throw Error('Could not load the finance report; try again.');}
+ if(!current()||currentFrame()!==parent)throw Error('Window changed');
+ cache[cid]={...owner,actor};if(owner.active_owner==='NEXT')paintNextCandidateFinance(cid);
+ return {owner,current,ready:()=>current()&&client.peek()?.active_owner===owner.active_owner&&client.peek()?.owner_epoch===owner.owner_epoch};
+}
+function paintNextCandidateFinance(candidateId,message='') {
+ const currentId=String(window.modalCtx?.data?.id??currentFrame()?._ctxRef?.data?.id??'');if(currentId!==String(candidateId))return;
+ const summary=document.getElementById('candidateAdvancesSummary');
+ if(summary){summary.replaceChildren();if(message){const line=document.createElement('p');line.textContent=message;line.setAttribute('role','alert');summary.append(line);}const button=document.createElement('button');button.className='btn';button.type='button';button.textContent=message?'Retry':'Open Candidate Finance Report';button.setAttribute('data-view-action','candidate-finance-report');button.onclick=()=>void(message?fetchCandidateAdvances(candidateId).catch(()=>{}):openCandidateLoansOverpaymentsModal(candidateId));summary.append(button);}
+ for(const id of ['candidateMissingShiftAdvances','candidateGeneralAdvances'])document.getElementById(id)?.replaceChildren();
+}
+async function openBankingNextCaseFinance(seed,kind) {
+ const actor=SESSION?.user?.id,parent=currentFrame(),parentContext=window.modalCtx,prefix=window.__modalStack?.slice()??[],boundContext=parent?._ctxRef,client=bankingNextOwnerClient();
+ const current=()=>SESSION?.user?.id===actor&&prefix.every((frame,index)=>window.__modalStack?.[index]===frame)&&(!parent||parent._ctxRef===boundContext);
+ try {const owner=await client.begin('case-finance:'+crypto.randomUUID());if(!current()||currentFrame()!==parent||window.modalCtx!==parentContext)return {handled:true};
+  if(owner.active_owner==='LEGACY')return {handled:false};
+  if(owner.active_owner!=='NEXT'||SESSION?.user?.role!=='admin'||!window.CloudTMSBpayNextCaseAudit)throw Error();
+  const result=await window.CloudTMSBpayNextCaseAudit.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,current,
+   ownerReady:()=>client.peek()?.active_owner==='NEXT'&&client.peek()?.owner_epoch===owner.owner_epoch,
+   showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal}),
+   openAudit:binding=>openBankingNextCaseFinance(binding,'CASE_AUDIT'),openTimesheet:typeof openTimesheet==='function'?id=>openTimesheet({timesheet_id:id}):undefined},seed,kind);
+  return {handled:true,result};
+ }catch{if(current()&&currentFrame()===parent)await openUiConfirmModal({title:kind==='CASE_AUDIT'?'Case audit':'Candidate Finance Report',message:'Could not open the finance report; try again.',confirm_label:'Close',hide_cancel:true,kind:'banking-case-finance-notice'});return {handled:true};}
+}
+
 async function openBankingFinanceCaseAuditModal(seed = {}) {
+  const next=await openBankingNextCaseFinance(seed,'CASE_AUDIT');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -90081,6 +90496,8 @@ function renderBankingPayBatchPayeEntryModal() {
 
 function openBulkTimesheetActionProgressModal(options = {}) {
   const opts = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+  const missingRateActor = SESSION?.user?.id || null;
+  const missingRateParentFrame = _currentFrame();
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const toFiniteNumber = (value, fallback = 0) => {
     const num = Number(value);
@@ -90300,14 +90717,20 @@ function openBulkTimesheetActionProgressModal(options = {}) {
 
   const renderFailures = () => {
     if (!failuresWrapEl || !failuresEl || !failuresSummaryEl) return;
-    const count = state.failures.length;
+    const structuralRate = bpayNextMissingRatePresentation(state.structuralFailure, missingRateActor);
+    const count = state.failures.length + (structuralRate ? 1 : 0);
     failuresWrapEl.style.display = count > 0 ? '' : 'none';
     failuresSummaryEl.textContent = count === 1 ? '1 failure' : `${count} failures`;
     const visibleFailures = state.failures.slice(0, 200);
-    const lines = visibleFailures.map((failure) => {
+    const terminal = !!(state.completed || state.stopped || state.structuralFailure);
+    const rateButton = (failure, index) => bpayNextMissingRatePresentation(failure, missingRateActor)
+      ? `<br><button class="btn" data-act="bulk-ts-progress-contract-rates" data-failure-index="${index}" ${terminal ? '' : 'disabled'}>Open Contract rates</button>` : '';
+    const lines = visibleFailures.map((failure, index) => {
       const chunkText = failure.chunk_index ? `Chunk ${failure.chunk_index}: ` : '';
-      return `<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);"><strong>${enc(chunkText + String(failure.row_key || 'row'))}</strong><br>${enc(failure.message || 'Failed')}</div>`;
+      const rate = bpayNextMissingRatePresentation(failure, missingRateActor);
+      return `<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);"><strong>${enc(chunkText + String(failure.row_key || 'row'))}</strong><br>${enc(rate?.message || failure.message || 'Failed')}${rateButton(failure, index)}</div>`;
     });
+    if (structuralRate) lines.push(`<div style="padding:6px 0;">${enc(structuralRate.message)}${rateButton(state.structuralFailure, -1)}</div>`);
     if (state.failures.length > visibleFailures.length) {
       lines.push(`<div style="padding:6px 0;border-top:1px solid rgba(254,202,202,0.75);font-weight:700;">${enc(`${state.failures.length - visibleFailures.length} more failures not shown here.`)}</div>`);
     }
@@ -90454,10 +90877,22 @@ function openBulkTimesheetActionProgressModal(options = {}) {
     overlay
   };
 
-  function onClick(ev) {
+  async function onClick(ev) {
     const btn = ev?.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
     if (!btn) return;
     const act = trimStr(btn.getAttribute('data-act'));
+    if (act === 'bulk-ts-progress-contract-rates') {
+      if (btn.disabled || state.closed || !root.isConnected || !(state.completed || state.stopped || state.structuralFailure)
+          || SESSION?.user?.id !== missingRateActor || _currentFrame() !== missingRateParentFrame) return;
+      const index = Number(btn.getAttribute('data-failure-index'));
+      const failure = index === -1 ? state.structuralFailure : (Number.isInteger(index) && index >= 0 ? state.failures[index] : null);
+      const rate = bpayNextMissingRatePresentation(failure, missingRateActor);
+      if (!rate) return;
+      controller.close();
+      try { await bpayNextOpenMissingRateContract(rate, missingRateActor, missingRateParentFrame); }
+      catch (error) { if (SESSION?.user?.id === missingRateActor && _currentFrame() === missingRateParentFrame) window.alert(error?.message || 'The Contract rates could not be loaded.'); }
+      return;
+    }
     if (act === 'bulk-ts-progress-stop') {
       controller.requestStop();
       return;
@@ -94964,6 +95399,7 @@ function attachBankingModalDelegatedHandlers() {
     };
 
     const childResultShouldRefreshPayWorkbench = (childResult) => {
+      if(childResult?.bpay_next===true)return false;
       if (childResult === true) return true;
       if (childResult === false || childResult == null) return false;
       if (typeof childResult !== 'object' || Array.isArray(childResult)) return false;
@@ -100186,49 +100622,6 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return getFinanceCases().find((row) => String(row?.finance_case_id || row?.id || '').trim() === id) || null;
     };
 
-    const canEditBankDetailsForFinanceCase = (row) => {
-      if (!row || typeof row !== 'object') return false;
-
-      const actionFlags = (row.action_flags && typeof row.action_flags === 'object') ? row.action_flags : {};
-      const caseType = String(row.case_type || '').trim().toUpperCase();
-      const payMethod = String(
-        row.pay_method ||
-        row.current_pay_method ||
-        row.source_pay_method ||
-        ''
-      ).trim().toUpperCase();
-      const taxability = String(row.taxability || '').trim().toUpperCase();
-      const routingKind = String(
-        row.routing_kind ||
-        row.finance_routing_kind ||
-        ''
-      ).trim().toUpperCase();
-
-      const explicitlyEditable =
-        actionFlags.can_edit_bank_details === true ||
-        row.edit_bank_details_allowed === true ||
-        row.oneoff_bank_details_editable === true;
-
-      if (!explicitlyEditable) return false;
-
-      if (caseType === 'PAYMENT_ADVANCE') {
-        return payMethod === 'UMBRELLA';
-      }
-
-      if (caseType === 'MANUAL_CREDIT_ADJUSTMENT') {
-        const isNonTaxable = (taxability === 'NON_TAXABLE' || taxability === 'NONTAXABLE');
-        const isCandidateDirected =
-          !routingKind ||
-          routingKind === 'CANDIDATE_DIRECTED_ONEOFF' ||
-          routingKind === 'ONEOFF_BANK_ACCOUNT' ||
-          routingKind === 'ONE_OFF_BANK_ACCOUNT';
-
-        return payMethod === 'UMBRELLA' && isNonTaxable && isCandidateDirected;
-      }
-
-      return false;
-    };
-
     const findTimesheetSnooze = ({ snooze_id, timesheet_id } = {}) => {
       const sid = String(snooze_id || '').trim();
       const tid = String(timesheet_id || '').trim();
@@ -102412,6 +102805,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
     }
       if (a === 'banking:finance:editPaymentAdvance') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      if(bankingNextOwnerClient().peek()?.active_owner==='NEXT'){
+        const context=findFinanceCaseById(financeCaseId);
+        await openBankingPaymentAdvanceModal({...(context??{}),case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||context?.candidate_id||'')});return;
+      }
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Payment Advance not found.'); return; }
       const availability = getFinanceCaseActionAvailability(row);
@@ -102429,6 +102826,10 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:finance:editManualCredit') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      if(bankingNextOwnerClient().peek()?.active_owner==='NEXT'){
+        const context=findFinanceCaseById(financeCaseId);
+        await openBankingManualCreditAdjustmentModal({...(context??{}),case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||context?.candidate_id||'')});return;
+      }
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Manual Credit Adjustment not found.'); return; }
       const availability = getFinanceCaseActionAvailability(row);
@@ -102444,47 +102845,12 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
       return;
     }
 
-    if (a === 'banking:finance:editBankDetails') {
-      const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
-      const row = findFinanceCaseById(financeCaseId);
-      if (!row) { toast('Finance case not found.'); return; }
-      if (!canEditBankDetailsForFinanceCase(row)) {
-        toast('Bank details can only be edited for eligible umbrella one-off payouts that are still Not processed yet.');
-        return;
-      }
-
-      const caseType = String(row.case_type || '').trim().toUpperCase();
-
-      if (caseType === 'PAYMENT_ADVANCE') {
-        if (typeof openBankingPaymentAdvanceModal !== 'function') {
-          toast('Payment Advance modal is not available.');
-          return;
-        }
-        const childResult = await openBankingPaymentAdvanceModal(deep(row));
-        if (childResultShouldRefreshPayWorkbench(childResult)) {
-          await refreshPayWorkbench({ reason: 'FINANCE_CHILD_MODAL_RETURN', mode: 'SOFT' });
-        }
-        return;
-      }
-
-      if (caseType === 'MANUAL_CREDIT_ADJUSTMENT') {
-        if (typeof openBankingManualCreditAdjustmentModal !== 'function') {
-          toast('Manual Credit Adjustment modal is not available.');
-          return;
-        }
-        const childResult = await openBankingManualCreditAdjustmentModal(deep(row));
-        if (childResultShouldRefreshPayWorkbench(childResult)) {
-          await refreshPayWorkbench({ reason: 'FINANCE_CHILD_MODAL_RETURN', mode: 'SOFT' });
-        }
-        return;
-      }
-
-      toast('Edit bank details is not available for this finance case.');
-      return;
-    }
-
     if (a === 'banking:finance:editManualDebt') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      if(bankingNextOwnerClient().peek()?.active_owner==='NEXT'){
+        const context=findFinanceCaseById(financeCaseId);
+        await openBankingManualDebtAdjustmentModal({...(context??{}),case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||context?.candidate_id||'')});return;
+      }
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Manual Debt Adjustment not found.'); return; }
       const availability = getFinanceCaseActionAvailability(row);
@@ -102519,6 +102885,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:finance:pause') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      const native=await openBankingNextCaseStatus({case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||''),candidate_display_name:String(ds('candidateDisplayName')||'Candidate')},'CASE_PAUSE');
+      if(native.handled){if(childResultShouldRefreshPayWorkbench(native.result))await refreshPayWorkbench({reason:'FINANCE_CHILD_MODAL_RETURN',mode:'SOFT'});return;}
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Finance case not found.'); return; }
       if (typeof confirmBankingFinanceCasePause !== 'function') { toast('Pause confirmation is not available.'); return; }
@@ -102531,6 +102899,8 @@ async function openBankingPayTaxableManualDebtResolutionModal(seed = {}) {
 
     if (a === 'banking:finance:resume') {
       const financeCaseId = String(ds('financeCaseId') || dget('data-finance-case-id') || '').trim();
+      const native=await openBankingNextCaseStatus({case_id:financeCaseId,candidate_id:String(ds('candidateId')||dget('data-candidate-id')||''),candidate_display_name:String(ds('candidateDisplayName')||'Candidate')},'CASE_RESUME');
+      if(native.handled){if(childResultShouldRefreshPayWorkbench(native.result))await refreshPayWorkbench({reason:'FINANCE_CHILD_MODAL_RETURN',mode:'SOFT'});return;}
       const row = findFinanceCaseById(financeCaseId);
       if (!row) { toast('Finance case not found.'); return; }
       if (typeof confirmBankingFinanceCaseResume !== 'function') { toast('Resume confirmation is not available.'); return; }
@@ -143284,7 +143654,14 @@ async function showImportFlowConfirm(message, opts = {}) {
   return !!(result && result.confirmed === true);
 }
 
-async function openBanking(startTabKey = 'pay') {
+async function openBanking(startTabKey = 'pay', nextOptions = {}) {
+  const ownerClient = bankingNextOwnerClient();
+  if (nextOptions.ownerQualified !== true) {
+    try { await ownerClient?.begin('banking:' + crypto.randomUUID()); } catch {}
+  }
+  if (String(startTabKey || 'pay').trim() !== 'id') {
+    alert(bankingNextOwnerMessage(ownerClient?.peek() || null, true)); return;
+  }
   const deep = (o) => JSON.parse(JSON.stringify(o || {}));
   const trimStr = (v) => String(v == null ? '' : v).trim();
   const MODAL_CLASS = 'banking-modal';
@@ -148583,6 +148960,15 @@ try {
       details.timesheet?.timesheet_id ||
       ''
     ).trim();
+
+    // WB17 Banking navigation never silently replaces its exact reader origin.
+    if (baseRow.__bpayNextExactPhysicalId && (
+      fetchedCurrentId !== baseRow.__bpayNextExactPhysicalId
+      || (baseRow.__bpayNextExactPhysicalVersion != null
+        && String(details.timesheet?.version ?? details.current_version ?? '') !== String(baseRow.__bpayNextExactPhysicalVersion))
+    )) {
+      throw new Error('This Timesheet changed; return to Banking Pay and refresh.');
+    }
 
     if (fetchedCurrentId) {
       if (details.timesheet && typeof details.timesheet === 'object') {
@@ -154529,7 +154915,7 @@ if (segmentControlsDirty && (tsIdSave || rowNow.current_timesheet_id || rowNow.t
       ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT'].includes(weeklySourceCategory)
     );
     const title = hasTs
-      ? (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`)
+      ? (baseRow.__bpayNextExactPhysicalId && baseRow.reference_number ? `Timesheet · ${baseRow.reference_number}` : (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`))
       : `Weekly timesheet (planned) ${String(weekId).slice(0, 8)}…`;
 
  const hasRelatedId = !!(tsId || weekId);
@@ -178620,7 +179006,7 @@ function setWeeklySourceApprovedHoursStatus(root, message, tone) {
     : '';
 }
 
-async function refreshSimpleWeeklySourcePresentation() {
+async function refreshSimpleWeeklySourcePresentation(callerCurrent = () => true) {
   const mc = (typeof window !== 'undefined' && window.modalCtx && typeof window.modalCtx === 'object')
     ? window.modalCtx
     : null;
@@ -178638,6 +179024,7 @@ async function refreshSimpleWeeklySourcePresentation() {
 
   const openToken = mc.openToken;
   const freshDetails = await fetchTimesheetDetails(timesheetId);
+  if (!callerCurrent()) return false;
   if (!freshDetails || typeof freshDetails !== 'object') return false;
   if (!window.modalCtx || window.modalCtx !== mc || String(mc.entity || '').trim().toLowerCase() !== 'timesheets') return false;
 
@@ -178668,7 +179055,7 @@ async function refreshSimpleWeeklySourcePresentation() {
   return true;
 }
 
-async function refreshBulkWeeklySourcePresentation(state) {
+async function refreshBulkWeeklySourcePresentation(state, callerCurrent = () => true) {
   const st = (state && typeof state === 'object') ? state : null;
   if (!st || typeof refreshBulkAuthoriseActiveContext !== 'function') return false;
   const refreshed = await refreshBulkAuthoriseActiveContext(st, {
@@ -178681,6 +179068,7 @@ async function refreshBulkWeeklySourcePresentation(state) {
     authoritative: true,
     rerender: false
   });
+  if (!callerCurrent()) return false;
   if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
     await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][WEEKLY-SOURCE-APPROVED-HOURS]');
   }
@@ -178698,10 +179086,21 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
     !vm || vm.mount !== true || vm.manage_approved_hours_allowed !== true || !vm.manage_approved_hours
   ) return false;
 
+  const initiatingActor = SESSION?.user?.id || null;
+  const initiatingParent = window.__modalStack?.[window.__modalStack.length - 1] || null;
+  let initiatingFrame = null;
+  const parentCurrent = () => actorCurrent()
+    && (window.__modalStack?.[window.__modalStack.length - 1] || null) === initiatingParent;
+  const actorCurrent = () => !!initiatingActor && SESSION?.user?.id === initiatingActor;
+  const callerCurrent = () => actorCurrent() && !!initiatingFrame
+    && window.__modalStack?.[window.__modalStack.length - 1] === initiatingFrame;
+
   const modalState = {
     view_model: vm,
     surface: String(opts.surface || 'SIMPLE_TIMESHEET').trim().toUpperCase(),
     busy: false,
+    pending: null,
+    confirmation: null,
     needs_refresh: false,
     refresh_reason: ''
   };
@@ -178715,20 +179114,23 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
 
   const renderTab = () => presentationApi.renderManageApprovedHoursDialog(modalState.view_model);
   const refreshOwner = async () => {
-    if (!modalState.needs_refresh) return;
+    if (!modalState.needs_refresh || !parentCurrent()) return;
     try {
       if (modalState.surface === 'BULK_AUTHORISE') await refreshBulkWeeklySourcePresentation(opts.bulkState);
       else await refreshSimpleWeeklySourcePresentation();
+      if (!parentCurrent()) return;
       const message = modalState.refresh_reason === 'CONFLICT'
         ? 'The Timesheet changed. Review the latest approved hours.'
-        : 'Approved hours updated.';
+        : (modalState.confirmation?.message || 'Approved hours updated.');
       try { if (typeof toast === 'function') toast(message); } catch {}
     } catch {
+      if (!parentCurrent()) return;
       try { if (typeof toast === 'function') toast('Refresh the Timesheet to see the latest approved hours.'); } catch {}
     }
   };
 
   const closeChild = () => {
+    if (!callerCurrent()) return;
     try {
       if (typeof window.closeCurrentModalFrameSafely === 'function') {
         const closed = window.closeCurrentModalFrameSafely({ expectedKind: 'weekly-source-approved-hours' });
@@ -178741,6 +179143,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
     } catch {}
   };
   const closeAndRefreshOwner = () => {
+    if (!callerCurrent()) return;
     closeChild();
     setTimeout(() => { Promise.resolve(refreshOwner()).catch(() => {}); }, 0);
   };
@@ -178752,6 +179155,14 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
     });
     const close = document.getElementById('btnCloseModal');
     if (close) close.disabled = modalState.busy;
+  };
+
+  const retainExactRequestControls = (root) => {
+    if (!modalState.pending) return;
+    root?.querySelectorAll?.('button, input, select, textarea').forEach(control => {
+      control.disabled = control !== modalState.pending.trigger;
+    });
+    modalState.pending.trigger.textContent = modalState.sourceAdmissionBusy ? 'Try again' : 'Retry exact request';
   };
 
   const updateScheduleAvailability = (card) => {
@@ -178766,6 +179177,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
   const wire = () => {
     const root = document.querySelector('[data-weekly-source-manage-dialog="1"]');
     if (!root || root.dataset.boundWeeklySourceManageDialog === '1') return;
+    if (!callerCurrent()) return;
     root.dataset.boundWeeklySourceManageDialog = '1';
     root.querySelectorAll('[data-weekly-source-manage-item]').forEach((card) => updateScheduleAvailability(card));
     root.addEventListener('change', (event) => {
@@ -178777,7 +179189,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
       const direct = event.target?.closest?.('[data-weekly-source-submit-action]') || null;
       const selected = event.target?.closest?.('[data-weekly-source-submit-selected]') || null;
       const submit = direct || selected;
-      if (!submit || modalState.busy) return;
+      if (!submit || modalState.busy || !callerCurrent()) return;
       event.preventDefault();
       const card = submit.closest('[data-weekly-source-manage-item]');
       if (!card) return;
@@ -178793,9 +179205,9 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         break_minutes: field('break_minutes')?.value || '',
         reason: card.querySelector('[data-weekly-source-reason]')?.value || ''
       };
-      let command;
+      let command = modalState.pending?.command;
       try {
-        command = presentationApi.buildApprovedHoursCommand(modalState.view_model, {
+        if (!command) command = presentationApi.buildApprovedHoursCommand(modalState.view_model, {
           item_id: itemId,
           action,
           edits,
@@ -178806,18 +179218,37 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         return;
       }
 
+      if (!modalState.pending) modalState.pending = { command, trigger: submit };
       setWeeklySourceApprovedHoursStatus(root, 'Saving…', 'working');
       setBusy(root, true);
       try {
         const response = await apiPostJson(command.endpoint, command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
-        if (!response || response.ok !== true) throw new Error('COMMAND_FAILED');
+        if (!callerCurrent()) return;
+        const confirmation = presentationApi.protectedActionConfirmation(response);
+        if (!confirmation.confirmed) {
+          const failure = new Error(confirmation.message);
+          failure.json = response;
+          throw failure;
+        }
+        modalState.confirmation = confirmation;
+        modalState.pending = null;
         modalState.needs_refresh = true;
         modalState.refresh_reason = 'SUCCESS';
-        setWeeklySourceApprovedHoursStatus(root, 'Approved hours updated.', 'success');
+        setWeeklySourceApprovedHoursStatus(root, confirmation.message, 'success');
         setBusy(root, false);
         closeAndRefreshOwner();
       } catch (error) {
-        const conflict = Number(error?.status || error?.response?.status || 0) === 409;
+        if (!callerCurrent()) return;
+        const body = error?.json || error?.response || {};
+        const code = String(body.code || body.error_code || error?.code || '').trim();
+        const status = Number(error?.status || error?.response?.status || 0);
+        modalState.sourceAdmissionBusy = presentationApi.isSourceAdmissionBusy?.(error) === true;
+        const localOwnerRequired = ['LOCAL_OWNER_REQUIRED','BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(code);
+        const definite = localOwnerRequired || (body.ok === false && !!code
+          && body.retryable !== true && !/UNKNOWN|OUTCOME_UNCERTAIN/.test(code)
+          && (body.retryable === false || [400,403,409,422].includes(status)));
+        if (definite) modalState.pending = null;
+        const conflict = definite && !localOwnerRequired && status === 409;
         if (conflict) {
           modalState.needs_refresh = true;
           modalState.refresh_reason = 'CONFLICT';
@@ -178827,7 +179258,12 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
         }
         setBusy(root, false);
         root.querySelectorAll('[data-weekly-source-manage-item]').forEach((item) => updateScheduleAvailability(item));
-        setWeeklySourceApprovedHoursStatus(root, 'The change could not be saved. Please try again.', 'error');
+        retainExactRequestControls(root);
+        setWeeklySourceApprovedHoursStatus(root, modalState.sourceAdmissionBusy
+          ? presentationApi.SOURCE_ADMISSION_BUSY_MESSAGE : localOwnerRequired
+          ? 'Save this change through the Source editor. No payment change was accepted.'
+          : modalState.pending ? 'The save could not be confirmed. Retry exact request.'
+          : (weeklySourceCommandRefusalMessage(body) || 'The change was refused. Review the details before trying again.'), 'error');
       }
     });
   };
@@ -178846,6 +179282,7 @@ function openWeeklySourceApprovedHoursModal(options = {}) {
       stayOpenOnSave: false
     }
   );
+  initiatingFrame = window.__modalStack?.[window.__modalStack.length - 1] || null;
   try { requestAnimationFrame(() => requestAnimationFrame(wire)); } catch { setTimeout(wire, 0); }
   return true;
 }
@@ -178904,12 +179341,121 @@ function weeklySourceCommandRefusalMessage(response) {
 // Gate 10.  The two Office decisions.  One delegated listener serves the Simple
 // Timesheet and the Bulk right pane, because the buttons are rendered by the
 // same owner on both.  The buttons exist only where `proposal.decision` is
-// non-null; this handler re-reads the live view model before posting, so a
-// decision that has since been withdrawn server-side cannot be sent.
+// non-null. A new decision uses its live descriptor; an unknown decision always
+// retries its original frozen request before any fresh decision is admitted.
 function bindWeeklySourceLaterChangeDecisions() {
   if (typeof document === 'undefined') return false;
   if (document.documentElement?.dataset?.boundWeeklySourceDecisions === '1') return false;
   if (document.documentElement?.dataset) document.documentElement.dataset.boundWeeklySourceDecisions = '1';
+  const retained = new WeakMap();
+  const actor = () => String(SESSION?.user?.id || '').trim();
+  const rootOf = (vm) => String(vm?.proposal?.decision?.command_payload?.root_timesheet_id
+    || vm?.proposal?.members?.find((member) => member.is_requested_root)?.root_timesheet_id || '').trim();
+  const subjectOf = (context, bulk) => String(bulk
+    ? bulk.active_row?.current_timesheet_id || bulk.active_row?.timesheet_id
+      || bulk.active_details?.current_timesheet_id || bulk.active_details?.timesheet?.timesheet_id || ''
+    : context.data?.current_timesheet_id || context.data?.timesheet_id
+      || context.timesheetDetails?.current_timesheet_id || context.timesheetDetails?.timesheet?.timesheet_id || '').trim();
+  const namespace = (surface, vm) => {
+    const context = window.modalCtx;
+    const stack = Array.from(window.__modalStack || []);
+    const frame = stack[stack.length - 1];
+    const bulk = surface === 'BULK_AUTHORISE' ? resolveWeeklySourceBulkState() : null;
+    const row = bulk ? String(bulk.active_row_key || bulk.active_row_id
+      || bulk.active_row?.row_key || bulk.active_row?.timesheet_id || '').trim() : null;
+    const root = rootOf(vm);
+    const subject = context ? subjectOf(context, bulk) : '';
+    const existing = retained.get(context)?.find((entry) => entry.ns.actor === actor()
+      && entry.ns.frame === frame && entry.ns.surface === surface && entry.ns.bulk === bulk
+      && entry.ns.row === row && entry.ns.subject === subject);
+    if (!actor() || !context || !frame || !subject || (!root && !existing) || (bulk && !row)) return null;
+    return { actor: actor(), context, frame, stack, bulk, row, subject, root: root || existing.ns.root, surface };
+  };
+  const current = (ns) => {
+    if (actor() !== ns.actor || window.modalCtx !== ns.context) return false;
+    const stack = window.__modalStack || [];
+    if (stack.length !== ns.stack.length || !ns.stack.every((frame, i) => stack[i] === frame)) return false;
+    if (ns.bulk) {
+      const bulk = resolveWeeklySourceBulkState();
+      if (bulk !== ns.bulk || String(bulk.active_row_key || bulk.active_row_id
+          || bulk.active_row?.row_key || bulk.active_row?.timesheet_id || '').trim() !== ns.row) return false;
+    }
+    if (subjectOf(ns.context, ns.bulk) !== ns.subject) return false;
+    const root = rootOf(resolveWeeklySourceSurfaceViewModel(ns.surface));
+    return !root || root === ns.root;
+  };
+  const hostFor = (ns) => {
+    if (!current(ns)) return null;
+    const body = document.getElementById('modalBody');
+    if (!body) return null;
+    const existing = Array.from(body.querySelectorAll('[data-weekly-source-later-change]'))
+      .find((host) => host.getAttribute('data-weekly-source-surface') === ns.surface);
+    if (existing) return existing;
+    const parent = body.querySelector(ns.bulk ? '[data-weekly-source-right-pane]' : '[data-weekly-source-simple-lines]')
+      || body.querySelector('[data-weekly-source-informational="NEXT"]');
+    if (!parent) return null;
+    // KEEP can remove its proposal while its original reply is unknown. This
+    // notice is still that retained decision, not a new proposal or decision.
+    const retry = document.createElement('section'); retry.className = 'weekly-source-v1__notice is-waiting';
+    retry.setAttribute('data-weekly-source-later-change', 'RETAINED_REPLY');
+    retry.setAttribute('data-weekly-source-surface', ns.surface); parent.append(retry);
+    return retry;
+  };
+  const paint = (record) => {
+    const host = hostFor(record.ns);
+    if (!host) return;
+    let status = host.querySelector('[data-weekly-source-decision-status]');
+    if (!status) {
+      status = document.createElement('p');
+      status.setAttribute('data-weekly-source-decision-status', '');
+      status.setAttribute('data-next-live-copy', '');
+      status.setAttribute('role', 'status');
+      host.append(status);
+    }
+    if (status.textContent !== record.message) status.textContent = record.message;
+    status.setAttribute('role', record.error ? 'alert' : 'status');
+    if (!record.command) return;
+    if (!record.settled && !Array.from(host.querySelectorAll('[data-weekly-source-decision]'))
+        .some((control) => control.getAttribute('data-weekly-source-decision') === record.command.body.payload.decision)) {
+      let actions = host.querySelector('[data-weekly-source-decision-actions]');
+      if (!actions) {
+        actions = document.createElement('div'); actions.className = 'weekly-source-v1__later-change-actions';
+        actions.setAttribute('data-weekly-source-decision-actions', '1'); host.insertBefore(actions, status);
+      }
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'btn btn-outline';
+      retry.setAttribute('data-weekly-source-decision', record.command.body.payload.decision);
+      retry.setAttribute('data-weekly-source-surface', record.ns.surface); retry.textContent = 'Try again';
+      actions.append(retry);
+    }
+    for (const control of host.querySelectorAll('[data-weekly-source-decision]')) {
+      const chosen = control.getAttribute('data-weekly-source-decision') === record.command.body.payload.decision;
+      control.disabled = record.busy || record.settled || !chosen;
+      if (chosen && !record.busy && !record.settled && control.textContent !== 'Try again') control.textContent = 'Try again';
+    }
+  };
+  const accepted = (response, record) => {
+    const p = record.command.body.payload;
+    return response?.ok === true && typeof response.idempotent_replay === 'boolean'
+      && response.decision === p.decision && response.decision_bundle_id === p.decision_bundle_id
+      && ((p.decision === 'KEEP_CURRENTLY_APPROVED_HOURS' && response.retained === true
+          && response.published === false && response.bundle_revision === p.bundle_revision)
+        || (response.retained === false && typeof response.published === 'boolean'
+          && response.reviewed_bundle_revision === p.bundle_revision
+          && response.bundle_revision === p.bundle_revision + 1));
+  };
+  const definiteRefusal = (body) => body?.ok === false && body.published === false
+    && ((body.retryable === false && ['WEEKLY_SOURCE_ROOT_INTEGRITY_FAILURE',
+      'WEEKLY_SOURCE_DECISION_BUNDLE_NOT_FOUND', 'WEEKLY_SOURCE_DECISION_BUNDLE_NOT_PROPOSED']
+      .includes(body.code)) || (body.sqlstate === '55000' && [
+        'WEEKLY_SOURCE_LATER_CHANGE_SCOPE_UNAVAILABLE', 'WEEKLY_SOURCE_LATER_CHANGE_SCOPE_STALE',
+        'WEEKLY_SOURCE_LATER_CHANGE_REVIEW_STALE', 'WEEKLY_SOURCE_LATER_CHANGE_ACCEPTANCE_FAILED',
+        'WEEKLY_SOURCE_LATER_CHANGE_PUBLICATION_REFUSED'].includes(body.error_code)));
+  // Native remount can replace these controls while a reply is lost. Retain
+  // the same in-closure record, bound to the actual parent; never adopt a new one.
+  new MutationObserver(() => {
+    const nsContext = window.modalCtx;
+    for (const record of retained.get(nsContext) || []) paint(record);
+  }).observe(document.body, { childList: true, subtree: true });
   document.addEventListener('click', async (event) => {
     const button = event.target?.closest?.('[data-weekly-source-decision]');
     if (!button || button.disabled) return;
@@ -178920,44 +179466,60 @@ function bindWeeklySourceLaterChangeDecisions() {
     const decision = String(button.getAttribute('data-weekly-source-decision') || '').trim().toUpperCase();
     const vm = resolveWeeklySourceSurfaceViewModel(surface);
     if (!vm || vm.mount !== true) return;
-    const actorUserId = String(
-      window.currentUser?.id || window.CURRENT_USER?.id || window.__currentUserId || ''
-    ).trim();
-    let command;
+    const ns = namespace(surface, vm);
+    if (!ns) return;
+    const records = retained.get(ns.context) || [];
+    let record = records.find((entry) => entry.ns.actor === ns.actor && entry.ns.frame === ns.frame
+      && entry.ns.surface === ns.surface && entry.ns.root === ns.root && entry.ns.bulk === ns.bulk
+      && entry.ns.row === ns.row && entry.ns.subject === ns.subject);
+    if (record?.busy || record?.settled) return;
+    if (record && record.command.body.payload.decision !== decision) { paint(record); return; }
     try {
-      command = presentationApi.buildLaterChangeDecisionCommand(vm, {
-        decision,
-        actor_user_id: actorUserId || 'server-resolved',
-        idempotency_key: makeWeeklySourceCommandIdempotencyKey()
-      });
+      if (!record) {
+        const command = presentationApi.buildLaterChangeDecisionCommand(vm, {
+          decision, actor_user_id: ns.actor, idempotency_key: makeWeeklySourceCommandIdempotencyKey()
+        });
+        record = { ns, command, bytes: JSON.stringify(command.body), busy: false,
+          settled: false, message: '' };
+        records.push(record); retained.set(ns.context, records);
+      }
+      if (record.command.endpoint !== '/api/weekly-source/v1/commands'
+          || JSON.stringify(record.command.body) !== record.bytes || !current(record.ns)) return;
     } catch (error) {
-      try { toastWarn(error?.message || 'That decision is no longer available.'); } catch {}
+      paint({ ns, error: true, message: 'This decision is no longer available; close and reopen the Timesheet.' });
       return;
     }
-    const controls = Array.from(document.querySelectorAll('[data-weekly-source-decision]'));
-    controls.forEach((control) => { control.disabled = true; });
+    record.busy = true; record.error = false; record.message = 'Saving decision…'; paint(record);
     try {
-      // The payload is the server's `command_payload`, posted unchanged, plus
-      // the actor and the chosen decision (WP-11b N3.4).
-      const response = await apiPostJson(command.endpoint, command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
-      if (!response || response.ok !== true) {
-        const refusal = weeklySourceCommandRefusalMessage(response);
-        const failure = new Error(refusal || 'DECISION_FAILED');
-        failure.weeklySourceRefusalShown = !!refusal;
-        throw failure;
+      const response = await apiPostJson(record.command.endpoint, record.command.body, { action: 'WEEKLY_SOURCE_COMMAND' });
+      if (!accepted(response, record)) {
+        const failure = new Error(); failure.json = response; throw failure;
       }
-      if (surface === 'BULK_AUTHORISE') await refreshBulkWeeklySourcePresentation(resolveWeeklySourceBulkState());
-      else await refreshSimpleWeeklySourcePresentation();
-      try { toast('Decision recorded.'); } catch {}
+      record.settled = true; record.busy = false; record.message = 'Decision saved.';
+      retained.set(ns.context, (retained.get(ns.context) || []).filter((entry) => entry !== record));
+      if (!current(record.ns)) return;
+      paint(record);
+      try {
+        const callerCurrent = () => current(record.ns);
+        const refreshed = record.ns.bulk
+          ? await refreshBulkWeeklySourcePresentation(record.ns.bulk, callerCurrent)
+          : await refreshSimpleWeeklySourcePresentation(callerCurrent);
+        if (!current(record.ns)) return;
+        if (!refreshed) { record.message = 'Decision saved; close and reopen the Timesheet.'; paint(record); }
+      } catch {
+        record.message = 'Decision saved; close and reopen the Timesheet.'; paint(record);
+      }
     } catch (error) {
-      controls.forEach((control) => { control.disabled = false; });
-      // A refusal the server wrote is shown verbatim; only a refusal it did not
-      // explain gets a sentence of ours.
-      const spoken = error?.weeklySourceRefusalShown === true
-        ? String(error.message)
-        : (weeklySourceCommandRefusalMessage(error?.json || error?.response)
-          || 'The decision could not be saved. Refresh and try again.');
-      try { toastWarn(spoken); } catch {}
+      record.busy = false;
+      if (definiteRefusal(error?.json)) {
+        record.settled = true; record.error = true; record.message = 'This decision was not saved; close and reopen the Timesheet.';
+        if (current(record.ns)) paint(record);
+        retained.set(ns.context, (retained.get(ns.context) || []).filter((entry) => entry !== record));
+      } else {
+        record.error = true;
+        record.message = 'The decision could not be confirmed; try again to check the same decision.';
+        paint(record);
+      }
     }
   });
   return true;
@@ -185158,12 +185720,7 @@ function bindBulkAuthoriseLists(state) {
         });
         const completionModal = (unauthoriseOutcome && typeof unauthoriseOutcome === 'object') ? unauthoriseOutcome.completionModal : null;
         if (completionModal?.shouldShow && !st.__workbench_modal_spinner_active && typeof openUiConfirmModal === 'function') {
-          await openUiConfirmModal({
-            title: completionModal.title || 'Bulk Unauthorise result',
-            message: completionModal.message || '',
-            confirm_label: completionModal.confirm_label || 'OK',
-            cancel_label: completionModal.cancel_label || ''
-          });
+          await showBulkUnauthoriseCompletion(completionModal);
         }
       }
     });
@@ -195303,6 +195860,14 @@ function bindBulkAuthoriseShellControls(state) {
     });
   };
 
+  (Array.isArray(st.__missing_rate_refusals) ? st.__missing_rate_refusals : []).forEach((value, index) => {
+    bindClick('bulkAuthoriseContractRates_' + index, async () => {
+      if (window.modalCtx?.bulkAuthoriseState !== st || _currentFrame() !== st.__missing_rate_parent_frame) return;
+      const rate = bpayNextMissingRatePresentation(st.__missing_rate_refusals[index], st.__missing_rate_actor);
+      if (rate) await bpayNextOpenMissingRateContract(rate, st.__missing_rate_actor, st.__missing_rate_parent_frame);
+    });
+  });
+
   const getVisibleModel = () => {
     const visible = (typeof getVisibleBulkAuthoriseRows === 'function') ? getVisibleBulkAuthoriseRows(st) : {
       visible_rows: [],
@@ -196664,6 +197229,7 @@ async function refreshBulkAuthoriseActiveContext(state, options = {}) {
 
 
 async function authoriseSelectedTimesheets(payload) {
+  const requestActor = SESSION?.user?.id || null;
   const { LOGM, L, GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][AUTHORISE-WRAPPER]')
     : { LOGM: null, L: () => {}, GC: () => {}, GE: () => {} };
@@ -196796,7 +197362,7 @@ async function authoriseSelectedTimesheets(payload) {
     try {
       json = await apiPostJson(urlPath, requestPayload);
     } catch (error) {
-      if (String(error?.json?.error_code || error?.json?.error || '').toUpperCase() !== 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') throw error;
+      if (String(error?.json?.error_code || error?.json?.error || '').toUpperCase() !== 'CORRECTION_PAIR_CONFIRMATION_REQUIRED') throw await weeklySourceMapAuthoriseError(error, requestActor);
       const preview = error?.json?.pair_lifecycle || {};
       const pairCount = Number(preview.correction_pair_count || 0) || 0;
       const affectedCount = Number(preview.affected_timesheet_count || 0) || items.length;
@@ -196823,7 +197389,7 @@ async function authoriseSelectedTimesheets(payload) {
       err.body = text || '';
       err.json = json;
       GE();
-      throw err;
+      throw await weeklySourceMapAuthoriseError(err, requestActor);
     }
   }
 
@@ -196837,8 +197403,9 @@ async function authoriseSelectedTimesheets(payload) {
       });
       if (!json || typeof json !== 'object') json = {};
     }
-  const results = Array.isArray(json.results) ? json.results.map(normalizeResult) : [];
-  const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items) : results.filter((item) => item && item.success !== true);
+  const refusalActor = await weeklySourceQualifyAuthoriseRefusal([...(Array.isArray(json.results) ? json.results : []), ...(Array.isArray(json.failed_items) ? json.failed_items : [])], requestActor);
+  const results = Array.isArray(json.results) ? json.results.map(normalizeResult).map(value => bpayNextPresentMissingRateResult(weeklySourcePresentAuthoriseResult(value, refusalActor), requestActor)) : [];
+  const failedItems = Array.isArray(json.failed_items) ? clonePayload(json.failed_items).map(value => bpayNextPresentMissingRateResult(weeklySourcePresentAuthoriseResult(value, refusalActor), requestActor)) : results.filter((item) => item && item.success !== true);
   const staleItems = Array.isArray(json.stale_items) ? clonePayload(json.stale_items) : failedItems.filter((item) => {
     const code = firstString(item?.error_code, item?.error).toUpperCase();
     return code === 'TIMESHEET_MOVED' || code === 'EXPECTED_TIMESHEET_MISMATCH' || code === 'ROW_SIGNATURE_MISMATCH' || item?.was_stale === true;
@@ -256494,6 +257061,11 @@ function renderBulkAuthoriseShell(state) {
           ? `<div class="mini" style="margin-top:8px;color:var(--bad,#ff6b6b);white-space:pre-wrap;">${enc(String(st.error_text || ''))}</div>`
           : ''}
 
+        ${(Array.isArray(st.__missing_rate_refusals) ? st.__missing_rate_refusals : []).map((value, index) => {
+          const rate = bpayNextMissingRatePresentation(value, st.__missing_rate_actor);
+          return rate ? `<div class="mini" style="margin-top:8px;">${enc(rate.message)} <button id="bulkAuthoriseContractRates_${index}" class="btn" ${st.loading || st.batch_busy ? 'disabled' : ''}>Open Contract rates</button></div>` : '';
+        }).join('')}
+
         ${st.loading
           ? '<div class="mini" style="margin-top:8px;opacity:.85;">Loading Bulk Authorise data…</div>'
           : ''}
@@ -260830,6 +261402,8 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
       .map((entry) => firstString(entry?.row_key, entry?.row_key_before, entry?.row_key_after, entry?.previous_row_key))
       .filter((key) => key && set.has(key));
   };
+  const refusalActor = SESSION?.user?.id || null;
+  const missingRateParentFrame = _currentFrame();
   const mutationKey = `bulk-authorise-selected:${trimStr(opts.source || '')}:${Date.now()}`;
   if (!(window.__timesheetLifecycleMutationInFlight instanceof Set)) window.__timesheetLifecycleMutationInFlight = new Set();
   if (st.batch_busy || st.__bulk_authorise_selected_in_flight) {
@@ -260925,6 +261499,9 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
 
     st.batch_busy = true;
     st.error_text = '';
+    st.__missing_rate_refusals = [];
+    st.__missing_rate_actor = refusalActor;
+    st.__missing_rate_parent_frame = missingRateParentFrame;
     if (typeof rerenderBulkAuthoriseWorkbench === 'function') await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][AUTHORISE-SELECTED][START]');
 
     const result = await authoriseSelectedTimesheets({
@@ -261044,11 +261621,19 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     }
 
     const summaryLines = [`${successCount} timesheets authorised`, `${failureCount} timesheets could not be authorised`];
-    if (failedRows.length) {
+    const waitingRows = failedRows.filter(row => weeklySourceAuthoriseRefusalPresentation(row, refusalActor)?.retryable === true);
+    const refusedRows = failedRows.filter(row => !waitingRows.includes(row));
+    if (waitingRows.length) {
+      summaryLines.push('', 'Waiting — try again in a moment:');
+      for (const row of waitingRows) summaryLines.push(`- ${firstString(row?.row_key, row?.row_key_before, row?.timesheet_id, 'row')}: ${weeklySourceAuthoriseRefusalPresentation(row, refusalActor).message}`);
+    }
+    if (refusedRows.length) {
       summaryLines.push('', 'Failures:');
-      for (const failed of failedRows) summaryLines.push(`- ${firstString(failed?.row_key, failed?.row_key_before, failed?.timesheet_id, 'row')}: ${firstString(failed?.reason, failed?.message, failed?.error_code, 'Failed')}`);
+      for (const failed of refusedRows) summaryLines.push(`- ${firstString(failed?.row_key, failed?.row_key_before, failed?.timesheet_id, 'row')}: ${firstString(failed?.reason, failed?.message, failed?.error_code, 'Failed')}`);
     }
     if (staleRows.length) summaryLines.push('', `${staleRows.length} stale row${staleRows.length === 1 ? '' : 's'} need rechecking.`);
+    st.__missing_rate_refusals = [...failedRows, result?.structural_failure]
+      .map(value => bpayNextMissingRatePresentation(value, refusalActor)).filter(Boolean);
     st.summary_message = summaryLines.join('\n');
     const completionModal = { shouldShow: true, title: 'Bulk Authorise result', message: st.summary_message, confirm_label: 'OK', cancel_label: '' };
 
@@ -261105,7 +261690,11 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
     st.batch_busy = false;
     st.__bulk_authorise_selected_in_flight = false;
     markButtonsBusy(false);
-    st.error_text = String(err?.message || err || 'Bulk authorise failed.');
+    const missingRate = bpayNextMissingRatePresentation(err, refusalActor);
+    st.__missing_rate_refusals = missingRate ? [missingRate] : [];
+    st.__missing_rate_actor = refusalActor;
+    st.__missing_rate_parent_frame = missingRateParentFrame;
+    st.error_text = missingRate?.message || String(err?.message || err || 'Bulk authorise failed.');
     if (typeof rerenderBulkAuthoriseWorkbench === 'function') {
       try {
         await rerenderBulkAuthoriseWorkbench(st, '[TS][BULK-AUTH][AUTHORISE-SELECTED][ERROR]');
@@ -261131,6 +261720,106 @@ async function handleBulkAuthoriseSelected(state, options = {}) {
 }
 
 
+
+// SP-04: the native bulk result uses only the original selected rows and owner replies.
+function weeklySourceUnauthoriseReason(result) {
+  const code = String(result?.error_code || result?.code || '');
+  const copy = {
+    BPAY_NEXT_SOURCE_WITHDRAW_FINANCIAL_DEPENDENCY: 'A payment depends on this Timesheet, so its authorisation cannot be withdrawn.',
+    WEEKLY_SOURCE_UNAUTHORISE_PAID: 'Already paid, so it stays authorised.',
+    WEEKLY_SOURCE_UNAUTHORISE_INVOICED: 'This Timesheet is on an invoice, so it stays authorised.',
+    WEEKLY_SOURCE_UNAUTHORISE_LATER_DECISION_EXISTS: 'A later Source decision uses this Timesheet; check the Source details.',
+    WEEKLY_SOURCE_UNAUTHORISE_BANKING_ACTIVE: 'This Timesheet is in Banking Pay; check its payment details.',
+    WEEKLY_SOURCE_UNAUTHORISE_MONEY_UNRESOLVED: 'The payment outcome needs checking before authorisation can be withdrawn.',
+    WEEKLY_SOURCE_UNAUTHORISE_RECOVERY_EXISTS: 'A payment recovery uses this Timesheet; check its payment history.',
+    WEEKLY_SOURCE_UNAUTHORISE_INVOICE_OPERATION_ACTIVE: 'An invoice update is in progress; try again when it finishes.',
+    WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY: 'Another update is in progress; try again in a moment.',
+    WEEKLY_SOURCE_CANDIDATE_BUSY: 'Another update is in progress; try again in a moment.',
+    BPAY_NEXT_MODULE_NOT_ACTIVE: 'Banking Pay is not available for this agency yet.',
+    BPAY_NEXT_OWNER_STATUS_UNAVAILABLE: 'This Timesheet cannot be changed right now; try again shortly.'
+  };
+  const stale = result?.source_outcome === 'STALE' || result?.stale === true;
+  const message = stale ? 'This Timesheet has changed; refresh it before trying again.'
+    : copy[code] || 'This Timesheet cannot be unauthorised; check its details.';
+  return window.CloudTMSWeeklySourcePresentationV1?.withdrawalRefusalText?.({
+    answered: true, allowed: false, refusal_code: code,
+    refusal_nature: result?.refusal_nature, refusal_message: message
+  }) || message;
+}
+function openWeeklySourceUnauthoriseResult(completion) {
+  const packet = completion?.sourceResult;
+  if (!packet || SESSION?.user?.id !== packet.actor
+      || bankingNextOwnerClient()?.peek()?.active_owner !== 'NEXT'
+      || bankingNextOwnerClient()?.peek()?.owner_epoch !== packet.ownerEpoch
+      || (packet.parentFrame && window.__modalStack?.at(-1) !== packet.parentFrame)) return false;
+  const el = (tag, text, className) => {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;};
+  const content=el('section',undefined,'bpay-next-unauthorise-result');
+  const headerDetail=el('span',packet.items.length+' Timesheet'+(packet.items.length===1?'':'s')+' selected','bpay-next-progress-subtitle');
+  const footer=el('div');footer.hidden=true;
+  let frame=null,closed=false;
+  const focusContinuity=window.CloudTMSBpayNextUi.continuity(content,document,()=>content.querySelector('[role="region"]') || document.getElementById('btnCloseModal'));
+  const current=()=>!closed && SESSION?.user?.id===packet.actor
+    && bankingNextOwnerClient()?.peek()?.active_owner==='NEXT'
+    && bankingNextOwnerClient()?.peek()?.owner_epoch===packet.ownerEpoch
+    && (!packet.parentFrame || window.__modalStack?.includes(packet.parentFrame));
+  const results=packet.items.map((item,index)=>({item,row:packet.rows[index] || {},result:packet.results.find(r=>
+    r?.row_key===item.row_key || r?.timesheet_id===item.timesheet_id || r?.expected_timesheet_id===item.expected_timesheet_id) || null,busy:false}));
+  const human=value=>{const t=String(value || '').trim();return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(t)?'':t;};
+  const date=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value))?String(value).split('-').reverse().join('/'):'—';
+  const state=entry=>entry.result?.source_outcome==='UNKNOWN'?'unknown'
+    : entry.result?.success===true || entry.result?.ok===true?'done'
+      : entry.result?'refused':'pending';
+  const paint=()=>{
+    if(!current())return;
+    const focus=focusContinuity.before();
+    const host=el('div',undefined,'ctms-universal-table-host'),table=el('table',undefined,'ctms-universal-table ctms-universal-card-table bpay-next-unauthorise-table');
+    host.tabIndex=0;host.setAttribute('role','region');host.setAttribute('aria-label','Unauthorise result');
+    table.setAttribute('aria-label','Unauthorise result');const head=el('thead'),headRow=el('tr');
+    for(const label of ['Timesheet','Candidate','Result']){const th=el('th',label);th.scope='col';headRow.append(th);}head.append(headRow);table.append(head);const body=el('tbody');
+    const groups=[['done','Done'],['refused','Refused'],['unknown','Not confirmed'],['pending','Still working']];
+    for(const[key,label]of groups){const members=results.filter(entry=>state(entry)===key);if(!members.length)continue;
+      const section=el('tr',undefined,'bpay-next-unauthorise-section'),title=el('td',label+' · '+members.length);title.colSpan=3;section.append(title);body.append(section);
+      for(const entry of members){const row=entry.row,result=entry.result,tr=el('tr');
+        const ts=el('td');ts.dataset.label='Timesheet';ts.append(el('strong','w/e '+date(row.week_ending_date || row.week_end || row.weekEndingDate)));const client=human(row.client_display_name || row.client_name || row.hospital_name);if(client)ts.append(el('small',client));
+        const candidate=el('td');candidate.dataset.label='Candidate';const name=human(row.candidate_display_name || row.candidate_name || [row.candidate_first_name,row.candidate_surname || row.candidate_last_name].filter(Boolean).join(' '));const ref=human(row.candidate_reference || row.candidate_ref || row.tms_ref || row.tms_number);candidate.textContent=[name,ref].filter(Boolean).join(' · ') || '—';
+        const outcome=el('td');outcome.dataset.label='Result';const value=key==='done'?(result?.source_outcome==='WITHDRAWN'&&result.withdrawn===true?'Withdrawn':'Unauthorised'):key==='refused'?'Refused':key==='pending'?'Still working':'Not confirmed';
+        outcome.setAttribute('role',!entry.busy&&(key==='refused'||key==='unknown')?'alert':'status');
+        outcome.append(el('span',value,'candidate-office-badge candidate-office-badge--'+(key==='done'?'success':key==='refused'?'danger':key==='pending'?'info':'warning')));
+        const reason=entry.busy?'Checking the same request.':key==='refused'?weeklySourceUnauthoriseReason(result):key==='unknown'?'The outcome could not be confirmed; try again to check the same request.':key==='pending'?'This request is still being processed.':value==='Withdrawn'?'Not authorised for payment.':'';
+        if(reason)outcome.append(el('small',reason));
+        if(key==='unknown'&&result.source_outcome==='UNKNOWN'){
+          const retry=el('button',entry.busy?'Checking…':'Try again','btn btn-outline');retry.type='button';retry.disabled=entry.busy;
+          retry.dataset.nextFocusKey='withdrawal:'+entry.item.timesheet_id;
+          retry.onclick=async()=>{if(entry.busy||!current()||!frame?.active())return;entry.busy=true;paint();
+            const original=entry.item;try{
+              let reply;try{reply=await apiPostJson('/api/timesheets/'+encodeURIComponent(original.timesheet_id)+'/unauthorise',{
+                expected_timesheet_id:original.expected_timesheet_id,expected_row_signature:original.expected_row_signature,
+                context:'bulk_authorise',response_context:'minimal_lifecycle_mutation'
+              });}catch(error){reply=error?.json;}
+              if(!current()||!frame?.active())return;
+              if(reply?.source_outcome==='WITHDRAWN'&&reply.ok===true&&reply.withdrawn===true || reply?.source_outcome==='REFUSED'&&reply.ok===false || reply?.source_outcome==='STALE'&&reply.ok===false){entry.result={...reply,success:reply.ok===true};}
+              else if(reply?.ok===true&&reply?.unauthorised===true){entry.result={...reply,success:true};}
+              // Anything else remains unconfirmed with these exact original inputs.
+            }finally{entry.busy=false;if(current()&&frame?.active())paint();}
+          };outcome.append(retry);
+        }
+        tr.append(ts,candidate,outcome);body.append(tr);
+      }
+    }
+    if(!results.length){const row=el('tr'),cell=el('td','No results are available; close this window and check the Timesheets.');cell.colSpan=3;row.append(cell);body.append(row);}
+    table.append(body);host.append(table);content.replaceChildren(host);
+    focusContinuity.after(focus);
+  };
+  const adapter=window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal});
+  frame=adapter({title:'Unauthorise result',content,footer,headerDetail,canFocus:current,onDismiss:()=>{closed=true;},onMount:paint});
+  return true;
+}
+async function showBulkUnauthoriseCompletion(completion) {
+  if(completion?.sourceResult)return openWeeklySourceUnauthoriseResult(completion);
+  if(completion?.shouldShow&&typeof openUiConfirmModal==='function')await openUiConfirmModal(completion);
+  return true;
+}
+
 async function handleBulkUnauthoriseSelected(state, options = {}) {
   const { GC, GE } = (typeof getTsLoggers === 'function')
     ? getTsLoggers('[TS][BULK-AUTH][UNAUTHORISE-SELECTED]')
@@ -261154,6 +261843,8 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     return '';
   };
   const opts = (options && typeof options === 'object') ? options : {};
+  const sourceActor=SESSION?.user?.id || null, sourceParentFrame=window.__modalStack?.at(-1) || null;
+  let sourceOwner=null;
   const showCompletionModal = opts.showCompletionModal !== false;
   const returnCompletionResult = opts.returnCompletionResult === true;
   const actionSource = firstString(opts.actionSource, trimStr(opts.source) === 'action-row' ? 'action-row-unauthorise' : '', 'bulk-unauthorise');
@@ -261184,7 +261875,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
       visible_processed_eligible_rows: Array.isArray(visible?.visible_processed_eligible_rows) ? visible.visible_processed_eligible_rows.slice() : visibleRows.filter((row) => trimStr(row?.bulk_authorise_section || '') === 'processed_eligible')
     };
   };
-  const expectedSignatureOf = (row) => firstString(row?.expected_row_signature, row?.backend_row_signature, row?.mutation_row_signature, row?.row_backend_signature, row?.row_signature, row?.render_signature);
+  const expectedSignatureOf = (row) => firstString(row?.expected_row_signature, row?.backend_row_signature, row?.mutation_row_signature, row?.row_backend_signature, row?.row_signature);
   const buildItem = (row) => ({
     row_key: rowIdentityKey(row),
     timesheet_id: firstString(row?.timesheet_id, row?.current_timesheet_id) || null,
@@ -261276,6 +261967,8 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
       return selectionCheck;
     }
 
+    sourceOwner=await bankingNextOwnerClient()?.qualify('timesheet-unauthorise:'+String(sourceParentFrame?.id || sourceActor));
+    if(!sourceOwner || SESSION?.user?.id!==sourceActor || (sourceParentFrame && window.__modalStack?.at(-1)!==sourceParentFrame))throw new Error('The Timesheets window changed; open it again.');
     const preMutationActiveKey = rowIdentityKey(st.active_row || {});
     const preMutationUnauthoriseKeys = selectionKeys.slice();
     const selectedRows = selectionKeys.map((key) => authorisedByKey.get(key)).filter((row) => row && typeof row === 'object');
@@ -261421,6 +262114,11 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     if (staleRows.length) summaryLines.push('', `${staleRows.length} stale row${staleRows.length === 1 ? '' : 's'} need rechecking.`);
     st.summary_message = summaryLines.join('\n');
     const completionModal = { shouldShow: true, title: 'Bulk Unauthorise result', message: st.summary_message, confirm_label: 'OK', cancel_label: '' };
+    if(sourceOwner.active_owner==='NEXT'){
+      completionModal.sourceResult={actor:sourceActor,ownerEpoch:sourceOwner.owner_epoch,parentFrame:sourceParentFrame,
+        items:items.map(item=>Object.freeze({...item})),rows:selectedRows.map(row=>({...row})),results:results.map(row=>({...row}))};
+      st.summary_message=successCount+' Timesheets changed · '+failureCount+' outcomes to check';
+    }
 
     st.batch_busy = false;
     st.__bulk_unauthorise_selected_in_flight = false;
@@ -261438,7 +262136,7 @@ async function handleBulkUnauthoriseSelected(state, options = {}) {
     }
     if (!isMultiRowAction && showCompletionModal && typeof openUiConfirmModal === 'function') {
       try {
-        await openUiConfirmModal({ title: completionModal.title, message: completionModal.message, confirm_label: completionModal.confirm_label, cancel_label: completionModal.cancel_label });
+        await showBulkUnauthoriseCompletion(completionModal);
       } catch (modalErr) {
         postMutationRefreshFailed = true;
         postMutationRefreshError = postMutationRefreshError || modalErr;
@@ -263917,10 +264615,11 @@ function bindBulkAuthoriseActionRow(state) {
       }
       clearSyntheticBulkAuthoriseDirtyIfClean();
       const liveMeta = readLiveActionMeta();
-      await withExistingModalLoadingSpinner(st, 'Working', async () => {
-        await handleBulkUnauthoriseSelected(st, {
+      const outcome=await withExistingModalLoadingSpinner(st, 'Working', async () => {
+        return await handleBulkUnauthoriseSelected(st, {
           source: 'action-row',
           showCompletionModal: false,
+          returnCompletionResult: true,
           actionRowKey: liveMeta.liveRowKey,
           activeRowStrategy: 'same-row-after-unauthorise',
           actionSource: 'action-row-unauthorise',
@@ -263931,6 +264630,7 @@ function bindBulkAuthoriseActionRow(state) {
           actionRecordIdentity: liveMeta.liveIdentity
         });
       });
+      if(outcome?.completionModal?.sourceResult)await showBulkUnauthoriseCompletion(outcome.completionModal);
     }
   }, { withSpinner: false });
 
@@ -275940,7 +276640,9 @@ async function unauthoriseTimesheet(ctxOrId, expectedTimesheetId) {
     mc.timesheetDetails?.tsfin?.expected_row_signature
   ) : '';
 
-  if ((!lifecycleSignatureTrusted || !expectedRowSignature) && typeof refreshTimesheetLifecycleAffectedRows === 'function') {
+  const unauthoriseOwner=await bankingNextOwnerClient()?.qualify('timesheet-unauthorise:'+tsId);
+  if(!unauthoriseOwner)throw new Error('This Timesheet cannot be changed right now; try again shortly.');
+  if (unauthoriseOwner.active_owner!=='NEXT' && (!lifecycleSignatureTrusted || !expectedRowSignature) && typeof refreshTimesheetLifecycleAffectedRows === 'function') {
     try {
       const liveCtx = window.modalCtx || mc || {};
       const refreshResult = await refreshTimesheetLifecycleAffectedRows({
@@ -277171,6 +277873,8 @@ function renderCandidateTab(key, row = {}) {
 async function fetchCandidateAdvances(candidateId) {
   const cid = String(candidateId || '').trim();
   if (!cid) return;
+  const qualification=await candidateFinanceOwner(cid);if(qualification.owner.active_owner==='NEXT')return;
+  if(qualification.owner.active_owner!=='LEGACY'||!qualification.ready())return;
 
   window.appState = window.appState || {};
   const S = (window.appState.candidateAdvances ||= {});
@@ -277476,6 +278180,7 @@ async function fetchCandidateAdvances(candidateId) {
         throw err;
       }
       const json = await res.json().catch(() => ({}));
+      if(!qualification.ready())return;
       const report = buildCanonicalReport(json);
 
       S[cid] = {
@@ -277490,6 +278195,7 @@ async function fetchCandidateAdvances(candidateId) {
 
       return S[cid];
     } catch (e) {
+      if(!qualification.ready())return;
       console.warn('[CANDIDATE_FINANCE] fetchCandidateAdvances failed', e);
       const userMessage = 'Candidate finance data could not be loaded. Nothing has been treated as zero; retry when the service is available.';
       S[cid] = {
@@ -277520,6 +278226,7 @@ async function fetchCandidateAdvances(candidateId) {
 }
 
 async function openCandidateLoansOverpaymentsModal(candidateId) {
+  const next=await openBankingNextCaseFinance({candidate_id:candidateId},'CANDIDATE_CASE_REPORT');if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -279679,6 +280386,8 @@ function renderAdvancesSummary(summary) {
 
 function updateCandidateAdvancesUI(candidateId) {
   const cid = String(candidateId || '').trim();
+  const qualified=window.__candidateFinanceOwners?.[cid];
+  if(qualified?.actor!==SESSION?.user?.id||qualified?.active_owner!=='LEGACY'||bankingNextOwnerClient().peek()?.active_owner!=='LEGACY'){paintNextCandidateFinance(cid,qualified?.active_owner==='UNKNOWN'?'Could not load the finance report; try again.':'');return;}
   const S = (window.appState && window.appState.candidateAdvances) || {};
   const entry = (S[cid] && typeof S[cid] === 'object') ? S[cid] : { report: null, summary: {} };
   const report = (entry.report && typeof entry.report === 'object') ? entry.report : null;
@@ -280559,6 +281268,24 @@ async function openCandidate(row) {
       const originalMethod = (full && full.pay_method) ? String(full.pay_method).toUpperCase() : null;
       const newMethod      = payload.pay_method ? String(payload.pay_method).toUpperCase() : null;
       const hasExistingId  = !!full?.id;
+      // EX-08: qualify before choosing either the NEXT route or legacy bank rules.
+      const routeParent = currentFrame(), routeContext = window.modalCtx, routeActor = SESSION?.user?.id;
+      let nextPayOwner = null;
+      if (hasExistingId && ['PAYE','UMBRELLA'].includes(originalMethod) && ['PAYE','UMBRELLA'].includes(newMethod)) {
+        try {
+          const ownerClient = bankingNextOwnerClient();
+          if (!ownerClient) throw Error();
+          nextPayOwner = await ownerClient.begin('candidate:pay-method:'+full.id+':'+crypto.randomUUID());
+          if (currentFrame()!==routeParent || window.modalCtx!==routeContext || SESSION?.user?.id!==routeActor) return {ok:false};
+          if (!['NEXT','LEGACY'].includes(nextPayOwner?.active_owner)) throw Error();
+        } catch {
+          await openUiConfirmModal({title:'Change pay channel',message:'Could not check payment settings; try again.',confirm_label:'Close',hide_cancel:true,kind:'candidate-pay-method-notice'});
+          return {ok:false};
+        }
+      }
+      const nextPayChange = nextPayOwner?.active_owner==='NEXT';
+      const isNextUmbrellaChange = nextPayChange && originalMethod==='UMBRELLA' && newMethod==='UMBRELLA'
+        && String(full.umbrella_id??'').toLowerCase()!==String(payload.umbrella_id??'').toLowerCase();
 
       const isFlip = !!(
         hasExistingId &&
@@ -280642,7 +281369,7 @@ async function openCandidate(row) {
 
       let routeChangeResult = null;
 
-      if (isFlip) {
+      if (isFlip || isNextUmbrellaChange) {
         L('[onSave] detected prospective-only PAYE↔UMBRELLA change', {
           originalMethod,
           newMethod,
@@ -280665,7 +281392,7 @@ async function openCandidate(row) {
             return { ok:false };
           }
           destinationPatch.umbrella_id = effectiveUmbrellaId;
-        } else {
+        } else if (!nextPayChange) {
           normaliseTouchedCandidateBankFields(
             destinationPatch,
             payload,
@@ -280680,13 +281407,16 @@ async function openCandidate(row) {
             originalMethod,
             newMethod,
             candidate_id: full.id,
-            destination_patch: destinationPatch
+            destination_patch: destinationPatch,
+            next_owner: nextPayOwner
           });
 
           if (!outcome || outcome.confirmed !== true || !outcome.result) {
             L('[onSave] pay-method change cancelled or not committed');
             return { ok:false };
           }
+          if (currentFrame()!==routeParent || window.modalCtx!==routeContext || SESSION?.user?.id!==routeActor
+              || (nextPayChange && bankingNextOwnerClient()?.peek()?.owner_epoch!==nextPayOwner.owner_epoch)) return {ok:false};
 
           routeChangeResult = outcome.result;
           const authoritativeCandidate = (
@@ -280700,20 +281430,21 @@ async function openCandidate(row) {
             ...(newMethod === 'PAYE' ? destinationPatch : {})
           };
 
-          full = { ...full, ...authoritativeCandidate, pay_method: newMethod };
+          const acceptedMethod = nextPayChange ? authoritativeCandidate.pay_method : newMethod;
+          full = { ...full, ...authoritativeCandidate, pay_method: acceptedMethod };
           window.modalCtx.__payFlipDone = true;
           window.modalCtx.__payMethodChangeOperationId = routeChangeResult.operation_id || null;
           window.modalCtx.__payMethodChangeJobId = routeChangeResult.job_id || null;
           window.modalCtx.data = {
             ...(window.modalCtx.data || {}),
             ...authoritativeCandidate,
-            pay_method: newMethod
+            pay_method: acceptedMethod
           };
-          window.modalCtx.dbPayMethod = newMethod;
+          window.modalCtx.dbPayMethod = acceptedMethod;
 
           try {
             const payMethodSelect = document.querySelector('select[name="pay_method"]');
-            if (payMethodSelect) payMethodSelect.value = newMethod;
+            if (payMethodSelect) payMethodSelect.value = acceptedMethod;
           } catch (selectError) {
             W('failed to synchronise pay_method select after committed change', selectError);
           }
@@ -280723,7 +281454,7 @@ async function openCandidate(row) {
           // re-run the route transition or create a second TSFIN propagation path.
           delete payload.pay_method;
           delete payload.umbrella_id;
-          for (const field of candidateBankClearFields) delete payload[field];
+          if (!nextPayChange) for (const field of candidateBankClearFields) delete payload[field];
 
           L('[onSave] prospective-only pay-method change committed', {
             operation_id: routeChangeResult.operation_id || null,
@@ -280749,7 +281480,7 @@ async function openCandidate(row) {
 
       // If we are saving as UMBRELLA in a non-flip scenario, always clear bank
       // details on the candidate record to avoid confusion with old PAYE data.
-      if (payload.pay_method === 'UMBRELLA') {
+      if (payload.pay_method === 'UMBRELLA' && !nextPayChange) {
         clearBankOnPayload(payload);
       }
 
@@ -280762,7 +281493,11 @@ if (Object.prototype.hasOwnProperty.call(payload, 'key_norm')) {
 // Preserve intentional PAYE bank-field clears as null before the generic empty-string cleanup.
 // The dedicated route-change RPC has already committed route destination fields, so the
 // ordinary candidate PATCH must not write those fields a second time.
-if (routeChangeResult) {
+if (nextPayChange) {
+  // Company display and method repaints are not Candidate bank-edit intent.
+  for (const field of candidateBankClearFields) delete payload[field];
+  normaliseTouchedCandidateBankFields(payload, routeContext.__bpayNextOwnBankIntent || {});
+} else if (routeChangeResult) {
   for (const field of candidateBankClearFields) delete payload[field];
 } else {
   normaliseTouchedCandidateBankFields(payload, statePay, pay);
@@ -285077,6 +285812,15 @@ async function mountCandidatePayTab() {
   const fs = window.modalCtx.formState;
   fs.pay = fs.pay || {};
   const stagedPay = fs.pay;
+  // Trusted edits to the existing PAYE controls remain separately owned by Candidate save.
+  for (const [field,input] of [['account_holder',accHolder],['bank_name',bankName],['sort_code',sortCode],['account_number',accNum]]) {
+    if (!input) continue;
+    input.addEventListener('input', event=>{
+      if (!event.isTrusted || !isCurrentPayMount() || payMethod!=='PAYE' || input.disabled) return;
+      payContext.__bpayNextOwnBankIntent ||= {};
+      payContext.__bpayNextOwnBankIntent[field] = input.value;
+    });
+  }
 
   if (LOG) {
     console.log('[PAYTAB] STATE@ENTRY', {
@@ -288832,7 +289576,37 @@ async function openClientPicker(onPick, opts) {
 
 
 
+async function openNextCandidatePayMethodChange(candidate, context = {}) {
+  const actor=SESSION?.user?.id, parent=currentFrame(), parentContext=window.modalCtx;
+  const client=bankingNextOwnerClient();
+  const stillParent=()=>SESSION?.user?.id===actor && currentFrame()===parent && window.modalCtx===parentContext;
+  try {
+    if (!client || !candidate?.id) throw Error();
+    const owner=await client.begin('candidate:pay-method:'+candidate.id+':'+crypto.randomUUID());
+    if (!stillParent()) return {handled:true,outcome:null};
+    if (context.next_owner && (owner.active_owner!==context.next_owner.active_owner || owner.owner_epoch!==context.next_owner.owner_epoch)) throw Error();
+    if (owner.active_owner==='LEGACY') return {handled:false,outcome:null};
+    if (owner.active_owner!=='NEXT' || !window.CloudTMSBpayNextPayMethodChange || !window.CloudTMSBpayNextUi) throw Error();
+    const companies=Array.from(document.getElementById('umbList')?.options??[], option=>({id:String(option.getAttribute('data-id')??'').toLowerCase(),name:String(option.value??'')}));
+    const chosen=String(context.destination_patch?.umbrella_id??'').toLowerCase();
+    if (chosen && !companies.some(company=>company.id===chosen)) {
+      const name=String(parentContext.formState?.pay?.umbrella_name??document.getElementById('umbrella_name')?.value??'').trim();
+      if (name) companies.push({id:chosen,name});
+    }
+    const outcome=await window.CloudTMSBpayNextPayMethodChange.open({document,window,actorId:actor,candidateId:String(candidate.id).toLowerCase(),targetMethod:context.newMethod,
+      umbrellaId:chosen||null,companies,ownerEpoch:owner.owner_epoch,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,
+      ownerReady:()=>client.peek()?.active_owner==='NEXT' && client.peek()?.owner_epoch===owner.owner_epoch,
+      current:()=>window.__modalStack?.includes(parent)===true,
+      showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal})});
+    return {handled:true,outcome:stillParent()?outcome:null};
+  } catch {
+    if (stillParent()) await openUiConfirmModal({title:'Change pay channel',message:'Could not open the pay channel window; try again.',confirm_label:'Close',hide_cancel:true,kind:'candidate-pay-method-notice'});
+    return {handled:true,outcome:null};
+  }
+}
 async function openCandidatePayMethodChangeModal(candidate, context = {}) {
+  const next = await openNextCandidatePayMethodChange(candidate, context);
+  if (next.handled) return next.outcome;
   const LOG = (typeof window.__LOG_CAND === 'boolean')
     ? window.__LOG_CAND
     : (typeof window.__LOG_MODAL === 'boolean' ? window.__LOG_MODAL : false);
@@ -314485,6 +315259,8 @@ function renderTimesheetLinesTab(ctx) {
 
 
 async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
+  const requestActor = SESSION?.user?.id || null;
+  const requestFrame = _currentFrame();
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][AUTH]');
   GC('authoriseTimesheet');
 
@@ -315027,7 +315803,9 @@ async function authoriseTimesheet(ctxOrId, expectedTimesheetId) {
       }
     }
     if (!json) {
-      const err = authoriseError;
+      const missingRate = await bpayNextShowMissingRateRefusal(authoriseError, requestActor, requestFrame);
+      if (missingRate) { GE(); return missingRate; }
+      const err = await weeklySourceMapAuthoriseError(authoriseError, requestActor);
       try {
         if (typeof tsHandleLifecycleReconcileModal === 'function') {
           const reconciled = await tsHandleLifecycleReconcileModal(err, {
@@ -315525,6 +316303,8 @@ function scheduleTimesheetPostMutationLazyRefresh(args = {}) {
 
 
 async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */) {
+  const requestActor = SESSION?.user?.id || null;
+  const requestFrame = _currentFrame();
   const trimStr = (value) => String(value == null ? '' : value).trim();
   const pickSignature = (...values) => {
     for (const value of values) {
@@ -315622,6 +316402,10 @@ async function contractWeekAuthorise(week_id, expectedTimesheetId /* optional */
     }
 
     return { ...json, affected_refresh: affectedRefresh };
+  } catch (error) {
+    const missingRate = await bpayNextShowMissingRateRefusal(error, requestActor, requestFrame);
+    if (missingRate) return missingRate;
+    throw await weeklySourceMapAuthoriseError(error, requestActor);
   } finally {
     window.__timesheetLifecycleMutationInFlight.delete(mutationKey);
   }
@@ -326795,6 +327579,8 @@ function getCanonicalTimesheetFooterState(mc, frameMode) {
 
 
 function setFormReadOnly(root, ro) {
+  // Banking NEXT readers own their loading, refusal and selection locks.
+  if (typeof currentFrame === 'function' && currentFrame()?.kind === 'bpay-next-read') return;
   if (!root || !document.contains(root)) { L('setFormReadOnly(skip: invalid root)', { ro }); return; }
   const _allBefore = root.querySelectorAll('input, select, textarea, button');
   const beforeDisabled = Array.from(_allBefore).filter(el => el.disabled).length;
@@ -326943,6 +327729,8 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
   // before the workspace has a valid selection (or override its later state).
   // Its child confirmations/detail screens own the same gates. In particular,
   // opening a child must not enable an unconfirmed action or empty selection.
+  // The bounded Daily notice owns its actor/current identity and busy state.
+  if (el.closest?.('[data-daily-processing]')) return;
   if (!ro && el.closest?.('.ws-workspace[data-ws-contract="WEEKLY_SOURCE_IMPORT_WORKSPACE_V1"], .ws-child[data-wsa-screen]')) return;
   const isDisplayOnly = el.id === 'tms_ref_display' || el.id === 'cli_ref_display';
 
@@ -327058,6 +327846,7 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
       'btnEditModal',
       'btnSave',
       'btnRelated',
+      'btnPaymentHistory',
 
       // ✅ Keep ONLY non-conversion footer actions
       'btnTsDeleteTimesheet',
@@ -327081,6 +327870,12 @@ root.querySelectorAll('input, select, textarea, button').forEach((el) => {
         }
       }
     } catch {}
+
+    // The history utility has read-only explicit paging controls, never edits.
+    if (ro && currentFrame()?.kind === 'banking-pay-history' && el.hasAttribute('data-payment-history-action')) {
+      el.disabled = el.dataset.historyBusy === '1';
+      return;
+    }
 
     // Candidate Finance Report is a read-only navigation action. It must remain
     // available while the Candidate itself is in View mode; opening a report
@@ -327619,6 +328414,7 @@ const frame = {
 
   // NEW: optional dismiss hook (called when user closes the modal via Close/ESC)
     _onDismiss: (opts && typeof opts.onDismiss === 'function') ? opts.onDismiss : null,
+    _beforeClose: (opts?.kind === 'bpay-next-read' && typeof opts.beforeClose === 'function') ? opts.beforeClose : null,
 
   noParentGate: !!opts.noParentGate,
   forceEdit:    !!opts.forceEdit,
@@ -327644,6 +328440,7 @@ const frame = {
     opts.kind === 'invoice-reference-numbers' ||
     opts.kind === 'invoice-send-email-confirm' ||
     opts.kind === 'job-titles' ||
+    opts.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(opts.kind) ||
     (typeof opts.kind === 'string' && opts.kind.startsWith('invoice-batch-')) ||
     (typeof opts.kind === 'string' && opts.kind.startsWith('import-summary-invoice-batch-'));
@@ -329192,7 +329989,8 @@ if (this.entity === 'imports' && this.kind === 'imports' && k === 'main') {
         // Repaint any last successful result immediately, then always refresh from
         // current server truth. A prior failure or old finance-case snapshot must
         // never remain authoritative merely because this candidate was cached.
-        if (cache[candId]) updateCandidateAdvancesUI(candId);
+        paintNextCandidateFinance(candId); // A fresh owner read precedes every finance figure.
+        // Genuine LEGACY is painted by fetchCandidateAdvances after qualification.
         fetchCandidateAdvances(candId).catch(err => {
           console.warn('[CAND][PAY][FINANCE_REPORT] fetch failed', err);
         });
@@ -329327,6 +330125,27 @@ const handleMoved = async (err, label) => {
 };
 
 const refreshAndRepaintOverview = ensureTsRefreshAndRepaintOverview();
+
+// DY-10: qualify the existing native owner and modal before a targeted Retry.
+const dailyHost=root.querySelector('[data-daily-processing]');
+if(dailyHost && mode==='view' && SESSION?.user?.role==='admin') {
+  const actor=SESSION.user.id, token=mc.openToken, nativeDetails=mc.timesheetDetails;
+  const nativeId=nativeDetails?.timesheet?.timesheet_id, version=nativeDetails?.timesheet?.version;
+  const owner=bankingNextOwnerClient();
+  const current=()=>dailyHost.isConnected && SESSION?.user?.id===actor && isActiveTimesheetModalToken(token)
+    && window.modalCtx?.timesheetDetails===nativeDetails && window.modalCtx?.timesheetDetails?.timesheet?.version===version
+    && String(tsNow()).toLowerCase()===String(tsId).toLowerCase() && owner?.peek()?.active_owner==='NEXT';
+  const requestKey=actor+':'+token+':'+tsId+':'+version;
+  if(mc._dailyProcessingRequestState?.key!==requestKey)mc._dailyProcessingRequestState={key:requestKey};
+  const requestState=mc._dailyProcessingRequestState;
+  const mount=()=>{if(!current())return;window.CloudTMSBpayNextOffice?.mountDailyProcessingNotice?.({document,host:dailyHost,details:nativeDetails,current,requestState,
+    onRetry:()=>{if(!current()||String(nativeId).toLowerCase()!==String(tsId).toLowerCase()||window.CloudTMSBpayNextOffice?.dailyProcessingState?.(nativeDetails)?.retry!==true)throw Error('Context changed');return apiPostJson('/api/tsfin/recompute',{timesheet_ids:[tsId]});},
+    onRefresh:async()=>{if(!current())return false;return await refreshTimesheetModalAfterLifecycleAction(token,{forceFullDetails:true,tabKey:'overview',timesheetId:tsId,source:'daily-processing'});}
+  });};
+  if(owner?.peek()?.active_owner==='NEXT')mount();
+
+}
+
 
 
 
@@ -331786,6 +332605,7 @@ if (this.entity === 'timesheets' && k === 'evidence') {
     this.kind === 'invoice-reference-numbers' ||
     this.kind === 'invoice-send-email-confirm' ||
     this.kind === 'banking-pay-batch-child' ||
+    this.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(this.kind) ||
     (typeof this.kind === 'string' && this.kind.startsWith('invoice-batch-')) ||
     (typeof this.kind === 'string' && this.kind.startsWith('import-summary-invoice-batch-'));
@@ -332276,6 +333096,7 @@ function setFrameMode(frameObj, mode) {
     frameObj.kind === 'timesheets-resolve' ||
     frameObj.kind === 'resolve-candidate'  ||
     frameObj.kind === 'resolve-client'     ||
+    frameObj.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(frameObj.kind) ||
     (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('invoice-batch-')) ||
     (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('import-summary-invoice-batch-'));
@@ -332294,7 +333115,8 @@ function setFrameMode(frameObj, mode) {
       frameObj.kind === 'resolve-candidate'  ||
       frameObj.kind === 'resolve-client'     ||
       frameObj.kind === 'banking-pay-batch-child' ||
-      isImportSummaryUtilityKind(frameObj.kind) ||
+      frameObj.kind === 'bpay-next-read' ||
+    isImportSummaryUtilityKind(frameObj.kind) ||
       (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('invoice-batch-')) ||
       (typeof frameObj.kind === 'string' && frameObj.kind.startsWith('import-summary-invoice-batch-'));
 
@@ -332889,11 +333711,13 @@ _tabPromise.then(async () => {
   console.warn('[MODAL][renderTop] post-tab wiring failed', e);
   GE();
 });
- const afterTabRendered = async () => {
+  const afterTabRendered = async () => {
 
   if (modalNode) {
     const kindNow = String(top?.kind || '').trim();
-    const applied = applyModalGeometryForKind(modalNode, kindNow, { forceCenter: false });
+    const centerNextRead = kindNow === 'bpay-next-read' && !top._nextReadCentered;
+    const applied = applyModalGeometryForKind(modalNode, kindNow, { forceCenter: centerNextRead });
+    if (centerNextRead) top._nextReadCentered = true;
 
     L('renderTop: anchored modal (per-kind)', {
       kind: kindNow || '__default__',
@@ -333283,7 +334107,8 @@ const isUtilityKind =
   top.kind === 'resolve-client'     ||
   top.kind === 'invoice-reference-numbers' ||
   top.kind === 'invoice-send-email-confirm' ||
-  isImportSummaryUtilityKind(top.kind) ||
+  top.kind === 'bpay-next-read' ||
+    isImportSummaryUtilityKind(top.kind) ||
   (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
   (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
 
@@ -333372,6 +334197,39 @@ top._updateButtons = ()=> {
   const ownsPrimaryRecordWorkflow = !!(
     !isChild || (top.noParentGate === true && isPrimaryRecordFrame(top))
   );
+  // Explicit record history entry; no history read on ordinary modal/Banking load.
+  const paymentHistoryButton = byId('btnPaymentHistory');
+  if (paymentHistoryButton) {
+    const data = top._ctxRef?.data || {};
+    const scopeId = String(top.entity === 'candidates' ? data.id : data.timesheet_id || '').toLowerCase();
+    const genuineScope = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(scopeId);
+    const historyEligible = SESSION?.user?.role === 'admin' && genuineScope && top.mode === 'view'
+      && ((top.entity === 'candidates' && ownsPrimaryRecordWorkflow) || (top.entity === 'timesheets' && top.kind === 'timesheets'));
+    const ownerClient = historyEligible ? bankingNextOwnerClient() : null;
+    const historyActor = SESSION?.user?.id || null;
+    if (historyEligible && ownerClient && !top._bpayNextOwnerRequested) {
+      top._bpayNextOwnerRequested = true;
+      void ownerClient.qualify('record:' + top.entity + ':' + scopeId + ':' + crypto.randomUUID())
+        .catch(()=>{}).finally(()=>{if(currentFrame()===top && SESSION?.user?.id===historyActor){top._updateButtons?.();
+          if(top.entity==='timesheets' && top.mode==='view' && top.currentTabKey==='overview'
+            && window.modalCtx?.timesheetDetails?.timesheet?.sheet_scope==='DAILY' && ownerClient.peek()?.active_owner==='NEXT')
+            void safeRerenderTimesheetModal(window.modalCtx.openToken,'overview').catch(()=>{});
+        }});
+    }
+    const showHistory = historyEligible && ownerClient?.peek()?.active_owner === 'NEXT';
+    paymentHistoryButton.style.display = showHistory ? '' : 'none';
+    paymentHistoryButton.disabled = !showHistory || !!top._saving;
+    paymentHistoryButton.onclick = showHistory ? () => {
+      if (currentFrame() !== top || paymentHistoryButton.disabled || !window.CloudTMSBpayNextHistory) return;
+      window.CloudTMSBpayNextHistory.open({
+        document, window, showModal, api: BROKER_BASE_URL, authFetch, actorId: SESSION.user.id,
+        ownerReady: () => ownerClient.peek()?.active_owner === 'NEXT',
+        currentActorId: () => SESSION?.user?.id || null,
+        scope: {candidate_id: top.entity === 'candidates' ? scopeId : null,
+          timesheet_id: top.entity === 'timesheets' ? scopeId : null}
+      });
+    } : null;
+  }
   const isExistingContractFrame = !!(
     ownsPrimaryRecordWorkflow && top.kind === 'contracts' && top.entity === 'contracts' && top.hasId
   );
@@ -333520,6 +334378,7 @@ top._updateButtons = ()=> {
     top.kind === 'resolve-candidate'  ||
     top.kind === 'resolve-client'     ||
     top.kind === 'invoice-reference-numbers' ||
+    top.kind === 'bpay-next-read' ||
     isImportSummaryUtilityKind(top.kind) ||
     (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
     (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'))
@@ -336221,6 +337080,16 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
     if (currentFrame && currentFrame() !== top) return;
     if (top._confirmingDiscard || top._closing) return;
 
+    if (top.kind === 'bpay-next-read' && typeof top._beforeClose === 'function') {
+      const prefix = stack().slice(), token = top._token;
+      top._confirmingDiscard = true;
+      let permitted = false;
+      try { permitted = (await top._beforeClose()) === true; } catch {}
+      finally { top._confirmingDiscard = false; }
+      if (!permitted || currentFrame() !== top || top._token !== token ||
+          stack().length !== prefix.length || prefix.some((frame, index) => stack()[index] !== frame)) return;
+    }
+
      if (top.kind==='advanced-search') {
       top._closing = true;
       document.onmousemove = null;
@@ -337589,13 +338458,14 @@ bindSave(btnSave, top);
     window.addEventListener('modal-frame-mode-changed', onModeChanged);
     window.addEventListener('contract-margins-updated', onMarginsEvt);
     const onModalKey = (e) => {
+      if (currentFrame() !== top) return;
       if (e.key === 'Escape') {
         if (top._confirmingDiscard || top._closing) return;
         e.preventDefault();
         byId('btnCloseModal').click();
         return;
       }
-      if (e.key !== 'Tab' || !isRecordOwnedFrame(top, parent)) return;
+      if (e.key !== 'Tab' || !(top.kind === 'bpay-next-read' || isRecordOwnedFrame(top, parent))) return;
       const modal = byId('modal');
       if (!modal) return;
       const focusable = Array.from(modal.querySelectorAll('button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])'))
@@ -337671,7 +338541,8 @@ bindSave(btnSave, top);
       top.kind === 'resolve-client'     ||
       top.kind === 'invoice-reference-numbers' ||
       top.kind === 'banking-pay-batch-child' ||
-      isImportSummaryUtilityKind(top.kind) ||
+      top.kind === 'bpay-next-read' ||
+    isImportSummaryUtilityKind(top.kind) ||
       (typeof top.kind === 'string' && top.kind.startsWith('invoice-batch-')) ||
       (typeof top.kind === 'string' && top.kind.startsWith('import-summary-invoice-batch-'));
 
@@ -342934,7 +343805,8 @@ async function apiResolveTimesheetClient(timesheetId, clientId) {
 
 async function openImportsModal() {
   if (window.CloudTMSWeeklySourceImportWorkspaceV1?.open) {
-    return window.CloudTMSWeeklySourceImportWorkspaceV1.open();
+    return window.CloudTMSWeeklySourceImportWorkspaceV1.open('imports', { bankingOwnerClient: bankingNextOwnerClient(),
+      actorId: SESSION?.user?.id || null, currentActorId: () => SESSION?.user?.id || null });
   }
   // Seed a neutral modalCtx for this screen
   window.modalCtx = {
@@ -358918,6 +359790,7 @@ async function fetchTimesheetDetails(timesheetId) {
     validations,
     shifts,
     segments,
+    daily_processing: json.daily_processing || null,
     invoiceBreakdown: ib,
     isSegmentsMode: isSegments,
     invoice_no_by_invoice_id,
@@ -358960,6 +359833,21 @@ async function fetchTimesheetDetails(timesheetId) {
     current_version,
     was_stale
   };
+
+  // A successful exact current status read clears only this native window's unknown Retry state.
+  const dailyRequest=window.modalCtx?._dailyProcessingRequestState;
+  if(dailyRequest && window.modalCtx?.entity==='timesheets'
+    && String(window.modalCtx?.data?.timesheet_id||'').toLowerCase()===String(timesheetId).toLowerCase()
+    && dailyRequest.key===SESSION?.user?.id+':'+window.modalCtx.openToken+':'+window.modalCtx.data.timesheet_id+':'+timesheet?.version
+    && window.CloudTMSBpayNextOffice?.dailyProcessingState?.(detail)?.key !== 'UNAVAILABLE'
+    && window.CloudTMSBpayNextOffice?.dailyProcessingState?.(detail)
+    && detail.daily_processing?.status!=='UNAVAILABLE'
+    && ['NONE','PENDING','FAILED'].includes(detail.daily_processing?.status)
+    && detail.timesheet?.is_current===true && detail.was_stale===false
+    && String(detail.current_timesheet_id).toLowerCase()===String(timesheetId).toLowerCase()){
+      dailyRequest.unknown=false;
+      if(dailyRequest.result?.startsWith('Could not '))dailyRequest.result='';
+    }
 
   L('parsed payload snapshot', {
     hasTimesheet: !!timesheet,
@@ -362377,7 +363265,23 @@ async function openTimesheetEvidenceViewerExisting(evidenceItem) {
   GE();
 }
 
+function showNextTimesheetSnoozeResult(message,error=false){
+ const host=document.getElementById('modalBody');if(!host)return;let line=host.querySelector('[data-next-timesheet-snooze-result]');if(!line){line=document.createElement('p');line.className='ws-notice';line.setAttribute('data-next-timesheet-snooze-result','');line.setAttribute('data-next-live-copy','');host.prepend(line);}line.textContent=message;line.setAttribute('role',error?'alert':'status');
+}
+async function openNextTimesheetPaymentSnooze(input={}){
+ const ownerClient=bankingNextOwnerClient(),actor=SESSION?.user?.id,parent=currentFrame();
+ if(!ownerClient){showNextTimesheetSnoozeResult('Could not check payment settings; try again.',true);return {handled:true,result:null};}
+ try{await ownerClient.qualify('timesheet:snooze:'+crypto.randomUUID());if(SESSION?.user?.id!==actor||currentFrame()!==parent)return {handled:true,result:null};
+  const owner=ownerClient.peek();if(owner?.active_owner==='LEGACY')return {handled:false,result:null};if(owner?.active_owner!=='NEXT'||!window.CloudTMSBpayNextSnooze)throw Error();
+  const mc=window.modalCtx??{},row=mc.data??{},details=mc.timesheetDetails??{},candidate=mc.timesheetRelated?.candidate??{},ts=details.timesheet??{};
+  const scope={candidate_id:String(input.candidate_id??input.candidateId??candidate.id??candidate.candidate_id??row.candidate_id??'').toLowerCase(),physical_timesheet_id:String(input.timesheet_id??input.timesheetId??row.timesheet_id??row.id??'').toLowerCase(),physical_timesheet_version:String(ts.version??details.current_version??row.version??''),scope_kind:'WHOLE_TIMESHEET',snooze_kind:'TIMESHEET_PAYMENT'};
+  const child=window.CloudTMSBpayNextSnooze.open({document,window,actorId:actor,api:API,authFetch,currentActorId:()=>SESSION?.user?.id??null,ownerReady:()=>ownerClient.peek()?.active_owner==='NEXT'&&ownerClient.peek()?.owner_epoch===owner.owner_epoch,showReadWindow:window.CloudTMSBpayNextUi.createStandardWindowAdapter({document,window,showModal,closeModal})},
+   {scope,clear:input.clear===true,label:'Timesheet payment',candidateLabel:input.candidate_display_name??candidate.display_name??row.candidate_name,clientLabel:input.client_name??mc.timesheetRelated?.client?.name??row.client_name,dateLabel:(ts.week_ending_date??row.week_ending_date)?'Week ending '+String(ts.week_ending_date??row.week_ending_date).split('-').reverse().join('/'):null});
+  return {handled:true,result:await child.done};
+ }catch{if(SESSION?.user?.id===actor&&currentFrame()===parent)showNextTimesheetSnoozeResult('Could not open the snooze; try again.',true);return {handled:true,result:null};}
+}
 async function openTimesheetPaymentSnoozeModal(input = {}) {
+  const next=await openNextTimesheetPaymentSnooze(input);if(next.handled)return next.result;
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
@@ -363291,6 +364195,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
         if (!result || result.ok !== true) return;
 
         await refreshOverviewOnly();
+        if(result.next===true){showNextTimesheetSnoozeResult(result.message??'Snooze updated.');return;}
 
         if (result.action === 'clear') {
           toast('Timesheet payment snooze cleared.');
@@ -363329,6 +364234,7 @@ function wireTimesheetOverviewFinanceActions(rootArg = null) {
       clearSnoozePaymentBtn.disabled = true;
 
       try {
+        const next=await openNextTimesheetPaymentSnooze({...buildSnoozeSeed(),clear:true});if(next.handled){if(next.result?.ok){await refreshOverviewOnly();showNextTimesheetSnoozeResult(next.result.message??'Snooze removed.');}return;}
         if (typeof openUiConfirmModal === 'function') {
           const confirmRes = await openUiConfirmModal({
             title: 'Clear payment snooze?',
@@ -363394,6 +364300,8 @@ function renderTimesheetOverviewTab(ctx) {
 
   const ts    = details.timesheet || {};
   const tsfin = details.tsfin     || {};
+  const dailyStatusForOverview = SESSION?.user?.role==='admin' && bankingNextOwnerClient()?.peek()?.active_owner==='NEXT'
+    ? window.CloudTMSBpayNextOffice?.dailyProcessingState?.(details) : null;
   const cw    = details.contract_week || {};
   const rCand = related.candidate || {};
   const rCli  = related.client    || {};
@@ -364420,7 +365328,7 @@ function renderTimesheetOverviewTab(ctx) {
         ? 'This timesheet has been reset or currently has no valid hours recorded yet. Enter/submit hours to continue.'
         : 'This is a real timesheet row but it is currently unprocessed. Save/process hours to continue.'
     );
-  } else if (!hasTsfin && (!detailsLoading || hasExplicitLifecycleSummary || isPlannedOnly)) {
+  } else if (!hasTsfin && !dailyStatusForOverview && (!detailsLoading || hasExplicitLifecycleSummary || isPlannedOnly)) {
     addStage(
       'Unprocessed',
       'pill-info',
@@ -364563,7 +365471,7 @@ function renderTimesheetOverviewTab(ctx) {
     if (stageRaw !== 'PENDING_AUTH') addStage(stageRaw, 'pill-info');
   }
 
-  if (!stageBadges.length) {
+  if (!stageBadges.length && !dailyStatusForOverview) {
     if (detailsLoading) {
       addStage('Loading timesheet state…', 'pill-info', 'Canonical timesheet details are still loading. Lifecycle badges will update when the current details arrive.');
     } else {
@@ -364680,7 +365588,7 @@ function renderTimesheetOverviewTab(ctx) {
           <div class="mini">
             ${
               weYmd
-                ? `Week ending: ${fmtDow(weYmd)} ${fmtYmdToDmy(weYmd)}`
+                ? `Week ending: ${row.__bpayNextExactPhysicalId ? weYmd.split('-').reverse().join('/') : fmtDow(weYmd)+' '+fmtYmdToDmy(weYmd)}`
                 : '<span class="mini">Week ending: Unknown</span>'
             }
           </div>
@@ -365014,15 +365922,15 @@ function renderTimesheetOverviewTab(ctx) {
 
   const routeHtml = `
     <div class="card" style="margin-top:10px;">
-      <div class="row">
+      ${stageBadgesForDisplay.length ? `<div class="row">
         <label>Stage</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;">
           ${stageBadgesForDisplay.join('')}
         </div>
-      </div>
+      </div>` : ''}
 
       <div class="row">
-        <label>Route</label>
+        <label>${dailyStatusForOverview ? 'Timesheet type' : 'Route'}</label>
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
           ${deletePolicyBadgeHtmlForDisplay}
           <span class="pill ${routePillClass}" style="font-weight:600;" ${routeTitleForDisplay ? `title="${enc(routeTitleForDisplay)}"` : ''}>${enc(routeLabelForDisplay)}</span>
@@ -365030,6 +365938,7 @@ function renderTimesheetOverviewTab(ctx) {
         </div>
       </div>
 
+      ${dailyStatusForOverview ? '<div class="row" data-view-only="true"><label>Daily Timesheet</label><div class="controls bpay-next-daily-notice" data-daily-processing hidden></div></div>' : ''}
       ${candidateOverviewHtml ? `<div data-view-only="true">${candidateOverviewHtml}</div>` : ''}
 
       ${routeActionsRowHtml}
@@ -367275,7 +368184,7 @@ async function openTimesheet(row) {
       ['NHSP', 'CLIENT_PROVIDED_HOURS', 'TIMESHEETS_CHECKED_WITH_CLIENT'].includes(weeklySourceCategory)
     );
     const title = hasTs
-      ? (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`)
+      ? (baseRow.__bpayNextExactPhysicalId && baseRow.reference_number ? `Timesheet · ${baseRow.reference_number}` : (hasWeeklySourceIdentity ? `Timesheet · ${weeklySourceCandidateName}` : `Timesheet ${String(tsId).slice(0, 8)}…`))
       : `Weekly timesheet (planned) ${String(weekId).slice(0, 8)}…`;
 
     const hasRelatedId = !!(tsId || weekId);
@@ -367526,7 +368435,7 @@ function isActiveTimesheetModalToken(openToken) {
   }
 }
 
-function renderTimesheetLoadingCard(label, message) {
+function renderTimesheetLoadingCard(label, message, isExactNavigationError = false) {
   const enc = (typeof escapeHtml === 'function')
     ? escapeHtml
     : ((v) => String(v == null ? '' : v)
@@ -367544,7 +368453,7 @@ function renderTimesheetLoadingCard(label, message) {
       <div class="card">
         <div class="row">
           <label>${enc(title)}</label>
-          <div class="controls"><span class="mini">${enc(msg)}</span></div>
+          <div class="controls"><span class="mini"${isExactNavigationError ? ' role="alert"' : ''}>${enc(msg)}</span></div>
         </div>
       </div>
     </div>`;
@@ -367612,8 +368521,13 @@ function makeTimesheetFastOpenRenderTab(openToken, baseRowArg) {
     const hydration = (mc.timesheetHydration && typeof mc.timesheetHydration === 'object') ? mc.timesheetHydration : {};
     const detailsError = String(hydration.detailsError || '').trim();
 
-    if (detailsError) {
-      return renderTimesheetLoadingCard('Timesheet details', detailsError);
+    // Keep the same Daily identity and Refresh-only result after an unknown read.
+    const retainedDailyStatus=key==='overview' && mc._dailyProcessingRequestState?.unknown===true
+      && mc._dailyProcessingRequestState.key===SESSION?.user?.id+':'+openToken+':'+mc.data?.timesheet_id+':'+mc.timesheetDetails?.timesheet?.version
+      && SESSION?.user?.role==='admin' && bankingNextOwnerClient()?.peek()?.active_owner==='NEXT'
+      && window.CloudTMSBpayNextOffice?.dailyProcessingState?.(mc.timesheetDetails);
+    if (detailsError && !retainedDailyStatus) {
+      return renderTimesheetLoadingCard('Timesheet details', detailsError, baseRow.__bpayNextExactPhysicalId != null);
     }
 
     const detailsLoaded = hydration.detailsLoaded === true;

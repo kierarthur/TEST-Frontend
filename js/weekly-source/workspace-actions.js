@@ -64,38 +64,29 @@
   };
   const titleCaseStatus = (value) => asText(value).replaceAll('_', ' ').toLowerCase().replace(/(^|\s)\S/g, (token) => token.toUpperCase());
   const workspaceApi = () => root.CloudTMSWeeklySourceImportWorkspaceV1;
+  const sourceAdmissionBusy = error => workspaceApi()?.isSourceAdmissionBusy?.(error) === true;
+  const sourceBusyMessage = 'Another Source update is in progress. Try again in a moment.';
   const knownProtectedRefusal = (error) => (error?.status === 400
       && /weekly_source_target_managed_root_prepare_atomic_v1 failed 400:[\s\S]*WEEKLY_SOURCE_TSFIN_IDENTITY_OR_POLICY_MISMATCH/i.test(asText(error?.message)))
     || ['WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED', 'WEEKLY_PROTECTED_EXISTING_SHIFT_SELECTION_REQUIRED',
-      'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID', 'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID'].includes(error?.code);
+      'WEEKLY_PROTECTED_CONTRACT_SCOPE_INVALID', 'WEEKLY_PROTECTED_FAMILY_REQUEST_INVALID', 'LOCAL_OWNER_REQUIRED', 'BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(error?.code);
   const localPublisherRefusal = (error) => error?.code === 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY'
     || (error?.status === 400 && /weekly_exceptional_pay_complete_local_v1 failed 400:[\s\S]*\bWEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY\b/i.test(asText(error?.message)));
 
+  function confirmedProtectedResult(result) {
+    const confirmed = root.CloudTMSWeeklySourcePresentationV1?.protectedActionConfirmation?.(result);
+    if (confirmed?.confirmed === true) return confirmed;
+    const code = asText(result?.code || result?.error_code);
+    const error = new Error(['LOCAL_OWNER_REQUIRED', 'BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(code)
+      ? 'Save this change through the Source editor. No payment change was accepted.'
+      : confirmed?.message || 'The save could not be confirmed. Retry exact request.');
+    error.code = code;
+    error.retryable = result?.retryable === true;
+    throw error;
+  }
+
   async function saveProtectedOnce(pending) {
-    const command = pending.action;
-    const payload = pending.payload;
-    if (!pending.attempted) {
-      pending.attempted = true;
-      try { return await workspaceApi().issueCommand(command, payload); }
-      catch (error) {
-        if (localPublisherRefusal(error)) {
-          // The completion transaction refused before accepting a decision.
-          // Earlier preparation remains: retry this exact request, not a new key.
-          pending.attempted = false;
-          throw error;
-        }
-        if (knownProtectedRefusal(error)) throw error;
-      }
-    }
-    try {
-      return await workspaceApi().issueCommand(command, { ...payload, recover_unknown_outcome: true });
-    } catch (error) {
-      if (localPublisherRefusal(error)) { pending.attempted = false; throw error; }
-      if (error?.code !== 'C1_DURABLE_RECOVERY_NOT_REQUIRED') throw error;
-      // The same Office command is safe to resume with its original key when
-      // the durable owner proves that no publication requires recovery.
-      return workspaceApi().issueCommand(command, payload);
-    }
+    return await workspaceApi().issueCommand(pending.action, pending.payload);
   }
 
   function plainMessage(value, fallback = 'This item needs attention before you can continue.') {
@@ -338,9 +329,9 @@
 
   function renderContractChooser(model, state = {}) {
     const context = [['Candidate',model.candidate],['Client',model.client],['Shift',model.shift],['Source role / band',model.source_role_band]].filter(([,value]) => value).map(([label,value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-    const rows = model.choices.map((choice) => `<tr><td><input type="checkbox" name="wsa-contract" value="${escapeHtml(choice.id)}" aria-label="Choose ${escapeHtml(choice.role_band || 'contract')}"${state.selected === choice.id ? ' checked' : ''}${state.busy ? ' disabled' : ''}></td><td>${escapeHtml(choice.role_band || '—')}</td><td>${escapeHtml(choice.site || '—')}</td><td>${escapeHtml(choice.dates || '—')}</td><td>${escapeHtml(choice.pay_type || '—')}</td><td><button type="button" class="btn btn-outline" data-wsa-view-contract="${escapeHtml(choice.id)}">${escapeHtml(choice.details_label)}</button></td></tr>`).join('');
+    const rows = model.choices.map((choice) => `<tr><td><input type="checkbox" name="wsa-contract" value="${escapeHtml(choice.id)}" aria-label="Choose ${escapeHtml(choice.role_band || 'contract')}"${state.selected === choice.id ? ' checked' : ''}${state.busy || state.pending ? ' disabled' : ''}></td><td>${escapeHtml(choice.role_band || '—')}</td><td>${escapeHtml(choice.site || '—')}</td><td>${escapeHtml(choice.dates || '—')}</td><td>${escapeHtml(choice.pay_type || '—')}</td><td><button type="button" class="btn btn-outline" data-wsa-view-contract="${escapeHtml(choice.id)}">${escapeHtml(choice.details_label)}</button></td></tr>`).join('');
     const explanation = model.choices.length ? 'Review the contracts for this shift and choose the one that applies. Its eligibility will be checked again.' : 'No contract covers this shift. Create or correct the contract, then return to Imports and use Recheck.';
-    return `<div class="ws-child" data-wsa-screen="contract"><div class="ws-child-context">${context}</div><p>${explanation}</p><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Choose</th><th>Role / band</th><th>Contract site</th><th>Contract dates</th><th>Pay type</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button>${model.contract_seed.candidate_id && model.contract_seed.client_id ? `<button type="button" class="btn btn-outline" data-wsa-create-contract${state.selected || state.busy ? ' disabled' : ''}>Create contract</button>` : ''}<button type="button" class="btn primary" data-wsa-use-contract${state.selected && !state.busy ? '' : ' disabled'}>${state.failed ? 'Try again' : 'Use selected contract'}</button></div></div>`;
+    return `<div class="ws-child" data-wsa-screen="contract"><div class="ws-child-context">${context}</div><p>${explanation}</p><div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Choose</th><th>Role / band</th><th>Contract site</th><th>Contract dates</th><th>Pay type</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button>${model.contract_seed.candidate_id && model.contract_seed.client_id ? `<button type="button" class="btn btn-outline" data-wsa-create-contract${state.selected || state.busy ? ' disabled' : ''}>Create contract</button>` : ''}<button type="button" class="btn primary" data-wsa-use-contract${state.selected && !state.busy ? '' : ' disabled'}>${state.sourceAdmissionBusy ? 'Try again' : state.pending ? 'Retry exact request' : 'Use selected contract'}</button></div></div>`;
   }
 
   function normaliseCorrectFinal(payload) {
@@ -398,21 +389,21 @@
 
   function renderCorrectFinal(model, state = {}) {
     const context = `<div class="ws-child-context">${model.current_label ? `<div><span>Current final</span><strong>${escapeHtml(model.current_label)}</strong></div>` : ''}${model.scope_label ? `<div><span>Trust and cutoff</span><strong>${escapeHtml(model.scope_label)}</strong></div>` : ''}${state.filename ? `<div><span>Replacement file</span><strong>${escapeHtml(state.filename)}</strong></div>` : ''}</div>`;
-    const error = state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>${state.phase === 'reviewed' ? 'The final source was not changed' : 'The replacement could not be reviewed'}</strong><span>${escapeHtml(plainMessage(state.error, state.phase === 'reviewed' ? 'Recheck the blockers and try again.' : 'Recheck the file and try again.'))}</span></div>` : '';
+    const error = state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>${state.sourceAdmissionBusy ? 'Source update in progress' : state.pendingApply ? 'Result not confirmed' : 'The replacement could not be reviewed'}</strong><span>${escapeHtml(plainMessage(state.error, state.phase === 'reviewed' ? 'Recheck the blockers and try again.' : 'Recheck the file and try again.'))}</span></div>` : '';
     if (state.phase !== 'reviewed') {
-      return `<div class="ws-child" data-wsa-screen="correct-final"><p>The previous final version will remain in History.</p>${context}<div class="ws-child-fields"><span>Upload the replacement source file again</span><label class="btn btn-outline ws-file-button">Choose file<input type="file" data-wsa-replacement-file hidden accept=".xlsx,.xls,.csv,.htm,.html"${state.busy ? ' disabled' : ''}></label>${state.filename ? `<strong>${escapeHtml(state.filename)}</strong>` : ''}</div>${error}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>${state.busy ? 'Close' : 'Cancel'}</button><button type="button" class="btn primary" data-wsa-review-correction${state.file && !state.busy ? '' : ' disabled'}>${state.busy ? 'Reviewing…' : 'Review replacement'}</button></div></div>`;
+      return `<div class="ws-child" data-wsa-screen="correct-final"><p>The previous final version will remain in History.</p>${context}<div class="ws-child-fields"><span>Upload the replacement source file again</span><label class="btn btn-outline ws-file-button">Choose file<input type="file" data-wsa-replacement-file hidden accept=".xlsx,.xls,.csv,.htm,.html"${state.busy || state.pendingReview ? ' disabled' : ''}></label>${state.filename ? `<strong>${escapeHtml(state.filename)}</strong>` : ''}</div>${error}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>${state.busy ? 'Close' : 'Cancel'}</button><button type="button" class="btn primary" data-wsa-review-correction${state.file && !state.busy ? '' : ' disabled'}>${state.busy ? 'Reviewing…' : state.pendingReview ? state.sourceAdmissionBusy ? 'Try again' : 'Retry exact request' : 'Review replacement'}</button></div></div>`;
     }
     const preview = state.preview;
     const activeTab = state.active_tab === 'blocked' ? 'blocked' : 'changes';
     const tabs = `<div class="ws-child-tablist" role="tablist" aria-label="Correction review"><button type="button" role="tab" data-wsa-correction-tab="changes" aria-selected="${activeTab === 'changes'}">Changes (${preview.changes.length})</button><button type="button" role="tab" data-wsa-correction-tab="blocked" aria-selected="${activeTab === 'blocked'}">Blocked (${preview.blockers.length})</button></div>`;
     const blocked = preview.blockers.length ? '<div class="ws-notice ws-notice--warning" role="status"><strong>This correction cannot be applied yet</strong><span>Resolve every blocked item, then review the replacement again.</span></div>' : '';
-    const confirmation = `<div class="ws-child-fields"><label>Reason<textarea data-wsa-correction-reason maxlength="1000" required>${escapeHtml(state.reason || '')}</textarea></label></div><label class="ws-confirm"><input type="checkbox" data-wsa-correction-confirm${state.confirmed ? ' checked' : ''}${preview.ready ? '' : ' disabled'}><span>${escapeHtml(preview.confirmation_text)}</span></label>`;
+    const confirmation = `<div class="ws-child-fields"><label>Reason<textarea data-wsa-correction-reason maxlength="1000" required${state.busy || state.pendingApply ? ' disabled' : ''}>${escapeHtml(state.reason || '')}</textarea></label></div><label class="ws-confirm"><input type="checkbox" data-wsa-correction-confirm${state.confirmed ? ' checked' : ''}${preview.ready && !state.busy && !state.pendingApply ? '' : ' disabled'}><span>${escapeHtml(preview.confirmation_text)}</span></label>`;
     const applyEnabled = preview.ready && asText(state.reason) && state.confirmed && !state.busy;
-    return `<div class="ws-child" data-wsa-screen="correct-final"><p>The previous final version will remain in History.</p>${context}${blocked}${tabs}${correctFinalTable(preview, activeTab)}${confirmation}${error}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Close</button>${preview.blockers.length ? '<button type="button" class="btn primary" data-wsa-review-correction>Recheck</button>' : `<button type="button" class="btn primary" data-wsa-apply-correction${applyEnabled ? '' : ' disabled'}>${state.busy ? 'Applying…' : 'Apply corrected final source'}</button>`}</div></div>`;
+    return `<div class="ws-child" data-wsa-screen="correct-final"><p>The previous final version will remain in History.</p>${context}${blocked}${tabs}${correctFinalTable(preview, activeTab)}${confirmation}${error}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Close</button>${preview.blockers.length ? `<button type="button" class="btn primary" data-wsa-review-correction${state.busy ? ' disabled' : ''}>${state.pendingReview ? state.sourceAdmissionBusy ? 'Try again' : 'Retry exact request' : 'Recheck'}</button>` : `<button type="button" class="btn primary" data-wsa-apply-correction${applyEnabled ? '' : ' disabled'}>${state.busy ? 'Applying…' : state.pendingApply ? state.sourceAdmissionBusy ? 'Try again' : 'Retry exact request' : 'Apply corrected final source'}</button>`}</div></div>`;
   }
 
   function renderCommandConfirmation(model, state = {}) {
-    return `<div class="ws-child" data-wsa-screen="command"><p>${escapeHtml(model.message)}</p>${model.context ? `<div class="ws-child-context">${NON_TECHNICAL_DETAIL_LABELS.map(([key,label]) => asText(model.context[key]) ? `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(asText(model.context[key]))}</strong></div>` : '').join('')}</div>` : ''}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}><span>${escapeHtml(model.confirmation)}</span></label>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button><button type="button" class="btn primary" data-wsa-run-command${state.confirmed && !state.busy ? '' : ' disabled'}>${state.failed ? 'Try again' : escapeHtml(model.action_label)}</button></div></div>`;
+    return `<div class="ws-child" data-wsa-screen="command"><p>${escapeHtml(model.message)}</p>${model.context ? `<div class="ws-child-context">${NON_TECHNICAL_DETAIL_LABELS.map(([key,label]) => asText(model.context[key]) ? `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(asText(model.context[key]))}</strong></div>` : '').join('')}</div>` : ''}<label class="ws-confirm"><input type="checkbox" data-wsa-confirm${state.confirmed ? ' checked' : ''}><span>${escapeHtml(model.confirmation)}</span></label>${state.error ? `<div class="ws-notice ws-notice--danger" role="alert"><span>${escapeHtml(plainMessage(state.error))}</span></div>` : ''}<div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-close>Cancel</button><button type="button" class="btn primary" data-wsa-run-command${state.confirmed && !state.busy ? '' : ' disabled'}>${state.sourceAdmissionBusy ? 'Try again' : state.failed ? 'Retry exact request' : escapeHtml(model.action_label)}</button></div></div>`;
   }
 
   function currentChild(kind) {
@@ -452,12 +443,20 @@
     frame._updateButtons?.();
   }
 
-  async function finishAction() {
+  function protectedCaller(kind, actor, frame) {
+    const workspace = workspaceApi();
+    return () => !!actor && !!frame && currentChild(kind) === frame && workspaceApi() === workspace
+      && (typeof SESSION !== 'undefined' ? SESSION?.user?.id : null) === actor;
+  }
+
+  async function finishAction(confirmation, callerCurrent) {
+    if (callerCurrent && !callerCurrent()) return;
     // The shared modal shell treats changes to confirmation controls as form
     // edits. Once the server has completed the requested action, this child no
     // longer owns unsaved input and must close without a discard prompt.
     markCompletedChildClean();
     closeChild();
+    if (confirmation?.message) root.__toast?.(confirmation.message);
     await workspaceApi()?.refresh?.();
   }
 
@@ -489,13 +488,15 @@
         : entry.error || entry.model?.fatal_errors?.[0]?.message
           || (!ready ? 'This backing report could not be prepared for acceptance.' : '');
       const status = entry.status === 'ACCEPTED' ? 'Accepted'
+        : entry.sourceAdmissionBusy ? 'Try again'
+        : entry.pendingSourceAcceptance && entry.status === 'FAILED' ? 'Result not confirmed'
         : entry.status === 'FAILED' ? 'Not accepted'
           : ready ? 'Ready' : 'Needs attention';
       return `<div class="ws-batch-report" data-wsa-batch-row="${entry.index}"><label class="ws-batch-report__select"><input type="checkbox" data-wsa-batch-select="${entry.index}"${ready && entry.status !== 'ACCEPTED' && !state.busy ? '' : ' disabled'}${state.selected.has(entry.index) && entry.status !== 'ACCEPTED' ? ' checked' : ''}><span class="ws-batch-report__file">${escapeHtml(entry.filename)}</span></label><div class="ws-batch-report__facts"><span>Trust <strong>${escapeHtml(entry.model?.trust || '—')}</strong></span><span>Report <strong>${escapeHtml(entry.model?.report_number || '—')}</strong></span><span>Cutoff <strong>${escapeHtml(entry.model?.cutoff || '—')}</strong></span><span class="ws-status ws-status--${entry.status === 'ACCEPTED' ? 'positive' : ready && entry.status !== 'FAILED' ? 'info' : 'warning'}">${status}</span></div>${issue || entry.status === 'FAILED' ? `<p class="ws-batch-report__issue">${escapeHtml(plainMessage(entry.error || issue, 'Recheck this file before retrying.'))}</p>` : ''}</div>`;
     }).join('');
     const pending = entries.filter((entry) => state.selected.has(entry.index) && entry.status !== 'ACCEPTED' && entry.model?.ok && !entry.duplicate);
     const accepted = entries.filter((entry) => entry.status === 'ACCEPTED').length;
-    return `<div class="ws-child ws-batch-preview" data-wsa-screen="batch-preview"><p>Review each backing report before accepting it. Each Trust stays separate; no week is finalised here.</p><div class="ws-child-scroll ws-batch-preview__list">${rows}</div><label class="ws-confirm"><input type="checkbox" data-wsa-batch-confirm${state.confirmed ? ' checked' : ''}${pending.length && !state.busy ? '' : ' disabled'}><span>I confirm the selected reports and their Trusts.</span></label><div class="ws-child-actions"><span role="status">${accepted} accepted · ${pending.length} selected</span><button type="button" class="btn btn-outline" data-wsa-batch-close${state.busy ? ' disabled' : ''}>${accepted ? 'Done' : 'Close'}</button><button type="button" class="btn primary" data-wsa-batch-accept${pending.length && state.confirmed && !state.busy ? '' : ' disabled'}>${state.busy ? 'Accepting…' : 'Accept selected reports'}</button></div></div>`;
+    return `<div class="ws-child ws-batch-preview" data-wsa-screen="batch-preview"><p>Review each backing report before accepting it. Each Trust stays separate; no week is finalised here.</p><div class="ws-child-scroll ws-batch-preview__list">${rows}</div><label class="ws-confirm"><input type="checkbox" data-wsa-batch-confirm${state.confirmed ? ' checked' : ''}${pending.length && !state.busy ? '' : ' disabled'}><span>I confirm the selected reports and their Trusts.</span></label><div class="ws-child-actions"><span role="status">${accepted} accepted · ${pending.length} selected</span><button type="button" class="btn btn-outline" data-wsa-batch-close${state.busy ? ' disabled' : ''}>${accepted ? 'Done' : 'Close'}</button><button type="button" class="btn primary" data-wsa-batch-accept${pending.length && state.confirmed && !state.busy ? '' : ' disabled'}>${state.busy ? 'Accepting…' : entries.some(entry => entry.pendingSourceAcceptance && !entry.sourceAdmissionBusy) ? 'Retry exact request' : entries.some(entry => entry.sourceAdmissionBusy) ? 'Try again' : 'Accept selected reports'}</button></div></div>`;
   }
 
   function openBatchPreview(details) {
@@ -505,6 +506,9 @@
       confirmed: false, busy: false
     };
     const kind = 'weekly-source-batch-preview-v1';
+    const actor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+    let frame;
+    const callerCurrent = () => protectedCaller(kind, actor, frame)();
     const render = () => renderBatchPreview(entries, state);
     const wire = () => {
       const host = root.document?.querySelector('[data-wsa-screen="batch-preview"]');
@@ -526,18 +530,27 @@
         if (entries.some((entry) => entry.status === 'ACCEPTED')) await workspaceApi()?.refresh?.('imports');
       });
       host.querySelector('[data-wsa-batch-accept]')?.addEventListener('click', async () => {
-        if (!state.confirmed || state.busy) return;
+        if (!state.confirmed || state.busy || !callerCurrent()) return;
         state.busy = true;
         rerender(kind);
         for (const entry of entries) {
           if (!state.selected.has(entry.index) || entry.status === 'ACCEPTED' || !entry.model?.ok || entry.duplicate) continue;
+          if (!callerCurrent()) return;
+          const retained = entry.pendingSourceAcceptance;
+          const payload = retained || JSON.parse(JSON.stringify(buildUploadAcceptancePayload(entry.model, { confirmed: true })));
+          entry.sourceAdmissionBusy = false;
           try {
-            await workspaceApi()?.acceptUpload?.(buildUploadAcceptancePayload(entry.model, { confirmed: true }));
+            await workspaceApi()?.acceptUpload?.(payload);
+            if (!callerCurrent()) return;
+            entry.pendingSourceAcceptance = null;
             entry.status = 'ACCEPTED';
             entry.error = '';
             state.selected.delete(entry.index);
             workspaceApi()?.selectAcceptedScope?.(entry.model.accept_context);
           } catch (error) {
+            if (!callerCurrent()) return;
+            entry.sourceAdmissionBusy = sourceAdmissionBusy(error);
+            if (entry.sourceAdmissionBusy || retained) entry.pendingSourceAcceptance = payload;
             entry.status = 'FAILED';
             entry.error = asText(error?.message) || 'This backing report was not accepted.';
           }
@@ -547,13 +560,18 @@
         rerender(kind);
       });
     };
-    return openChild({ title: 'Review backing reports', kind, render, wire });
+    const opened = openChild({ title: 'Review backing reports', kind, render, wire });
+    frame = currentChild(kind);
+    return opened;
   }
 
   function openPreview(detail) {
     const model = normalisePreview(detail);
     const state = { coverage_start: model.coverage_start, coverage_end: model.coverage_end, confirmed: false, busy: false, failed: false, ambiguous: false, error: '' };
     const kind = 'weekly-source-preview-v1';
+    const actor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+    let frame;
+    const callerCurrent = () => protectedCaller(kind, actor, frame)();
     const render = () => renderPreview(model, state);
     const wire = () => {
       const host = root.document?.querySelector('[data-wsa-screen="preview"]');
@@ -561,6 +579,7 @@
       host.dataset.wsaWired = '1';
       host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
       const sync = () => {
+        if (state.pendingSourceAcceptance) return;
         state.import_use = host.querySelector('[data-wsa-import-use]')?.value || 'CHECKING';
         state.coverage_start = host.querySelector('[data-wsa-coverage-start]')?.value || state.coverage_start;
         state.coverage_end = host.querySelector('[data-wsa-coverage-end]')?.value || state.coverage_end;
@@ -575,13 +594,33 @@
       host.querySelectorAll('[data-wsa-coverage-start],[data-wsa-coverage-end],[data-wsa-import-use]').forEach((input) => input.addEventListener('change', () => { sync(); rerender(kind); }));
       host.querySelectorAll('[data-wsa-confirm],[data-wsa-shrink-confirm]').forEach((input) => input.addEventListener('change', sync));
       sync();
+      if (state.pendingSourceAcceptance) {
+        host.querySelectorAll('input, select, textarea').forEach(control => { control.disabled = true; });
+        const retry = host.querySelector('[data-wsa-accept]');
+        if (retry) { retry.disabled = state.busy; retry.textContent = state.sourceAdmissionBusy ? 'Try again' : 'Retry exact request'; }
+      }
       host.querySelector('[data-wsa-accept]')?.addEventListener('click', async () => {
-        sync(); state.busy = true; state.error = ''; rerender(kind);
-        try { await workspaceApi()?.acceptUpload?.(buildUploadAcceptancePayload(model, state)); await finishAction(); }
-        catch (error) { state.busy = false; state.failed = true; state.ambiguous = isCandidateComparisonAmbiguity(error); state.error = error?.message; rerender(kind); }
+        if (state.busy || !callerCurrent()) return;
+        if (!state.pendingSourceAcceptance) sync();
+        const retained = state.pendingSourceAcceptance;
+        const payload = retained || JSON.parse(JSON.stringify(buildUploadAcceptancePayload(model, state)));
+        state.sourceAdmissionBusy = false; state.busy = true; state.error = ''; rerender(kind);
+        try {
+          await workspaceApi()?.acceptUpload?.(payload);
+          if (!callerCurrent()) return;
+          state.pendingSourceAcceptance = null; await finishAction(null, callerCurrent);
+        } catch (error) {
+          if (!callerCurrent()) return;
+          state.sourceAdmissionBusy = sourceAdmissionBusy(error);
+          if (state.sourceAdmissionBusy || retained) state.pendingSourceAcceptance = payload;
+          state.busy = false; state.failed = true; state.ambiguous = isCandidateComparisonAmbiguity(error);
+          state.error = error?.message; rerender(kind);
+        }
       });
     };
-    return openChild({ title: 'Review source file', kind, render, wire });
+    const opened = openChild({ title: 'Review source file', kind, render, wire });
+    frame = currentChild(kind);
+    return opened;
   }
 
   async function reviewContract(id, button) {
@@ -643,19 +682,22 @@
         problem: 'No contract choices are available for this source row.',
         guidance: 'Create or correct the candidate’s contract, then use Recheck in Imports.' } }, 'Choose contract');
     }
-    const state = { selected: '', busy: false, failed: false, error: '' };
+    const state = { selected: '', busy: false, failed: false, error: '', pending: null };
     const kind = 'weekly-source-contract-chooser-v1';
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+    let initiatingFrame = null;
+    const callerCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const render = () => renderContractChooser(model, state);
     const wire = () => {
       const host = root.document?.querySelector('[data-wsa-screen="contract"]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1'; host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
       host.querySelector('[data-wsa-create-contract]')?.addEventListener('click', () => {
-        if (state.selected || state.busy) return;
+        if (!callerCurrent() || state.selected || state.busy || state.pending) return;
         if (typeof root.openContract === 'function') root.openContract(model.contract_seed, { noParentGate: true });
       });
       host.querySelectorAll('input[name="wsa-contract"]').forEach((input) => input.addEventListener('change', () => {
-        if (state.busy) return;
+        if (!callerCurrent() || state.busy || state.pending) return;
         state.selected = input.checked ? input.value : '';
         host.querySelectorAll('input[name="wsa-contract"]').forEach((choice) => { choice.checked = choice.value === state.selected; });
         host.querySelector('[data-wsa-use-contract]').disabled = !state.selected;
@@ -667,20 +709,31 @@
         if (choice) void reviewContract(choice.id, button);
       }));
       host.querySelector('[data-wsa-use-contract]')?.addEventListener('click', async () => {
-        if (state.busy || !state.selected || (!model.recheck_payload.request_id
+        if (!callerCurrent() || state.busy || !state.selected || (!model.recheck_payload.request_id
           && (!model.source_row_ordinal || !asText(model.accept_payload.file_key)))) return;
+        const request = state.pending || JSON.parse(JSON.stringify(model.recheck_payload.request_id
+          ? { command: 'RECHECK_SOURCE', payload: { ...model.recheck_payload, contract_id: state.selected } }
+          : { command: 'ACCEPT_UPLOAD', payload: { ...model.accept_payload, contract_selections: { ...model.existing_selections, [model.source_row_ordinal]: state.selected } } }));
         state.busy = true; state.error = ''; rerender(kind);
         try {
-          if (model.recheck_payload.request_id) {
-            await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...model.recheck_payload, contract_id: state.selected });
+          if (request.command === 'RECHECK_SOURCE') {
+            await workspaceApi()?.issueCommand?.(request.command, request.payload);
           } else {
-            await workspaceApi()?.acceptUpload?.({ ...model.accept_payload, contract_selections: { ...model.existing_selections, [model.source_row_ordinal]: state.selected } });
+            await workspaceApi()?.acceptUpload?.(request.payload);
           }
-          await finishAction();
-        } catch (error) { state.busy = false; state.failed = true; state.error = error?.message; rerender(kind); }
+          await finishAction(undefined, callerCurrent);
+        } catch (error) {
+          if (!callerCurrent()) return;
+          state.sourceAdmissionBusy = sourceAdmissionBusy(error);
+          if (state.sourceAdmissionBusy || state.pending) state.pending = request;
+          state.failed = true; state.error = state.sourceAdmissionBusy ? sourceBusyMessage : state.pending
+            ? 'The result could not be confirmed. Retry exact request.' : error?.message;
+        } finally { state.busy = false; if (callerCurrent()) rerender(kind); }
       });
     };
-    return openChild({ title: 'Choose contract', kind, render, wire });
+    const opened = openChild({ title: 'Choose contract', kind, render, wire });
+    initiatingFrame = currentChild(kind);
+    return opened;
   }
 
   function correctFinalAuthorityReady(payload) {
@@ -697,8 +750,11 @@
     if (!correctFinalAuthorityReady(model.base_payload)) {
       return openDetail({ detail: { problem: 'This action is not available yet.', guidance: 'Recheck the Weekly source screen and try again.' } }, 'View details');
     }
-    const state = { file: null, filename: '', phase: 'choose', preview: null, active_tab: 'changes', reason: '', confirmed: false, busy: false, error: '', recheck_count: 0 };
+    const state = { file: null, filename: '', phase: 'choose', preview: null, active_tab: 'changes', reason: '', confirmed: false, busy: false, error: '', recheck_count: 0, pendingReview: null, pendingApply: null };
     const kind = 'weekly-source-correct-final-v1';
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+    let initiatingFrame = null;
+    const callerCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const render = () => renderCorrectFinal(model, state);
     const wire = () => {
       const host = root.document?.querySelector('[data-wsa-screen="correct-final"]');
@@ -708,19 +764,20 @@
         const rechecking = state.phase === 'reviewed'
           && state.preview?.blockers?.length > 0
           && Object.keys(asObject(state.preview?.review_context)).length > 0;
-        if ((!rechecking && !state.file) || state.busy) return;
+        if (!callerCurrent() || (!rechecking && !state.file) || state.busy) return;
         state.busy = true; state.error = ''; rerender(kind);
         try {
-          let request;
-          if (rechecking) {
+          let request = state.pendingReview;
+          if (!request && rechecking) {
             state.recheck_count += 1;
             request = {
               correction_context: state.preview.review_context,
               idempotency_key: `${asText(model.base_payload.idempotency_key)}:recheck:${state.recheck_count}`
             };
-          } else {
+          } else if (!request) {
             if (typeof root.uploadImportFileToR2 !== 'function') throw new Error('File upload is unavailable.');
             const stored = await root.uploadImportFileToR2(state.file);
+            if (!callerCurrent()) return;
             const replacementSource = {
               ...model.replacement_context,
               file_key: asText(stored?.fileKey),
@@ -728,16 +785,23 @@
             };
             request = { ...model.base_payload, replacement_source: replacementSource };
           }
-          const response = await workspaceApi()?.issueCommand?.('PREVIEW_CORRECT_FINAL_SOURCE', request);
+          state.pendingReview = JSON.parse(JSON.stringify(request));
+          const response = await workspaceApi()?.issueCommand?.('PREVIEW_CORRECT_FINAL_SOURCE', state.pendingReview);
+          if (!callerCurrent()) return;
+          state.pendingReview = null; state.sourceAdmissionBusy = false;
           state.preview = normaliseCorrectFinalPreview(response);
           state.phase = 'reviewed';
           state.active_tab = state.preview.blockers.length ? 'blocked' : 'changes';
           state.confirmed = false; state.reason = ''; state.busy = false; rerender(kind);
         } catch (error) {
-          state.busy = false; state.error = error?.message; rerender(kind);
-        }
+          if (!callerCurrent()) return;
+          state.sourceAdmissionBusy = sourceAdmissionBusy(error);
+          state.error = state.sourceAdmissionBusy ? sourceBusyMessage : state.pendingReview
+            ? 'The review result could not be confirmed. Retry exact request.' : error?.message;
+        } finally { state.busy = false; if (callerCurrent()) rerender(kind); }
       };
       host.querySelector('[data-wsa-replacement-file]')?.addEventListener('change', (event) => {
+        if (!callerCurrent() || state.busy || state.pendingReview) return;
         state.file = event.target.files?.[0] || null;
         state.filename = state.file?.name || '';
         rerender(kind);
@@ -748,6 +812,7 @@
         rerender(kind);
       }));
       const sync = () => {
+        if (state.busy || state.pendingApply) return;
         state.reason = host.querySelector('[data-wsa-correction-reason]')?.value || state.reason;
         state.confirmed = host.querySelector('[data-wsa-correction-confirm]')?.checked === true;
         const apply = host.querySelector('[data-wsa-apply-correction]');
@@ -757,30 +822,37 @@
       host.querySelector('[data-wsa-correction-confirm]')?.addEventListener('change', sync);
       host.querySelector('[data-wsa-apply-correction]')?.addEventListener('click', async () => {
         sync();
-        if (!state.preview?.ready || !asText(state.reason) || !state.confirmed || state.busy) return;
+        if (!callerCurrent() || !state.preview?.ready || !asText(state.reason) || !state.confirmed || state.busy) return;
         state.busy = true; state.error = ''; rerender(kind);
         try {
-          await workspaceApi()?.issueCommand?.('APPLY_CORRECT_FINAL_SOURCE', {
+          state.pendingApply ||= JSON.parse(JSON.stringify({
             correction_context: state.preview.apply_context,
             reason: state.reason,
             confirmation_text: state.preview.confirmation_text,
             idempotency_key: `${asText(model.base_payload.idempotency_key)}:confirm`
-          });
-          await finishAction();
+          }));
+          await workspaceApi()?.issueCommand?.('APPLY_CORRECT_FINAL_SOURCE', state.pendingApply);
+          await finishAction(undefined, callerCurrent);
         } catch (error) {
-          state.busy = false;
-          state.error = 'The final source was not changed. Recheck the blockers and try again.';
-          rerender(kind);
-        }
+          if (!callerCurrent()) return;
+          state.sourceAdmissionBusy = sourceAdmissionBusy(error);
+          state.error = state.sourceAdmissionBusy ? sourceBusyMessage : 'The result could not be confirmed. Retry exact request.';
+        } finally { state.busy = false; if (callerCurrent()) rerender(kind); }
       });
     };
-    return openChild({ title: 'Correct final source', kind, render, wire });
+    const opened = openChild({ title: 'Correct final source', kind, render, wire });
+    initiatingFrame = currentChild(kind);
+    return opened;
   }
 
   function commandModel(detail) {
     const label = asText(detail.label);
     const payload = asObject(detail.payload);
     const context = asObject(detail.context);
+    if (detail.command === 'RECHECK_SOURCE') return {
+      title: 'Retry saved source check', message: 'This uses the saved source choice and its original request.',
+      confirmation: 'Retry this exact source check.', action_label: 'Try again', context
+    };
     if (label === 'No shifts to import') return {
       title: 'No shifts to import', message: 'Use this only when this Trust or client has no source shifts for the week shown.',
       confirmation: 'I confirm there are no shifts to import for this week.', action_label: 'Confirm no shifts to import', context
@@ -835,6 +907,7 @@
         || /^[0-9a-f]{64}$/.test(asText(payload.expected_current_row_hash)));
     if (command === 'OPEN_MANUAL_REVIEW') return !!asText(payload.source_row_id)
       && !!asText(payload.reason);
+    if (command === 'RECHECK_SOURCE') return !!asText(payload.request_id);
     if (command === 'CORRECT_FINAL_SOURCE') return false;
     if (command === 'NO_SHIFTS_TO_IMPORT') return !!asText(payload.source_cycle_id)
       && !!asText(payload.source_group_id)
@@ -847,7 +920,7 @@
   }
 
   function openCommand(detail) {
-    const payload = { ...asObject(detail.payload) };
+    const payload = JSON.parse(JSON.stringify(asObject(detail.payload)));
     const command = commandFor(detail);
     if (!commandAuthorityAvailable(command, payload)) return openDetail({ detail: { problem: 'This action is not available yet.', guidance: 'Recheck the Weekly source screen and try again.' } }, 'View details');
     // One modal keeps one exact command across connection-loss retries.
@@ -855,23 +928,38 @@
     const model = commandModel(detail);
     const state = { confirmed: false, busy: false, failed: false, error: '' };
     const kind = 'weekly-source-command-confirm-v1';
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+    let initiatingFrame = null;
+    const callerCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const render = () => renderCommandConfirmation(model, state);
     const wire = () => {
       const host = root.document?.querySelector('[data-wsa-screen="command"]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1'; host.querySelector('[data-wsa-close]')?.addEventListener('click', closeChild);
-      host.querySelector('[data-wsa-confirm]')?.addEventListener('change', (event) => { state.confirmed = event.target.checked; host.querySelector('[data-wsa-run-command]').disabled = !state.confirmed; });
+      host.querySelector('[data-wsa-confirm]')?.addEventListener('change', (event) => { state.confirmed = event.target.checked; host.querySelector('[data-wsa-run-command]').disabled = !state.confirmed || state.busy; });
       host.querySelector('[data-wsa-run-command]')?.addEventListener('click', async () => {
-        if (!state.confirmed) return; state.busy = true; state.error = ''; rerender(kind);
+        if (!callerCurrent() || !state.confirmed || state.busy) return; state.busy = true; state.error = ''; rerender(kind);
         try {
           await workspaceApi()?.issueCommand?.(command, payload);
+          if (!callerCurrent()) return;
           if (command === 'ACCEPT_SYSTEM_HOURS') workspaceApi()?.clearShiftSelections?.();
-          await finishAction();
+          await finishAction(undefined, callerCurrent);
         }
-        catch (error) { state.busy = false; state.failed = true; state.error = error?.message; rerender(kind); }
+        catch (error) {
+          if (!callerCurrent()) return;
+          state.sourceAdmissionBusy = sourceAdmissionBusy(error); state.failed = true;
+          state.error = state.sourceAdmissionBusy ? sourceBusyMessage : command === 'RECHECK_SOURCE'
+            && error?.code === 'WEEKLY_SOURCE_RECHECK_INCOMPLETE' ? plainMessage(error.code)
+            : 'The result could not be confirmed. Retry exact request.';
+          if (command === 'RECHECK_SOURCE' && error?.code === 'WEEKLY_SOURCE_RECHECK_INCOMPLETE')
+            await workspaceApi()?.refresh?.();
+        }
+        finally { state.busy = false; if (callerCurrent()) rerender(kind); }
       });
     };
-    return openChild({ title: model.title, kind, render, wire });
+    const opened = openChild({ title: model.title, kind, render, wire });
+    initiatingFrame = currentChild(kind);
+    return opened;
   }
 
   function openProtectedMatch(payloadValue) {
@@ -879,12 +967,15 @@
     const choices = asArray(payload.match_choices).filter(item => item.contract_id === payload.contract_id);
     const state = { selected: '', reason: '', busy: false, pending: null, error: '' };
     const kind = 'weekly-source-protected-match-v1';
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+    let initiatingFrame = null;
+    const callerCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const render = () => `<div class="ws-child" data-protected-match>
       <p><strong>${escapeHtml(payload.candidate)}</strong> · ${escapeHtml(payload.client)} · ${escapeHtml(payload.shift)}</p>
       <p>Imported shift: <strong>${escapeHtml(payload.system_hours)}</strong></p>
       <p>Choose the protected shift this report refers to. Different hours or breaks do not necessarily mean different work. Matching does not change the protected hours; reconciliation is a separate choice.</p>
       <div class="ws-child-fields"><label>Protected shift<select data-match-choice${state.busy || state.pending ? ' disabled' : ''}><option value="">Choose a shift</option>${choices.map(item => `<option value="${escapeHtml(item.work_event_id)}"${state.selected === item.work_event_id ? ' selected' : ''}>${escapeHtml(item.start)}–${escapeHtml(item.end)} · ${escapeHtml(item.break_minutes)} min break</option>`).join('')}<option value="NEW"${state.selected === 'NEW' ? ' selected' : ''}>This is separate work, not a protected shift</option></select></label><label>Reason<textarea data-match-reason maxlength="1000"${state.busy || state.pending ? ' disabled' : ''}>${escapeHtml(state.reason)}</textarea></label></div>
-      ${state.error ? `<p role="alert">${escapeHtml(state.error)}</p>` : ''}<div class="ws-child-actions"><button class="btn btn-outline" data-match-cancel${state.busy ? ' disabled' : ''}>Cancel</button><button class="btn primary" data-match-save${state.busy ? ' disabled' : ''}>Confirm and recheck</button></div></div>`;
+      ${state.error ? `<p role="alert">${escapeHtml(state.error)}</p>` : ''}<div class="ws-child-actions"><button class="btn btn-outline" data-match-cancel${state.busy ? ' disabled' : ''}>Cancel</button><button class="btn primary" data-match-save${state.busy ? ' disabled' : ''}>${state.sourceAdmissionBusy ? 'Try again' : state.pending ? 'Retry exact request' : 'Confirm and recheck'}</button></div></div>`;
     const wire = () => {
       const host = root.document?.querySelector('[data-protected-match]');
       if (!host || host.dataset.wsaWired) return;
@@ -893,7 +984,7 @@
       host.querySelector('[data-match-choice]')?.addEventListener('change', event => { state.selected = event.target.value; });
       host.querySelector('[data-match-reason]')?.addEventListener('input', event => { state.reason = event.target.value; });
       host.querySelector('[data-match-save]')?.addEventListener('click', async () => {
-        if (state.busy) return;
+        if (!callerCurrent() || state.busy) return;
         if (!state.pending && (!state.selected || !asText(state.reason))) { state.error = 'Choose the shift and enter a reason.'; rerender(kind); return; }
         state.pending ||= { ...payload.recheck_payload, contract_id: payload.contract_id, match_reason: asText(state.reason),
           ...(state.selected === 'NEW' ? { separate_shift: true } : { work_event_id: state.selected }) };
@@ -901,12 +992,14 @@
         try {
           const result = await workspaceApi().issueCommand('RECHECK_SOURCE', state.pending);
           if (result?.ok !== true) throw new Error('The saved comparison is not yet confirmed. Check its saved result.');
-          await finishAction();
-        } catch (error) { state.error = plainMessage(error?.message, 'The comparison is not yet confirmed. Check its saved result before starting another match.'); }
-        finally { state.busy = false; rerender(kind); }
+          await finishAction(undefined, callerCurrent);
+        } catch(error){ if (!callerCurrent()) return; state.sourceAdmissionBusy = sourceAdmissionBusy(error); state.error = plainMessage(error?.message, 'The comparison is not yet confirmed. Check its saved result before starting another match.'); }
+        finally { state.busy = false; if (callerCurrent()) rerender(kind); }
       });
     };
-    return openChild({ title: 'Confirm shift match', kind, render, wire });
+    const opened = openChild({ title: 'Confirm shift match', kind, render, wire });
+    initiatingFrame = currentChild(kind);
+    return opened;
   }
 
   function openUploadDetail(payload) {
@@ -957,7 +1050,10 @@
     if(!sourceRowId)return openDetail({detail:{problem:'This imported shift is not available for manual review. Recheck the report.'}},'View details');
     const state={reason:'',busy:false,error:'',pending:null};
     const kind='weekly-source-manual-review-v1';
-    const render=()=>`<div class="ws-child" data-wsa-screen="manual-review"><h3>Send to Pay Queries</h3><p>${escapeHtml(payload.candidate||'Selected candidate')} · ${escapeHtml(payload.client||'Selected client')} · ${escapeHtml(payload.day_date||'Imported shift')}</p><p>This holds new payment for this shift until Office accepts source hours, protects pay, or finalises a later backing report containing the shift. It does not undo an existing payment or change invoices. It does not block report finalisation, contact the candidate or create another shift.</p><label>Reason<textarea data-wsa-manual-reason maxlength="1000" required${state.busy||state.pending?' disabled':''}>${escapeHtml(state.reason)}</textarea></label>${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions"><button class="btn btn-outline" data-wsa-manual-cancel${state.busy?' disabled':''}>Cancel</button><button class="btn primary" data-wsa-manual-submit${state.busy?' disabled':''}>Send to Pay Queries</button></div></div>`;
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+    let initiatingFrame = null;
+    const callerCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
+    const render=()=>`<div class="ws-child" data-wsa-screen="manual-review"><h3>Send to Pay Queries</h3><p>${escapeHtml(payload.candidate||'Selected candidate')} · ${escapeHtml(payload.client||'Selected client')} · ${escapeHtml(payload.day_date||'Imported shift')}</p><p>This holds new payment for this shift until Office accepts source hours, protects pay, or finalises a later backing report containing the shift. It does not undo an existing payment or change invoices. It does not block report finalisation, contact the candidate or create another shift.</p><label>Reason<textarea data-wsa-manual-reason maxlength="1000" required${state.busy||state.pending?' disabled':''}>${escapeHtml(state.reason)}</textarea></label>${state.error?`<p role="alert">${escapeHtml(state.error)}</p>`:''}<div class="ws-child-actions"><button class="btn btn-outline" data-wsa-manual-cancel${state.busy?' disabled':''}>Cancel</button><button class="btn primary" data-wsa-manual-submit${state.busy?' disabled':''}>${state.sourceAdmissionBusy?'Try again':state.pending?'Retry exact request':'Send to Pay Queries'}</button></div></div>`;
     const wire=()=>{
       const host=root.document?.querySelector('[data-wsa-screen="manual-review"]');
       if(!host||host.dataset.wsaWired==='1')return;
@@ -965,42 +1061,52 @@
       host.querySelector('[data-wsa-manual-cancel]')?.addEventListener('click',closeChild);
       host.querySelector('[data-wsa-manual-reason]')?.addEventListener('input',event=>{state.reason=event.target.value;});
       host.querySelector('[data-wsa-manual-submit]')?.addEventListener('click',async()=>{
-        if(state.busy)return;
+        if (!callerCurrent() || state.busy) return;
         if(!state.reason.trim()){state.error='Enter a reason.';rerender(kind);return;}
         state.busy=true;state.error='';rerender(kind);
         try{
           if(!state.pending)state.pending={source_row_id:sourceRowId,reason:state.reason.trim(),command_id:root.crypto.randomUUID()};
           const result=await workspaceApi().issueCommand('OPEN_MANUAL_REVIEW',state.pending);
           if(result?.ok!==true)throw new Error('The query was not confirmed. Recheck this shift.');
-          await finishAction();
-        }catch(error){state.error=plainMessage(error?.message,'The query could not be saved.');state.busy=false;rerender(kind);}
+          await finishAction(undefined, callerCurrent);
+        }catch(error){ if (!callerCurrent()) return;state.sourceAdmissionBusy=sourceAdmissionBusy(error);state.error=plainMessage(error?.message,'The query could not be saved.');state.busy=false;rerender(kind);}
       });
     };
-    return openChild({title:'Send to Pay Queries',kind,render,wire});
+    const opened = openChild({title:'Send to Pay Queries',kind,render,wire});
+    initiatingFrame = currentChild(kind);
+    return opened;
   }
 
   function openProtectedReview(payloadValue) {
     const editor = root.CloudTMSProtectedShiftEditorV1;
     if (!editor) return openDetail({ detail: { problem: 'Refresh the page to review protected pay.' } });
     const initial = asObject(payloadValue);
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
     const selection = { client_id: initial.client_id, candidate_id: initial.candidate_id,
       source_group_id: initial.source_group_id, work_date: initial.work_date, work_event_id: initial.work_event_id };
     let context = { ...initial, allowed: false };
     const values = { reason: '' }, state = { busy: true, pending: null, error: '' };
     const kind = 'weekly-source-protected-review-v1';
+    let initiatingFrame = null;
+    const frameCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const load = async () => {
+      if (!frameCurrent()) return;
       state.busy = true; rerender(kind);
       try {
         const result = await workspaceApi().issueCommand('PROTECTED_EDITOR_CONTEXT', selection);
+        if (!frameCurrent()) return;
         if (result?.contract !== 'WEEKLY_PROTECTED_EDITOR_V1') throw new Error('The protected shift could not be verified.');
         context = result;
-      } catch (error) { state.error = plainMessage(error?.message, 'Recheck the protected shift.'); }
-      finally { state.busy = false; rerender(kind); }
+      } catch (error) { if (!frameCurrent()) return; state.error = plainMessage(error?.message, 'Recheck the protected shift.'); }
+      finally { state.busy = false; if (frameCurrent()) rerender(kind); }
     };
     const submit = async (mode) => {
       if (state.busy) return;
+      const callerCurrent = protectedCaller(kind, initiatingActor, initiatingFrame);
+      if (!callerCurrent()) return;
       state.error = '';
       try {
+        state.sourceAdmissionBusy = false;
         state.busy = true; rerender(kind);
         if (!state.pending) {
           // Do not refresh the displayed source here: the user's confirmation
@@ -1008,16 +1114,21 @@
           state.pending = { ...editor.request(context, values, root.crypto.randomUUID(), mode), mode };
         }
         const result = await saveProtectedOnce(state.pending);
-        if (result?.ok !== true) throw new Error('The protected-pay decision has not completed.');
+          if (!callerCurrent()) return;
+        const confirmation = confirmedProtectedResult(result);
         state.pending = null;
-        await finishAction();
+        await finishAction(confirmation, callerCurrent);
       } catch (error) {
-        if(error?.code==='WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED'){
+        if (!callerCurrent()) return;
+        state.sourceAdmissionBusy = sourceAdmissionBusy(error);
+        if (state.sourceAdmissionBusy) { state.error = sourceBusyMessage; }
+        else if(error?.code==='WEEKLY_PROTECTED_REVIEW_SOURCE_CHANGED'){
           // Both server refusals with this exact code precede calculation and
           // durable publication. Do not treat a known stale review as an
           // unknown payment outcome, or silently accept the replacement facts.
           state.pending=null;
           await load();
+          if (!callerCurrent()) return;
           state.error='The imported hours have changed. Review the updated details and choose again.';
         } else if(error?.code==='C1_DURABLE_RECOVERY_NOT_REQUIRED'){
           // The server proved there is no staged publication for this exact
@@ -1025,13 +1136,16 @@
           state.error='No submitted result needs recovery. You can retry the saved request.';
         } else {
           if (knownProtectedRefusal(error)) state.pending = null;
-          state.error = plainMessage(localPublisherRefusal(error)
+          state.error = ['LOCAL_OWNER_REQUIRED','BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(error?.code)
+            ? 'Save this change through the Source editor. No payment change was accepted.'
+            : plainMessage(localPublisherRefusal(error)
             ? 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY' : error?.message,
-            'The save could not be confirmed. Retry the same decision.');
+            'The save could not be confirmed. Retry exact request.');
         }
-      } finally { state.busy = false; rerender(kind); }
+      } finally { state.busy = false; if (callerCurrent()) rerender(kind); }
     };
     const wire = () => {
+      if (!frameCurrent()) return;
       const host = root.document?.querySelector('[data-protected-review]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1';
@@ -1041,6 +1155,7 @@
     };
     const opened = openChild({ title: 'Review protected pay', kind,
       render: () => editor.renderReview(context, values, state), wire });
+    initiatingFrame = currentChild(kind);
     if (opened) void load();
     return opened;
   }
@@ -1049,25 +1164,29 @@
     const editor = root.CloudTMSProtectedShiftEditorV1;
     if (!editor) return openDetail({ detail: { problem: 'The protected shift editor is unavailable. Refresh the page.' } }, 'Protect shift pay');
     const initial = asObject(payloadValue);
+    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
     let context = { ...initial, allowed: false, contracts: [] };
     const values = { work_date: asText(initial.work_date), start: asText(initial.start || initial.start_at_local),
       end: asText(initial.end || initial.end_at_local), break_minutes: initial.break_minutes ?? '',
       contract_id: asText(initial.contract_id), shift_choice: asText(initial.work_event_id), reason: '' };
-    const state = { mode, busy: false, error: '', pending: null, idempotencyKey: null,
+    const state = { pendingPreparation: null, mode, busy: false, error: '', pending: null, idempotencyKey: null,
       protectedSaved: false, userChanged: false, lastOverlapSignature: '' };
     let readSequence = 0;
     const kind = 'weekly-source-protected-shift-v1';
+    let initiatingFrame = null;
+    const frameCurrent = () => protectedCaller(kind, initiatingActor, initiatingFrame)();
     const selection = () => ({ client_id: context.client_id, candidate_id: context.candidate_id,
       work_date: values.work_date, ...(context.source_group_id ? { source_group_id: context.source_group_id } : {}),
       ...(values.shift_choice && values.shift_choice !== 'NEW' ? { work_event_id: values.shift_choice } : {}) });
     const reload = async () => {
+      if (!frameCurrent()) return;
       const sequence = ++readSequence;
       context.allowed = false; context.contracts = []; context.history = [];
       if (!context.client_id || !context.candidate_id || !values.work_date) { rerender(kind); return; }
       state.busy = true; state.error = ''; rerender(kind);
       try {
         const result = await workspaceApi().issueCommand('PROTECTED_EDITOR_CONTEXT', selection());
-        if (sequence !== readSequence) return;
+        if (sequence !== readSequence || !frameCurrent()) return;
         if (result?.contract !== 'WEEKLY_PROTECTED_EDITOR_V1') throw new Error('Recheck the candidate, client and work date.');
         context = { ...result,
           client: asText(result.client) || context.client,
@@ -1078,12 +1197,12 @@
           const original = context.resume_request;
           for (const field of ['work_date', 'start', 'end', 'break_minutes', 'reason', 'contract_id']) values[field] = original[field];
         }
-      } catch (error) { if (sequence === readSequence) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
-      finally { if (sequence === readSequence) { state.busy = false; rerender(kind); setTimeout(() => warnIfOverlapping(), 30); } }
+      } catch (error) { if (sequence === readSequence && frameCurrent()) state.error = plainMessage(error?.message, 'The selected client, candidate or date is not eligible for protected pay.'); }
+      finally { if (sequence === readSequence && frameCurrent()) { state.busy = false; rerender(kind); setTimeout(() => { if (frameCurrent()) warnIfOverlapping(); }, 30); } }
     };
     const render = () => editor.render(context, values, { ...state, mode,
       lockedIdentity: !!initial.work_event_id })
-      + (!state.busy && !state.pending && context.allowed && !context.contracts.length
+      + (!state.busy && !state.pending && !state.pendingPreparation && context.allowed && !context.contracts.length
         ? '<p>No eligible contract covers this date.</p><button type="button" class="btn btn-outline" data-protected-create-contract>Create contract</button><button type="button" class="btn btn-outline" data-protected-recheck>Recheck contracts</button>' : '');
     const routeLabel = (event) => event.pay_query_open ? 'Open Pay Queries'
       : event.final_report_key ? 'Open in History'
@@ -1091,7 +1210,7 @@
     const warnIfOverlapping = (force = false) => {
       // An exact unfinished first save is a retry, not a proposed second shift.
       // request() still validates its fingerprint-derived facts and other overlaps.
-      if (mode !== 'approve' || initial.work_event_id || context.pending_approval || state.busy || state.pending || !currentChild(kind)) return false;
+      if (mode !== 'approve' || initial.work_event_id || context.pending_approval || state.busy || state.pending || state.pendingPreparation || !currentChild(kind)) return false;
       const overlaps = editor.overlappingEvents(context, values);
       if (!overlaps.length) { state.lastOverlapSignature = ''; return false; }
       const signature = [context.client_id, context.candidate_id, values.work_date,
@@ -1136,7 +1255,10 @@
     };
     const submit = async () => {
       if (state.busy) return;
+      const callerCurrent = protectedCaller(kind, initiatingActor, initiatingFrame);
+      if (!callerCurrent()) return;
       state.error = '';
+      let preparationRequest = null;
       try {
         if (!state.pending && !state.protectedSaved && warnIfOverlapping(true)) return;
         // Validate all user-entered intent before cycle preparation. The exact
@@ -1144,36 +1266,47 @@
         editor.schedule(values);
         if (!asText(values.reason)) throw new Error('Enter a reason.');
         if (!values.contract_id) throw new Error('Choose an eligible contract.');
+        state.sourceAdmissionBusy = false;
         state.busy = true; rerender(kind);
         if (!state.pending && !state.protectedSaved) {
-          const prepared = await workspaceApi().issueCommand('PREPARE_PROTECTED_EDITOR', selection());
+          preparationRequest = state.pendingPreparation || JSON.parse(JSON.stringify(selection()));
+          const prepared = await workspaceApi().issueCommand('PREPARE_PROTECTED_EDITOR', preparationRequest);
+          if (!callerCurrent()) return;
+          state.pendingPreparation = null;
           context = { ...context, ...prepared };
           state.idempotencyKey = context.resume_request?.idempotency_key || root.crypto.randomUUID();
           state.pending = editor.request(context, values, state.idempotencyKey, mode);
         }
         if (!state.protectedSaved) {
           const result = await saveProtectedOnce(state.pending);
-          if (result?.ok !== true) throw new Error('The protected-pay save has not completed.');
+          if (!callerCurrent()) return;
+          state.confirmation = confirmedProtectedResult(result);
           state.pending = null; state.protectedSaved = true;
         }
         // The server closes the matching manual query in the save transaction.
         // A second browser command cannot qualify or repair a failed save.
-        await finishAction();
+        await finishAction(state.confirmation, callerCurrent);
       } catch (error) {
+        if (!callerCurrent()) return;
         // These exact refusals occur in the first transactional family prepare,
         // before an orchestration run or pay publication can survive. Unknown
         // outcomes still retain their original command for explicit recovery.
-        if (knownProtectedRefusal(error)) state.pending = null;
-        state.error = state.protectedSaved
+        state.sourceAdmissionBusy = sourceAdmissionBusy(error);
+        if (preparationRequest && (state.sourceAdmissionBusy || state.pendingPreparation)) state.pendingPreparation = preparationRequest;
+        if (knownProtectedRefusal(error)) { state.pending = null; state.pendingPreparation = null; }
+        state.error = state.sourceAdmissionBusy ? sourceBusyMessage : state.protectedSaved
           ? 'Protected pay was saved, but the screen did not refresh. Close and refresh Queries.'
+          : ['LOCAL_OWNER_REQUIRED','BPAY_NEXT_PROTECTED_LOCAL_OWNER_REQUIRED'].includes(error?.code)
+            ? 'Save this change through the Source editor. No payment change was accepted.'
           : localPublisherRefusal(error)
             ? plainMessage(error?.code === 'WEEKLY_PROTECTED_LOCAL_PUBLICATION_OWNER_NOT_READY' ? error.code : error?.message)
-          : state.pending
-            ? 'The save could not be confirmed. Select Protect pay again to retry this same request.'
+          : state.pending || state.pendingPreparation
+            ? 'The save could not be confirmed. Retry exact request.'
             : plainMessage(error?.message, 'Recheck the selected contract and shift details.');
-      } finally { state.busy = false; rerender(kind); }
+      } finally { state.busy = false; if (callerCurrent()) rerender(kind); }
     };
     const wire = () => {
+      if (!frameCurrent()) return;
       const host = root.document?.querySelector('[data-protected-editor]');
       if (!host || host.dataset.wsaWired === '1') return;
       host.dataset.wsaWired = '1';
@@ -1211,6 +1344,7 @@
       });
     };
     const opened = openChild({ title: mode === 'amend' ? 'Change protected shift' : 'Protect shift pay', kind, render, wire });
+    initiatingFrame = currentChild(kind);
     if (opened) void reload();
     return opened;
   }
@@ -1218,15 +1352,7 @@
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
-    if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) {
-      return (async () => {
-        try { await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', detail.payload); await workspaceApi()?.refresh?.(); }
-        catch (error) { await workspaceApi()?.refresh?.(); return openDetail({ detail: {
-          problem: plainMessage(error?.code || error?.message),
-          guidance: 'The saved recheck remains in Office Checks. Retry it there; do not make a new linking choice.'
-        } }, 'Source recheck incomplete'); }
-      })();
-    }
+    if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) return openCommand(detail);
     if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
     if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
     if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);
@@ -1238,20 +1364,25 @@
       const picker = label === 'Link candidate' ? root.openCandidatePicker : root.openClientPicker;
       if (typeof picker !== 'function') return openDetail({ detail: { problem: 'The matching picker is unavailable. Refresh the page and try again.' } }, label);
       const field = label === 'Link candidate' ? 'candidate_id' : 'client_id';
+      const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
+      const workspace = workspaceApi();
+      const parentFrame = (root.__modalStack || []).at(-1);
+      const pickerKind = label === 'Link candidate' ? 'candidate-picker' : 'client-picker';
       return picker(async ({ id, candidate }) => {
+        const stack = root.__modalStack || [];
+        if (!initiatingActor || (typeof SESSION !== 'undefined' ? SESSION?.user?.id : null) !== initiatingActor
+          || workspaceApi() !== workspace || stack.at(-2) !== parentFrame || !currentChild(pickerKind)) return;
         if (label === 'Link candidate' && candidate?.active === false) {
           throw new Error('This candidate is currently inactive. Reactivate their Candidate record before linking this shift.');
         }
-        try {
-          await workspaceApi()?.issueCommand?.('RECHECK_SOURCE', { ...detail.payload.recheck_payload, [field]: asText(id) });
-        } catch (error) {
-          if (error?.code === 'WEEKLY_SOURCE_RECHECK_INCOMPLETE') {
-            await workspaceApi()?.refresh?.();
-            throw new Error(plainMessage(error.code));
-          }
-          throw new Error(plainMessage(error?.message, 'The selected record could not be linked. Recheck its status and try again.'));
-        }
-        await workspaceApi()?.refresh?.();
+        const request = JSON.parse(JSON.stringify({ ...detail.payload.recheck_payload, [field]: asText(id) }));
+        // Let the existing picker close, then present the exact selected choice.
+        // This schedules a screen only; a separate deliberate click sends it.
+        setTimeout(() => {
+          if ((root.__modalStack || []).at(-1) !== parentFrame || workspaceApi() !== workspace
+            || (typeof SESSION !== 'undefined' ? SESSION?.user?.id : null) !== initiatingActor) return;
+          openCommand({ label, command: 'RECHECK_SOURCE', payload: request, context: detail.context });
+        }, 0);
       }, { title: label, seed_hint: { display_name: detail.payload.candidate },
         seed_query: label === 'Link candidate' ? asText(detail.payload.candidate).split(/\s+/).filter(Boolean).at(-1) : '',
         context: { staffName: detail.payload.candidate, unit: detail.payload.client, dateYmd: detail.payload.shift,

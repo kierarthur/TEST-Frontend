@@ -15,7 +15,7 @@ const settings = read('js/weekly-source/settings.js');
 const notifications = read('js/weekly-source/office-notifications.js');
 
 test('the public Imports route reaches Weekly Source and the legacy review cannot replace it', () => {
-  assert.match(main, /async function openImportsModal\(\) \{\s*if \(window\.CloudTMSWeeklySourceImportWorkspaceV1\?\.open\) \{\s*return window\.CloudTMSWeeklySourceImportWorkspaceV1\.open\(\)/);
+  assert.match(main, /async function openImportsModal\(\) \{\s*if \(window\.CloudTMSWeeklySourceImportWorkspaceV1\?\.open\) \{\s*return window\.CloudTMSWeeklySourceImportWorkspaceV1\.open\('imports', \{ bankingOwnerClient: bankingNextOwnerClient\(\),\s*actorId: SESSION\?\.user\?\.id \|\| null, currentActorId: \(\) => SESSION\?\.user\?\.id \|\| null \}\)/);
   assert.doesNotMatch(legacyReview, /global\.openImportsModal\s*=\s*openImportsModalV1/);
   assert.match(legacyReview, /global\.CloudTmsImportReviewV1\s*=\s*Object\.freeze\([\s\S]*openImportsModal:\s*openImportsModalV1/);
   assert.doesNotMatch(workspaceActions, /CloudTmsImportReviewV1\.openImportsModal\(\)/);
@@ -49,7 +49,7 @@ test('load order and bridges keep new and established import journeys reachable'
   assert.match(workspace, /data-ws-upload/);
   assert.match(workspace, /data-ws-daily/);
   assert.match(workspace, /root\.handleHrRotaFileDrop/);
-  assert.match(html, /main\.js[^"']*weekly-source-entry=20260922-r3/);
+  assert.match(html, /main\.js\?v=20261012-sp10-r1&healthroster=20261014-r1/);
   assert.match(html, /import-review-v1\.js[^"']*weekly-source-entry=20260922-r1/);
 });
 

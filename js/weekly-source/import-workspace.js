@@ -70,10 +70,23 @@
   const tone = (value, fallback = 'neutral') => TONES.has(asText(value).toLowerCase()) ? asText(value).toLowerCase() : fallback;
   const safeKey = (value) => asText(value).replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'row';
 
-  function friendlyWorkspaceError(value) {
+  const NEXT_PAY_NOTICE = 'Pay is published through Banking Pay NEXT; there is nothing to recover here';
+
+  const SOURCE_ADMISSION_BUSY_MESSAGE = 'Another Source update is in progress. Try again in a moment.';
+  function isSourceAdmissionBusy(error) {
+    const body = error?.json || error?.response || error;
+    return error?.status === 409 && body && !Array.isArray(body)
+      && (body.error_code || body.code) === 'WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY'
+      && body.retryable === true && body.failed_rpc_outcome === 'ROLLED_BACK'
+      && body.automatic_retry === false;
+  }
+
+  function friendlyWorkspaceError(value, owner = session.bankingOwnerClient?.peek()) {
+    if (isSourceAdmissionBusy(value)) return SOURCE_ADMISSION_BUSY_MESSAGE;
     const error = value instanceof Error ? value : null;
     const raw = asText(error?.message || value);
-    const code = asText(error?.code || raw.match(/WEEKLY_SOURCE_[A-Z0-9_]+/)?.[0]).toUpperCase();
+    const code = asText(error?.code || raw.match(/(?:WEEKLY_SOURCE|BPAY_NEXT)_[A-Z0-9_]+/)?.[0]).toUpperCase();
+    if (code === 'BPAY_NEXT_LEGACY_WRITER_RETIRED' && owner?.active_owner === 'NEXT') return NEXT_PAY_NOTICE;
     if (code === 'WEEKLY_SOURCE_CYCLE_NOT_FOUND') return 'This source is still being prepared. Recheck in a moment.';
     if (code === 'WEEKLY_SOURCE_CUTOFF_NOT_REACHED') return 'This source can be finalised after the cutoff shown above.';
     if (code === 'WEEKLY_SOURCE_GROUP_NOT_ACTIVE') return 'This source is no longer available. Choose another source.';
@@ -926,17 +939,22 @@
 
   function renderWorkspace(workspace, tabKey, state = {}) {
     const tab = availableTab(workspace, tabKey);
+    const nextPayNotice = state.bankingOwnerClient?.peek()?.active_owner === 'NEXT'
+      ? `<div class="ws-notice ws-notice--info" role="status"><span>${escapeHtml(NEXT_PAY_NOTICE)}</span></div>` : '';
     const notices = workspace.notices.map((notice) => `<div class="ws-notice ws-notice--${escapeHtml(notice.tone)}"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');
-    const error = asText(state.error) ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>Weekly source information could not be loaded</strong><span>${escapeHtml(state.error)}</span></div>` : '';
+    const visibleError = state.error === NEXT_PAY_NOTICE && !nextPayNotice
+      ? 'Weekly source information is temporarily unavailable. Recheck or try again shortly.' : state.error;
+    const error = asText(visibleError) ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>Weekly source information could not be loaded</strong><span>${escapeHtml(visibleError)}</span></div>` : '';
     const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;
     const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;
-    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
+    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${nextPayNotice}${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
     const body = state.loading === true ? '<div class="ws-loading" role="status">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);
-    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${notices}${error}${body}</div>`;
+    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${body}</div>`;
   }
 
   const session = {
-    reviews: {}, reviewSingleScope: false, sourceFilters: {},
+    pendingSourceOutreach: null, pendingSourceFinalise: null, pendingSourceRate: null, openCurrent: null,
+    bankingOwnerClient: null, openGeneration: 0, reviews: {}, reviewSingleScope: false, sourceFilters: {},
     combined: { model: null, filters: {}, list: 'ready', sort: '', direction: 'asc', seek: '', selected: new Set(), exclusions: new Set(), batch: null, error: '' },
     workspace: null, activeTab: 'imports', loading: false, error: '', requestSequence: 0,
     query: { filters: {} },
@@ -952,6 +970,23 @@
   };
 
   const currentFrame = () => { const stack = Array.isArray(root.__modalStack) ? root.__modalStack : []; const frame = stack[stack.length - 1]; return frame?.kind === 'weekly-source-imports-v1' ? frame : null; };
+  // These named UI actions retain literal inputs; there is no automatic reissue.
+  function sourceRequestContext() {
+    const generation = session.openGeneration, frame = currentFrame(), current = session.openCurrent;
+    const selected = JSON.stringify(session.workspace?.selected), filters = JSON.stringify(session.sourceFilters);
+    return () => !!frame && generation === session.openGeneration && frame === currentFrame()
+      && (!current || current()) && selected === JSON.stringify(session.workspace?.selected)
+      && filters === JSON.stringify(session.sourceFilters);
+  }
+  const sourceRequestCopy = value => JSON.parse(JSON.stringify(value));
+  function lockSourceRequest(host, pending, actionSelector, actionAttribute) {
+    if (!pending) return;
+    host.querySelectorAll('input, select, textarea, button').forEach(control => {
+      const retry = control.matches(actionSelector) && (!actionAttribute || control.dataset[actionAttribute] === pending.command);
+      control.disabled = !retry || pending.inFlight === true;
+      if (retry) control.textContent = pending.busy ? 'Try again' : 'Retry exact request';
+    });
+  }
   const endpoint = (path) => typeof root.API === 'function' ? root.API(path) : path;
 
   async function requestJson(path, options) {
@@ -964,6 +999,12 @@
       error.status = response.status;
       error.code = asText(payload.error_code);
       error.details = asObject(payload.details);
+      if (response.status === 409 && payload.error_code === 'WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY'
+          && payload.retryable === true && payload.failed_rpc_outcome === 'ROLLED_BACK'
+          && payload.automatic_retry === false) {
+        error.retryable = true; error.failed_rpc_outcome = 'ROLLED_BACK'; error.automatic_retry = false;
+        error.message = SOURCE_ADMISSION_BUSY_MESSAGE;
+      }
       throw error;
     }
     return payload;
@@ -1029,14 +1070,18 @@
     if(append&&['imports','queries','history'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope)return loadCombinedReview(tab,true);
     if (tab === 'finalise' && session.workspace?.combined_source_workspace) return loadCombinedFinalise(append);
     const sequence = ++session.requestSequence;
+    const openGeneration = session.openGeneration;
+    const openCurrent = session.openCurrent;
+    const requestCurrent = () => sequence === session.requestSequence
+      && openGeneration === session.openGeneration && (!openCurrent || openCurrent());
     session.loading = !append; session.error = ''; if (session.workspace && !append) await repaint();
-    if (sequence !== session.requestSequence) return;
+    if (!requestCurrent()) return;
     const current = pageFor(tab);
     const params = new URLSearchParams(queryFor(tab, append ? { cursor: current?.next_cursor || '' } : {}));
     try {
       const next = normaliseWorkspace(await requestJson(`${ENDPOINTS.workspace}?${params}`));
       if(tab==='finalise'&&session.combined.singleScope) next.combined_source_workspace=false;
-      if (sequence !== session.requestSequence) return;
+      if (!requestCurrent()) return;
       if (append && current) {
         const nextPage = tab === 'finalise' ? next.finalise[next.finalise.active_list] : next[tab];
         const keys = new Set(current.rows.map((row) => asText(row.row_key || row.group_key || row.id)));
@@ -1046,19 +1091,24 @@
       session.reloadOnReturn = !currentFrame();
       if(['imports','queries','history'].includes(tab)&&next.combined_source_workspace&&!session.reviewSingleScope) return loadCombinedReview(tab);
     } catch (error) {
-      if (sequence !== session.requestSequence) return;
+      if (!requestCurrent()) return;
       if (error?.code === 'WEEKLY_SOURCE_OFFICE_ADMIN_REQUIRED' && !append) {
         try {
-          session.workspace = normaliseWorkspace(await requestJson(ENDPOINTS.workspace));
+          const discovered = await requestJson(ENDPOINTS.workspace);
+          if (!requestCurrent()) return;
+          session.workspace = normaliseWorkspace(discovered);
           session.activeTab = availableTab(session.workspace, tab);
           session.loadedTab = session.activeTab; session.error = '';
-        } catch (discoveryError) { session.workspace = emptyWorkspace(); session.error = friendlyWorkspaceError(discoveryError); }
+        } catch (discoveryError) {
+          if (!requestCurrent()) return;
+          session.workspace = emptyWorkspace(); session.error = friendlyWorkspaceError(discoveryError);
+        }
       } else { session.loadedTab = tab; session.error = friendlyWorkspaceError(error); }
       session.loading = false;
     }
     await repaint();
     const focus = session.contextFocus;
-    if (sequence === session.requestSequence && focus?.tab === session.activeTab) {
+    if (requestCurrent() && focus?.tab === session.activeTab) {
       const replacement = [...(root.document?.querySelectorAll('[data-ws-context]') || [])]
         .find((element) => element.dataset.wsContext === focus.key && element.value === focus.value);
       if (replacement) { replacement.focus(); session.contextFocus = null; }
@@ -1103,6 +1153,7 @@
   }
 
   function bindCombinedReview(host,tab) {
+    const requestCurrent = sourceRequestContext();
     const state=session.reviews[tab],model=state?.model; if(!model)return;
     state.selected ||= new Set();
     const reload=()=>{if(state.busy)return;state.seek='';state.selected.clear();state.contactReview=null;session.scrollByTab[tab]=0;loadCombinedReview(tab);};
@@ -1142,12 +1193,14 @@
     host.querySelector('[data-wsr-report-more]')?.addEventListener('click',()=>loadReport(state.reportDetail.report.report_key,true));
     const contactView=root.CloudTMSCombinedReviewV1;
     const contactEnabled=()=>tab==='queries'&&model.section==='questions'&&!model.attention_kind&&!!contactView;
-    const freshContacts=async(keys)=>{
+    const freshContacts=async(keys,current=requestCurrent)=>{
       const wanted=new Set(keys),rows=[],seen=new Set();let cursor='',fresh;
       for(let page=0;page<100;page++){
+        if(!current())throw new Error('Refresh the source questions before continuing.');
         const next=await issueCommand('COMBINED_REVIEW_WORKSPACE',{...state.filters,tab:'queries',section:'questions',
           sort_key:state.sort||(state.filters.client_id?'candidate':'client'),sort_direction:state.direction,
           attention_first:false,limit:100,...(cursor?{cursor}:{})});
+        if(!current())throw new Error('Refresh the source questions before continuing.');
         if(next?.contract!=='WEEKLY_SOURCE_COMBINED_REVIEW_V1')throw new Error('Contact eligibility could not be verified.');
         fresh=next;
         for(const row of asArray(next.rows))if(wanted.has(row.combined_key)&&!seen.has(row.combined_key)){rows.push(row);seen.add(row.combined_key);}
@@ -1180,49 +1233,71 @@
       state.busy=true;session.error='';await repaint();
       try{
         const fresh=await freshContacts([...state.selected]);
+        if(!requestCurrent())return;
         const plan=contactView.contactPlan(fresh,state.selected,state.audience);
         for(const key of state.selected)if(!fresh.rows.some(row=>row.combined_key===key))plan.excluded.push({key,
           candidate:model.rows.find(row=>row.combined_key===key)?.candidate||'Selected record',reason:'This question is no longer in the current filtered results.'});
         state.contactReview=plan;
-      }catch(error){session.error=friendlyWorkspaceError(error);}
-      finally{state.busy=false;await repaint();}
+      }catch(error){if(requestCurrent())session.error=friendlyWorkspaceError(error);}
+      finally{state.busy=false;if(requestCurrent())await repaint();}
     });
     host.querySelector('[data-wsr-contact-back]')?.addEventListener('click',()=>{if(!state.busy){state.contactReview=null;repaint();}});
     host.querySelector('[data-wsr-contact-dismiss]')?.addEventListener('click',()=>{if(!state.busy){state.contactResults=[];repaint();}});
     host.querySelector('[data-wsr-contact-confirm]')?.addEventListener('click',async()=>{
-      const review=state.contactReview;
-      if(state.busy||!review||!contactEnabled()||!review.recipients.length)return;
-      const command=review.audience==='manager'?'SEND_MANAGER_NOW':'ASK_CANDIDATES';
-      state.busy=true;state.contactResults=review.excluded.map(item=>({...item,state:'skipped'}));await repaint();
+      const retained=state.pendingSourceOutreach,review=retained?.review??state.contactReview;
+      if(state.busy||retained?.inFlight||!review||!contactEnabled()||!review.recipients.length||retained&&!retained.current())return;
+      const pending=retained||{command:review.audience==='manager'?'SEND_MANAGER_NOW':'ASK_CANDIDATES',
+        review:sourceRequestCopy(review),nextIndex:0,request:null,current:requestCurrent,busy:false,inFlight:false};
+      pending.busy=false;pending.inFlight=true;state.busy=true;
+      if(!retained)state.contactResults=review.excluded.map(item=>({...item,state:'skipped'}));
+      await repaint();
       try{
-        // Execute one recipient/owner at a time so one failure cannot hide
-        // another recipient's successful queueing. Re-read after each mutation.
-        for(const recipient of review.recipients){
-          let outcome;
+        // Keep main's per-recipient eligibility/review/outcomes. A proven rolled-back
+        // busy retry reuses its original payload; never regenerate it or resend automatically.
+        for(;pending.nextIndex<pending.review.recipients.length;pending.nextIndex++){
+          if(!pending.current())return;
+          const recipient=pending.review.recipients[pending.nextIndex];let outcome;
           try{
-            const fresh=await freshContacts(recipient.rows.map(row=>row.combined_key));
-            const rows=recipient.rows.map(row=>fresh.rows.find(item=>item.combined_key===row.combined_key));
-            if(rows.some((row,index)=>!row||!contactView.contactPolicy(row,fresh,review.audience).eligible
-              ||contactView.contactSignature(row)!==contactView.contactSignature(recipient.rows[index]))) {
-              outcome=recipient.rows.map(row=>({key:row.combined_key,candidate:row.candidate,state:'skipped',
-                reason:'The question, recipient or eligibility changed after review. Refresh and review it again.'}));
-            }else{
-              const owner=asArray(fresh.owners).find(item=>item.key===recipient.scope_key);
-              const payload=buildOutreachRequest({bulk_actions:owner?.bulk_actions},{mode:'EXPLICIT',ids:rows.map(row=>row.group_key)},command);
-              if(!payload)throw new Error('Contact permission changed.');
-              outcome=contactView.contactOutcome(await issueCommand(command,payload),rows);
+            if(!pending.request){
+              const fresh=await freshContacts(recipient.rows.map(row=>row.combined_key),pending.current);
+              if(!pending.current())return;
+              const rows=recipient.rows.map(row=>fresh.rows.find(item=>item.combined_key===row.combined_key));
+              if(rows.some((row,index)=>!row||!contactView.contactPolicy(row,fresh,pending.review.audience).eligible
+                ||contactView.contactSignature(row)!==contactView.contactSignature(recipient.rows[index]))) {
+                outcome=recipient.rows.map(row=>({key:row.combined_key,candidate:row.candidate,state:'skipped',
+                  reason:'The question, recipient or eligibility changed after review. Refresh and review it again.'}));
+              }else{
+                const owner=asArray(fresh.owners).find(item=>item.key===recipient.scope_key);
+                const payload=buildOutreachRequest({bulk_actions:owner?.bulk_actions},{mode:'EXPLICIT',ids:rows.map(row=>row.group_key)},pending.command);
+                if(!payload)throw new Error('Contact permission changed.');
+                pending.request={payload:sourceRequestCopy(payload),rows:sourceRequestCopy(rows)};
+              }
+            }
+            if(pending.request){
+              if(!pending.current())return;
+              const result=await issueCommand(pending.command,pending.request.payload);
+              if(!pending.current())return;
+              outcome=contactView.contactOutcome(result,pending.request.rows);
             }
           }catch(error){
+            if(!pending.current())return;
+            if(pending.request&&(isSourceAdmissionBusy(error)||retained)){
+              pending.busy=isSourceAdmissionBusy(error);state.pendingSourceOutreach=pending;
+              state.contactReview=pending.review;session.error=friendlyWorkspaceError(error);return;
+            }
+            // Main's initial unknown outcome remains a status-check/fresh-review result.
             outcome=recipient.rows.map(row=>({key:row.combined_key,candidate:row.candidate,state:'failed',
-              reason:`Contact not confirmed. ${friendlyWorkspaceError(error)} Refresh and check request status before retrying.`}));
+              reason:'Contact not confirmed. '+friendlyWorkspaceError(error)+' Refresh and check request status before retrying.'}));
           }
+          pending.request=null;
           for(const item of outcome){state.contactResults.push({...item,recipient:recipient.recipient,channel:recipient.channel});
             if(item.state==='queued')state.selected.delete(item.key);}
           await repaint();
         }
-        state.contactReview=null;
+        if(!pending.current())return;
+        state.pendingSourceOutreach=null;state.contactReview=null;session.error='';
         await loadCombinedReview(tab);
-      }finally{state.busy=false;await repaint();}
+      }finally{pending.inFlight=false;state.busy=false;if(pending.current())await repaint();}
     });
     host.querySelector('[data-wsr-refresh]')?.addEventListener('click',reload);
     host.querySelectorAll('[data-wsr-filter]').forEach(input=>input.addEventListener('change',()=>{
@@ -1278,6 +1353,7 @@
       event.preventDefault();const now=Date.now();state.seek=now-(state.typedAt||0)>900?event.key:state.seek+event.key;state.typedAt=now;
       clearTimeout(state.seekTimer);state.seekTimer=setTimeout(()=>{if(!state.busy&&!state.contactReview)loadCombinedReview(tab).then(()=>root.document?.querySelector('[data-wsr-table]')?.focus());},250);
     });
+    lockSourceRequest(host, state.pendingSourceOutreach??(state.busy?{inFlight:true}:null), '[data-wsr-contact-confirm]');
     const more=host.querySelector('[data-wsr-more]');more?.addEventListener('click',()=>{if(!state.busy&&!state.contactReview)loadCombinedReview(tab,true);});
     session.observer?.disconnect?.();
     if(more&&typeof IntersectionObserver==='function'){session.observer=new IntersectionObserver(entries=>{if(!state.busy&&!state.contactReview&&entries.some(item=>item.isIntersecting))loadCombinedReview(tab,true);},{root:table,rootMargin:'160px'});session.observer.observe(more);}
@@ -1313,6 +1389,7 @@
   }
 
   function bindCombinedFinalise(host) {
+    const requestCurrent = sourceRequestContext();
     const state = session.combined, model = state.model;
     if (!model) return;
     const reload = () => { state.seek = ''; state.selected.clear(); state.exclusions.clear(); session.scrollByTab.finalise=0; loadCombinedFinalise(); };
@@ -1346,7 +1423,7 @@
       repaint();
     });
     host.querySelector('[data-wsc-review]')?.addEventListener('click',()=>{
-      try { state.batch=root.CloudTMSWeeklySourceFinaliseBatchV1.create(model.scopes,[...state.selected],[...state.exclusions]); state.error=''; }
+      try { if (!requestCurrent()) return; state.batch=root.CloudTMSWeeklySourceFinaliseBatchV1.create(model.scopes,[...state.selected],[...state.exclusions]); state.batch.current=requestCurrent; state.error=''; }
       catch(error){ state.error=error.message; } repaint();
     });
     host.querySelector('[data-wsc-dismiss]')?.addEventListener('click',()=>{
@@ -1356,9 +1433,12 @@
       }
     });
     host.querySelector('[data-wsc-run]')?.addEventListener('click',async()=>{
-      if(state.batch?.running)return;
-      try { await root.CloudTMSWeeklySourceFinaliseBatchV1.run(state.batch,issueCommand,()=>repaint()); await loadCombinedFinalise(); }
-      catch(error){ state.error=asText(error.message); await repaint(); }
+      const batch=state.batch;
+      if(batch?.running||!batch?.current?.())return;
+      try {
+        await root.CloudTMSWeeklySourceFinaliseBatchV1.run(batch,issueCommand,()=>batch.current()?repaint():undefined,batch.current);
+        if(batch.current())await loadCombinedFinalise();
+      } catch(error){ if(batch.current()){state.error=asText(error.message);await repaint();} }
     });
     host.querySelectorAll('[data-wsc-action]').forEach(button=>button.addEventListener('click',()=>{
       const row=model.rows.find(item=>item.scope_key===button.dataset.wscRow&&asText(item.row_key)===button.dataset.wscKey);
@@ -1438,6 +1518,7 @@
   }
 
   function bindQueries(host) {
+    const requestCurrent = sourceRequestContext();
     if (root.matchMedia?.('(max-width: 1500px)').matches) {
       host.querySelectorAll('.ws-query-filter-menu, .ws-query-actions-menu').forEach((menu) => menu.removeAttribute('open'));
     }
@@ -1455,11 +1536,26 @@
       loadWorkspace('queries');
     }));
     host.querySelectorAll('[data-ws-bulk-action]').forEach((button) => button.addEventListener('click', async () => {
-      const payload = buildOutreachRequest(session.workspace.queries, selectionSpec(), button.dataset.wsBulkAction);
-      if (!payload) return;
-      button.disabled = true;
-      try { await issueCommand(button.dataset.wsBulkAction, payload); session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() }; await loadWorkspace('queries'); }
-      catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      const retained = session.pendingSourceOutreach;
+      if (retained?.inFlight) return;
+      if (retained && (retained.command !== button.dataset.wsBulkAction || !retained.current())) return;
+      const built = retained?.payload || buildOutreachRequest(session.workspace.queries, selectionSpec(), button.dataset.wsBulkAction);
+      if (!built) return;
+      const request = retained || { command: button.dataset.wsBulkAction, current: requestCurrent, payload: sourceRequestCopy(built) };
+      if (!request.current()) return;
+      request.busy = false; request.inFlight = true; session.pendingSourceOutreach = request; button.disabled = true;
+      try {
+        await issueCommand(request.command, request.payload);
+        if (!request.current()) return;
+        session.pendingSourceOutreach = null; session.error = '';
+        session.groupSelection = { mode: 'NONE', ids: new Set(), exclusions: new Set() }; await loadWorkspace('queries');
+      } catch (error) {
+        if (!request.current()) return;
+        request.busy = isSourceAdmissionBusy(error);
+        if (request.busy || retained) session.pendingSourceOutreach = request;
+        request.inFlight = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
+      finally { request.inFlight = false; }
     }));
     host.querySelector('[data-ws-accept-selected]')?.addEventListener('click', async (event) => {
       const payload = combinedAcceptSystemHoursPayload();
@@ -1474,6 +1570,7 @@
       }));
     });
     updateSelection(host);
+    lockSourceRequest(host, session.pendingSourceOutreach, '[data-ws-bulk-action]', 'wsBulkAction');
   }
 
   function selectedUploadProfileId() {
@@ -1555,6 +1652,7 @@
   }
 
   function bindCommon(host) {
+    const requestCurrent = sourceRequestContext();
     host.querySelector('[data-ws-tracker-cycle]')?.addEventListener('change', (event) => {
       if (!session.workspace?.selected) return;
       session.workspace.selected.source_cycle_id = asText(event.target.value);
@@ -1575,7 +1673,7 @@
       const contextKey = control.dataset.wsContext;
       const chosenValue = control.value;
       session.contextFocus = { key: contextKey, value: chosenValue, tab: session.activeTab };
-      session.pendingRecheck = null; // The server retains resumable work for its exact scope.
+      session.pendingRecheck = null; session.pendingRecheckCurrent = null; // The server retains resumable work for its exact scope.
       const keyMap = { source_group: 'source_group_id', cycle: 'source_cycle_id', client: 'client_id' };
       const key = keyMap[control.dataset.wsContext] || control.dataset.wsContext;
       if (key === 'client_id') {
@@ -1603,15 +1701,21 @@
       await loadWorkspace(session.activeTab);
     }));
     host.querySelectorAll('[data-ws-recheck]').forEach((button) => button.addEventListener('click', async () => {
-      if (session.recheckBusy) return;
-      const payload = session.pendingRecheck || session.workspace.recheck_payload;
+      if (session.recheckBusy || !requestCurrent()) return;
+      if (session.pendingRecheck && !session.pendingRecheckCurrent?.()) return;
+      const payload = session.pendingRecheck || sourceRequestCopy(session.workspace.recheck_payload);
       if (!payload?.request_id) return loadWorkspace(session.activeTab);
-      session.recheckBusy = true; session.pendingRecheck = payload; button.disabled = true;
+      session.recheckBusy = true; session.pendingRecheck = payload; session.pendingRecheckCurrent ||= requestCurrent; session.pendingRecheckBusy = false; button.disabled = true;
       try {
         await issueCommand('RECHECK_SOURCE', payload);
-        session.pendingRecheck = null;
+        if (!requestCurrent()) return;
+        session.pendingRecheck = null; session.pendingRecheckCurrent = null;
         await loadWorkspace(session.activeTab);
-      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      } catch (error) {
+        if (!requestCurrent()) return;
+        session.pendingRecheckBusy = isSourceAdmissionBusy(error);
+        session.recheckBusy = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
       finally { session.recheckBusy = false; }
     }));
     host.querySelectorAll('.ws-row-action').forEach((button) => button.addEventListener('click', () => {
@@ -1658,9 +1762,12 @@
         ? button.dataset.wsSignedTab : 'checks';
       repaint();
     }));
+    if (session.pendingRecheck) lockSourceRequest(host,
+      { busy: session.pendingRecheckBusy, inFlight: session.recheckBusy }, '[data-ws-recheck]');
   }
 
   function bindFinalise(host) {
+    const requestCurrent = sourceRequestContext();
     host.querySelector('[data-ws-prepare]')?.addEventListener('click', async (event) => {
       event.currentTarget.disabled = true;
       try { await issueCommand('PREPARE_FINALISATION', session.workspace.finalise.prepare_action.payload); await loadWorkspace('finalise'); }
@@ -1678,19 +1785,33 @@
       && (!session.workspace.finalise.exclusion_confirmation || host.querySelector('[data-ws-exclusion-confirm]')?.checked);
     const sync = () => {
       if (!action) return;
-      const allowed = canFinalise();
-      action.disabled = !allowed;
+      const allowed = session.pendingSourceFinalise ? session.pendingSourceFinalise.current() : canFinalise();
+      action.disabled = !allowed || session.pendingSourceFinalise?.inFlight === true;
       if (allowed) delete action.dataset.ctmsIntentionalLock;
       else action.dataset.ctmsIntentionalLock = '1';
     };
     confirmation?.addEventListener('change', sync); sync();
     host.querySelector('[data-ws-exclusion-confirm]')?.addEventListener('change', sync);
     action?.addEventListener('click', async () => {
-      if (!canFinalise()) { sync(); return; }
-      action.disabled = true;
-      action.dataset.ctmsIntentionalLock = '1';
-      try { session.finaliseRetry = null; await issueCommand('FINALISE_WEEK', { ...session.workspace.finalise.finalise_payload,
-        ...(session.workspace.finalise.exclusion_confirmation ? { exclude_unfinalised_acknowledged: true } : {}) }); await loadWorkspace('finalise'); } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      const retained = session.pendingSourceFinalise;
+      if (retained?.inFlight) return;
+      if (retained ? !retained.current() : !canFinalise()) { sync(); return; }
+      const request = retained || { command: 'FINALISE_WEEK', current: requestCurrent, payload: sourceRequestCopy({
+        ...session.workspace.finalise.finalise_payload,
+        ...(session.workspace.finalise.exclusion_confirmation ? { exclude_unfinalised_acknowledged: true } : {}) }) };
+      if (!request.current()) return;
+      request.busy = false; request.inFlight = true; session.pendingSourceFinalise = request; action.disabled = true; action.dataset.ctmsIntentionalLock = '1';
+      try {
+        session.finaliseRetry = null; await issueCommand(request.command, request.payload);
+        if (!request.current()) return;
+        session.pendingSourceFinalise = null; session.error = ''; await loadWorkspace('finalise');
+      } catch (error) {
+        if (!request.current()) return;
+        request.busy = isSourceAdmissionBusy(error);
+        if (request.busy || retained) session.pendingSourceFinalise = request;
+        request.inFlight = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
+      finally { request.inFlight = false; }
     });
     host.querySelector('[data-ws-approved-follow-up]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
@@ -1763,21 +1884,35 @@
     }));
     host.querySelector('[data-ws-rate-warning-confirm]')?.addEventListener('change', () => updateRateWarningSelection());
     host.querySelector('[data-ws-rate-warning-accept]')?.addEventListener('click', async (event) => {
-      const visibleSelected = [...host.querySelectorAll('[data-ws-rate-warning-select]:not(:disabled):checked')].map((input) => input.value);
-      const request = buildRateWarningAcceptancePayload(warnings, visibleSelected);
-      if (!request) return;
-      event.currentTarget.disabled = true;
+      const retained = session.pendingSourceRate;
+      if (retained?.inFlight) return;
+      if (retained && !retained.current()) return;
+      const visibleSelected = [...host.querySelectorAll('[data-ws-rate-warning-select]:not(:disabled):checked')].map(input => input.value);
+      const built = retained || buildRateWarningAcceptancePayload(warnings, visibleSelected);
+      if (!built) return;
+      const request = retained || { ...sourceRequestCopy(built), current: requestCurrent };
+      if (!request.current()) return;
+      request.busy = false; request.inFlight = true; session.pendingSourceRate = request; event.currentTarget.disabled = true;
       try {
         await issueCommand(request.action, request.payload);
-        session.rateWarningSelection.clear();
+        if (!request.current()) return;
+        session.pendingSourceRate = null; session.error = ''; session.rateWarningSelection.clear();
         await loadWorkspace('finalise');
-      } catch (error) { session.error = friendlyWorkspaceError(error); repaint(); }
+      } catch (error) {
+        if (!request.current()) return;
+        request.busy = isSourceAdmissionBusy(error);
+        if (request.busy || retained) session.pendingSourceRate = request;
+        request.inFlight = false; session.error = friendlyWorkspaceError(error); repaint();
+      }
+      finally { request.inFlight = false; }
     });
     host.querySelectorAll('[data-ws-rate-expand]').forEach((button) => button.addEventListener('click', () => {
       session.expandedRateWarning = session.expandedRateWarning === button.dataset.wsRateExpand ? '' : button.dataset.wsRateExpand;
       repaint();
     }));
     updateRateWarningSelection();
+    lockSourceRequest(host, session.pendingSourceFinalise, '[data-ws-finalise]');
+    lockSourceRequest(host, session.pendingSourceRate, '[data-ws-rate-warning-accept]');
   }
 
   function bindInfiniteScroll(host) {
@@ -1826,20 +1961,38 @@
     return typeof root.html === 'function' ? root.html(markup) : markup;
   }
 
-  async function open(initialTab = 'imports') {
+  async function open(initialTab = 'imports', options = {}) {
     const tab = TABS.includes(initialTab) ? initialTab : 'imports';
+    const generation = ++session.openGeneration;
+    const actorId = options.actorId;
+    const current = () => generation === session.openGeneration
+      && (!options.currentActorId || options.currentActorId() === actorId);
+    if (!current()) return;
+    session.openCurrent = current;
+    session.pendingRecheck = null; session.pendingRecheckCurrent = null; session.pendingRecheckBusy = false;
+    session.pendingSourceOutreach = null; session.pendingSourceFinalise = null; session.pendingSourceRate = null;
+    for (const state of Object.values(session.reviews)) state.pendingSourceOutreach = null;
     session.activeTab = tab; session.loading = true; session.error = '';
+    session.bankingOwnerClient = options.bankingOwnerClient || null;
+    // F15 qualifies this actor/open. Display lookup failure never blocks factual Source.
+    const ownerRead = session.bankingOwnerClient?.begin('weekly-source-workspace').catch(() => null);
+
     try {
       // Discover the server permission view before sending a requested tab.
-      session.workspace = normaliseWorkspace(await requestJson(ENDPOINTS.workspace));
+      const loaded = await requestJson(ENDPOINTS.workspace);
+      if (!current()) return;
+      session.workspace = normaliseWorkspace(loaded);
       session.activeTab = availableTab(session.workspace, tab);
       session.uploadProfileId = '';
       syncUploadProfile(session.workspace);
       session.loadedTab = session.workspace.permissions?.landing_tab || 'imports';
       if(['finalise','imports','queries','history'].includes(tab)&&session.workspace.combined_source_workspace) session.loadedTab='';
     } catch (error) {
+      if (!current()) return;
       session.workspace = emptyWorkspace(); session.loadedTab = tab; session.error = friendlyWorkspaceError(error);
     }
+    await ownerRead;
+    if (!current()) return;
     session.loading = false; root.modalCtx = { entity: 'weekly-source-imports', data: {}, weeklySourceState: session };
     if (typeof root.showModal !== 'function') throw new Error('The Imports screen is unavailable.');
     root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => {
@@ -1848,6 +2001,12 @@
     }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
     if (tab !== 'imports') await currentFrame()?.setTab?.(availableTab(session.workspace, tab));
   }
+
+  root.addEventListener?.('cloudtms:bpay-next-owner-changed', () => {
+    if (!session.bankingOwnerClient) return;
+    if (currentFrame()) repaint();
+    else session.reloadOnReturn = true;
+  });
 
   async function navigateToExistingShift(target) {
     if (!currentFrame() || !target?.client_id || !target?.source_group_id) return false;
@@ -1897,7 +2056,7 @@
   return Object.freeze({
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
     normaliseBulkActions, normaliseRateWarnings, buildRateWarningAcceptancePayload, buildOutreachRequest,
-    open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
+    isSourceAdmissionBusy, SOURCE_ADMISSION_BUSY_MESSAGE, open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     acceptSystemShiftSelectionPayload,
     refresh: (tab = session.activeTab) => loadWorkspace(tab), navigateToExistingShift,
     clearShiftSelections: () => { session.shiftSelections.clear(); },

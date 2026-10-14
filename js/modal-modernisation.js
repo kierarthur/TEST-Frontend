@@ -280,6 +280,8 @@
 
   const isMoneyInput = (input) => {
     if (!(input instanceof HTMLInputElement)) return false;
+    // NEXT create fields preserve exact entered decimal text and schedule values.
+    if(input.hasAttribute('data-next-exact-input'))return false;
     if (['checkbox', 'radio', 'hidden', 'date', 'time', 'datetime-local'].includes(safeText(input.type).toLowerCase())) return false;
     const identity = [input.name, input.id, input.dataset.field, input.dataset.expField, input.dataset.key]
       .map(safeText)
@@ -347,6 +349,7 @@
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     textNodes.forEach((node) => {
       const parent = node.parentElement;
+      if (parent?.closest('[data-next-formatted-money]')) return;
       if (!parent || parent.closest('input,textarea,select,option,script,style,code,pre,[contenteditable="true"]')) return;
       const original = node.nodeValue || '';
       let value = original.replace(/£\s*(-?\d[\d,]*(?:\.\d+)?)/g, (_match, amount) => `£${formatNumber(amount)}`);
@@ -703,7 +706,7 @@
       if (compact === 'no.ofunits' || compact === 'units') return 'Units';
       return text;
     };
-    const headerLabels = Array.from(table.querySelectorAll(':scope > thead > tr:last-child > th')).map((cell) => normaliseHeader(cell.textContent));
+    const headerLabels = Array.from(table.querySelectorAll(':scope > thead > tr:last-child > th')).map((cell) => normaliseHeader(table.closest('.bpay-next-ready-list,.bpay-next-issue-lists') ? cell.textContent.replace(/[▲▼]\s*$/g, '') : cell.textContent));
     table.querySelectorAll(':scope > tbody > tr').forEach((row) => {
       const rowCells = Array.from(row.children);
       const effectiveLabels = headerLabels.length === rowCells.length
@@ -802,6 +805,26 @@
       });
     }
 
+    // DY-10: the native inline footer owner is retained when any action is present.
+    const dailyFooter=modal.querySelector('#modalActions');
+    if(dailyFooter){
+      const dailyRead=kindSlug==='timesheets' && !!body.querySelector('[data-daily-processing]');
+      const empty=dailyRead && !safeText(dailyFooter.querySelector('#modalHint')?.textContent)
+        && !Array.from(dailyFooter.querySelectorAll('button,input,select,a')).some(control=>{
+          for(let node=control;node && node!==dailyFooter;node=node.parentElement){
+            if(node.hidden || getComputedStyle(node).display==='none')return false;
+          }
+          return true;
+        });
+      if(empty){
+        if(!dailyFooter.hasAttribute('data-daily-empty-display'))dailyFooter.setAttribute('data-daily-empty-display',dailyFooter.style.display);
+        if(dailyFooter.style.display!=='none')dailyFooter.style.display='none';
+      }else if(dailyFooter.hasAttribute('data-daily-empty-display')){
+        dailyFooter.style.display=dailyFooter.getAttribute('data-daily-empty-display');
+        dailyFooter.removeAttribute('data-daily-empty-display');
+      }
+    }
+
     const primaryActionLabels = {
       'search-load': 'Load',
       'hr-weekly-client-picker': 'Select client',
@@ -820,7 +843,12 @@
       if (!(button instanceof HTMLButtonElement)) return;
       // Column-sort labels are controls, not actions; "Uploaded" must not be
       // promoted to the purple Upload action by the shared verb matcher.
-      if (button.matches('[data-ws-sort]')) {
+      if (button.matches('[data-ws-sort]') ||
+          (kindSlug === 'bpay-next-read' && button.matches('[data-next-focus-key="candidate-export"]')) ||
+          (kindSlug === 'bpay-next-read' && button.matches('.bpay-next-reauth [data-next-secondary]')) ||
+          (kindSlug === 'bpay-next-read' && button.matches('.bpay-next-worker-review [data-next-secondary]')) ||
+          (kindSlug === 'bpay-next-read' && button.matches('.bpay-next-pay-channel [data-next-secondary],.bpay-next-pay-channel-footer [data-next-secondary],.bpay-next-channel-choice-confirm [data-next-secondary]')) ||
+          (kindSlug === 'timesheets' && body.querySelector('[data-daily-processing]') && button.matches('[data-ts-action="add-additional-manual"]'))) {
         button.classList.remove('ctms-action-danger', 'ctms-action-primary');
         return;
       }
@@ -1022,7 +1050,7 @@
         finance: ['Finance', 'Review calculated pay, charge and margin details.'],
         audit: ['Audit history', 'Review changes recorded for this timesheet.']
       }[key] || ['Timesheet', 'Review the timesheet details.'];
-      intro(body, `timesheet-${key}`, content[0], content[1]);
+      intro(body, `timesheet-${key}`, content[0], window.__getModalFrame?.()?._bpayNextEvidenceNavigation === true ? '' : content[1]);
       // The server-owned phase title is now the tab's primary heading.  Keep
       // the card and its authority badge, but do not print the title twice.
       if (weeklySourceLines && sourceLifecycleHeading && sourceLifecycleTitle === safeText(sourceLifecycleHeading.textContent)) {
@@ -1263,6 +1291,7 @@
     }
 
     copyRoot.querySelectorAll('.mini:empty,.hint:empty,p:empty,span:empty').forEach((node) => {
+      if (node.hasAttribute('data-next-live-copy')) return;
       if (!node.querySelector('input,select,textarea,button,a')) node.remove();
     });
     hideUserFacingInternalIds(copyRoot);
@@ -1367,6 +1396,7 @@
     if (!backdrop.classList.contains('ctms-modern-backdrop')) backdrop.classList.add('ctms-modern-backdrop');
     enhanceUniversalModal(modal, body, kind, title, universalFamily);
     const hasSpecialisedLayout = !!utilityFamily || !!workflowFamily ||
+      kind === 'bpay-next-read' ||
       ['candidates', 'clients', 'contracts', 'umbrellas', 'settings'].includes(entity) ||
       kind === 'advanced-search' || kind === 'contracts' || !!body.querySelector('.irv1-shell');
     modal.classList.toggle('ctms-generic-modal', !hasSpecialisedLayout);

@@ -88,7 +88,7 @@ test('form is minutes-only, never invents missing evidence before the read, and 
 
 test('an uncertain save retains the same action without a second result button', () => {
   const pending = editor.render(context, values, { pending: { action: 'APPROVE_PROTECTED_HOURS' } });
-  assert.match(pending, /data-protected-submit[^>]*>Protect pay<\/button>/);
+  assert.match(pending, /data-protected-submit[^>]*>Retry exact request<\/button>/);
   assert.doesNotMatch(pending, /Check saved result/);
   assert.doesNotMatch(pending, /Saving…/);
   assert.match(pending, /data-protected-field="start"[^>]* disabled/);

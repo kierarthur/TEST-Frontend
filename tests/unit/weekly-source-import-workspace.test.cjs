@@ -779,3 +779,25 @@ test('a missing or duplicate server warning key fails closed for acceptance', ()
   assert.equal(missing.acceptance, null);
   assert.equal(duplicate.acceptance, null);
 });
+
+test('SP02 plain retired-pay copy and notice require current F15 NEXT status',()=>{
+  const error=Object.assign(Error('RPC refused'),{code:'BPAY_NEXT_LEGACY_WRITER_RETIRED'});
+  const expected='Pay is published through Banking Pay NEXT; there is nothing to recover here';
+  assert.equal(workspace._test.friendlyWorkspaceError(error,{active_owner:'NEXT'}),expected);
+  for(const active_owner of ['LEGACY','DISABLED',null])assert.notEqual(workspace._test.friendlyWorkspaceError(error,{active_owner}),expected);
+  const model=workspace.normaliseWorkspace({});
+  for(const active_owner of ['NEXT','LEGACY','DISABLED',null]){
+    const html=workspace.renderWorkspace(model,'imports',{error:expected,bankingOwnerClient:{peek:()=>({active_owner})}});
+    assert.equal(html.includes(expected),active_owner==='NEXT');
+  }
+});
+
+test('late Source open cannot create an Imports frame after actor drift',async()=>{
+  const oldFetch=globalThis.authFetch,oldModal=globalThis.showModal;
+  let actor='prior',resolveOwner,shown=0;const owner=new Promise(resolve=>{resolveOwner=resolve;});
+  globalThis.authFetch=async()=>new Response('{}');globalThis.showModal=()=>{shown++;};
+  try{
+    const opening=workspace.open('imports',{actorId:'prior',currentActorId:()=>actor,bankingOwnerClient:{begin:()=>owner,peek:()=>null}});
+    actor='next';resolveOwner(null);await opening;assert.equal(shown,0);
+  }finally{globalThis.authFetch=oldFetch;globalThis.showModal=oldModal;}
+});

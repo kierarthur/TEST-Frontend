@@ -19,6 +19,15 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function buildWeeklySourcePresentationApi() {
   'use strict';
 
+  const SOURCE_ADMISSION_BUSY_MESSAGE = 'Another Source update is in progress. Try again in a moment.';
+  function isSourceAdmissionBusy(error) {
+    const body = error?.json || error?.response || error;
+    return error?.status === 409 && body && !Array.isArray(body)
+      && (body.error_code || body.code) === 'WEEKLY_SOURCE_PAY_QUERY_ADMISSION_BUSY'
+      && body.retryable === true && body.failed_rpc_outcome === 'ROLLED_BACK'
+      && body.automatic_retry === false;
+  }
+
   const CONTRACT = 'WEEKLY_SOURCE_OFFICE_PRESENTATION_V1';
   const PRESENTATION_KEY = 'weekly_source_presentation';
   const COMMAND_ENDPOINT = '/api/weekly-source/v1/commands';
@@ -904,7 +913,7 @@
       ? { ...info } : null;
     if (supplied.ok !== true) {
       const errors = lifecycleErrors(supplied.errors);
-      return deepFreeze({
+        return deepFreeze({
         present: true,
         ok: false,
         ui_state: null,
@@ -1709,9 +1718,9 @@
           <thead><tr><th>Day and date</th><th>Currently approved</th><th>Proposed</th></tr></thead>
           <tbody>${changed.map((entry) => `
             <tr data-row-key="${escapeHtml(entry.component_id || entry.work_date || '')}">
-              <td>${escapeHtml(entry.work_date || '—')}</td>
-              <td>${escapeHtml(entry.currently_approved_total_hours || '—')}</td>
-              <td>${escapeHtml(entry.proposed_total_hours || '—')}</td>
+              <td data-weekly-source-label="Day and date">${escapeHtml(entry.work_date || '—')}</td>
+              <td data-weekly-source-label="Currently approved">${escapeHtml(entry.currently_approved_total_hours || '—')}</td>
+              <td data-weekly-source-label="Proposed">${escapeHtml(entry.proposed_total_hours || '—')}</td>
             </tr>`).join('')}</tbody>
         </table>
       </div>`;
@@ -1723,9 +1732,14 @@
     const sourceChange = isObject(reason.source_change) ? reason.source_change : null;
     const currentPosition = isObject(reason.current_position) ? reason.current_position : null;
     const parts = [];
-    if (sourceChange && trim(sourceChange.reason)) parts.push(trim(sourceChange.reason));
+    const sourceReason = sourceChange ? trim(sourceChange.reason) : '';
+    if (/\s/.test(sourceReason) && !/^[A-Z0-9_ ]+$/.test(sourceReason)) parts.push(sourceReason);
     if (currentPosition && trim(currentPosition.committed_at_utc)) {
-      parts.push(`Current position recorded ${trim(currentPosition.committed_at_utc)}.`);
+      const recorded = new Date(currentPosition.committed_at_utc);
+      if (Number.isFinite(recorded.getTime())) parts.push(`Approved hours recorded on ${recorded.toLocaleString('en-GB', {
+        timeZone: 'Europe/London', hour12: false, day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      }).replace(',', '')}.`);
     }
     if (!parts.length) return '';
     return `<div class="weekly-source-v1__notice is-ready" data-weekly-source-decision-reason="1"><strong>Why these hours differ</strong><span>${escapeHtml(parts.join(' '))}</span></div>`;
@@ -1821,13 +1835,9 @@
       const roleLabel = crossContract
         ? (member.root_ordinal === 1 ? 'Old root' : 'New root')
         : '';
-      const contractCaption = member.contract_id
-        ? `<p class="weekly-source-v1__member-contract" data-weekly-source-member-contract="${escapeHtml(member.contract_id)}">Contract ${escapeHtml(member.contract_id)}</p>`
-        : '';
       return `
         <section class="weekly-source-v1__member" data-weekly-source-member="${escapeHtml(String(member.root_ordinal))}"${member.is_requested_root ? ' data-weekly-source-member-requested="1"' : ''}>
           ${roleLabel ? `<h4 class="weekly-source-v1__member-role">${escapeHtml(roleLabel)}</h4>` : ''}
-          ${contractCaption}
           <div class="weekly-source-v1__later-change-grid">
             ${/* These two captions are structural labels for the side-by-side
                   comparison, deliberately NOT lifecycle headings: the phase
@@ -1889,10 +1899,11 @@
         ${renderProposalDecisionReason(proposal)}
         ${proposal.pending_state ? `<div class="weekly-source-v1__notice is-waiting" data-weekly-source-pending-state="${escapeHtml(proposal.pending_state)}"><strong>Decision saved</strong><span>This decision has been recorded and is waiting for the existing payment process to finish.</span></div>` : ''}
         ${buttons ? `<div class="weekly-source-v1__later-change-actions" data-weekly-source-decision-actions="1">${buttons}</div>` : ''}
+        ${buttons ? '<p data-weekly-source-decision-status data-next-live-copy role="status"></p>' : ''}
       </section>`;
   };
 
-  // Post `command_payload` unchanged, plus the actor and the chosen decision.
+  // Retain the server descriptor; the Worker supplies the authenticated actor.
   const buildLaterChangeDecisionCommand = (viewModel, request) => {
     const vm = isObject(viewModel) ? viewModel : unavailableViewModel();
     const req = isObject(request) ? request : {};
@@ -1908,9 +1919,13 @@
     }
     const actor = trim(req.actor_user_id);
     if (!actor) throw new Error('This change could not be safely prepared. Please try again.');
-    const body = { ...decision.command_payload, actor_user_id: actor, decision: action };
     const idempotencyKey = trim(req.idempotency_key);
-    if (idempotencyKey) body.idempotency_key = idempotencyKey;
+    if (idempotencyKey.length < 16 || idempotencyKey.length > 200) {
+      throw new Error('This change could not be safely prepared. Please try again.');
+    }
+    const body = { action: 'LATER_CHANGE_DECISION', payload: {
+      ...decision.command_payload, decision: action, idempotency_key: idempotencyKey
+    } };
     return deepFreeze({ endpoint: decision.endpoint, body });
   };
 
@@ -2315,6 +2330,54 @@
     });
   };
 
+  // Presentation of the real Worker-confirmed result; never financial admission.
+  const protectedActionConfirmation = (value) => {
+    const unknown = { confirmed: false, message: 'The save could not be confirmed. Retry exact request.' };
+    if (!isObject(value) || value.ok !== true) return unknown;
+    const uuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(v);
+    const int64Text = (v) => typeof v === 'string' && /^[1-9]\d*$/.test(v)
+      && (v.length < 19 || (v.length === 19 && v <= '9223372036854775807'));
+    const version = (v) => int64Text(v) || (typeof v === 'number' && Number.isSafeInteger(v) && v > 0);
+    const exact = (keys) => Object.keys(value).length === keys.length && keys.every(k => Object.hasOwn(value, k));
+    if (typeof value.idempotent_replay !== 'boolean' || !uuid(value.family_id)) return unknown;
+    if (value.outcome === 'WAITING_FOR_SOURCE') {
+      const keys = ['ok','outcome','idempotent_replay','family_id','family_bound_version'];
+      if (!value.idempotent_replay) keys.push('target_vector_sha256');
+      if (!exact(keys) || !version(value.family_bound_version)
+          || (!value.idempotent_replay && !(typeof value.target_vector_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.target_vector_sha256)))) return unknown;
+      return { confirmed: true, message: 'Decision saved. Waiting for Source.' };
+    }
+    if (value.outcome === 'PUBLISHED_NEXT') {
+      const keys = ['ok','outcome','idempotent_replay','family_id','orchestration_run_id','approval_id','generation_id','work_id','revision_id','command_id','agency_sequence','new_family_bound_version','approved_pay_ex_vat','state'];
+      if (!exact(keys) || value.state !== 'NEXT_PUBLISHED'
+          || !['orchestration_run_id','approval_id','generation_id','work_id','revision_id','command_id'].every(k => uuid(value[k]))
+          || !int64Text(value.agency_sequence) || !int64Text(value.new_family_bound_version)
+          || typeof value.approved_pay_ex_vat !== 'string' || !/^-?(?:0|[1-9]\d*)\.\d{2}$/.test(value.approved_pay_ex_vat)) return unknown;
+      return { confirmed: true, message: 'Protected hours saved. Payment processing will update separately.' };
+    }
+    if (!['PUBLISHED','SAVED_PENDING_FREEZE'].includes(value.outcome)
+        || !uuid(value.generation_id) || !uuid(value.publication_request_id) || !version(value.family_bound_version)
+        || typeof value.requires_first_authorisation !== 'boolean'
+        || value.state !== (value.outcome === 'SAVED_PENDING_FREEZE' ? 'PENDING' : 'LIVE')) return unknown;
+    const keys = ['ok','outcome','idempotent_replay','family_id','generation_id','publication_request_id','state','family_bound_version','authority','requires_first_authorisation'];
+    if (value.authority === 'UNAUTHORISED_TSFIN') {
+      keys.push('timesheet_financials_id');
+      if (!value.requires_first_authorisation || !uuid(value.timesheet_financials_id) || value.outcome !== 'PUBLISHED') return unknown;
+    } else if (value.authority === 'COMMON_ENTITLEMENT_HEAD') {
+      keys.push('decision_bundle_id','publication');
+      if (value.requires_first_authorisation || !uuid(value.decision_bundle_id) || !isObject(value.publication) || value.publication.ok !== true) return unknown;
+      if (Object.hasOwn(value, 'deferred_release_receipt_id')) {
+        keys.push('deferred_release_receipt_id');
+        if (!uuid(value.deferred_release_receipt_id) || value.outcome !== 'PUBLISHED') return unknown;
+      }
+    } else return unknown;
+    if (!exact(keys)) return unknown;
+    return { confirmed: true, message: value.outcome === 'SAVED_PENDING_FREEZE'
+      ? 'Decision saved. Waiting for the existing payment process to finish.'
+      : value.requires_first_authorisation ? 'Protected hours saved. Authorise the Timesheet before payment.'
+      : 'Protected hours saved.' };
+  };
+
   const renderSelectionHeaderCheckbox = (options) => {
     const opts = isObject(options) ? options : {};
     const checked = opts.checked === true;
@@ -2401,6 +2464,9 @@
     renderManageApprovedHoursDialog,
     approvedHoursActionAllowsSchedule,
     buildApprovedHoursCommand,
+    protectedActionConfirmation,
+    isSourceAdmissionBusy,
+    SOURCE_ADMISSION_BUSY_MESSAGE,
     renderSelectionHeaderCheckbox,
     applySelectionHeaderState,
     renderUnavailable
