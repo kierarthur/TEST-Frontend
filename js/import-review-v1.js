@@ -802,11 +802,63 @@
     return request(`/api/import-reviews/${encodeURIComponent(review.importId)}/actions?${params.toString()}`);
   }
 
+  function installReviewReturn(review) {
+    const owner = review?.returnOwner;
+    const frame = currentImportFrame();
+    if (!owner || !frame || frame.__irv1ReturnOwner === owner) return;
+    if (owner.reviewFrame && owner.reviewFrame !== frame) return;
+    owner.reviewFrame = frame;
+    frame.__irv1ReturnOwner = owner;
+    const previous = frame._onDismiss;
+    frame._onDismiss = function (...args) {
+      try { if (typeof previous === 'function') previous.apply(this, args); }
+      finally {
+        if (!owner.completed && state.review?.returnOwner === owner) {
+          owner.completed = true;
+          cancelDocumentPreparationPoll();
+          state.reviewEpoch += 1;
+          // The shared modal host calls dismiss before restoring the parent.
+          // Run after that synchronous pop and only for this exact caller.
+          Promise.resolve().then(async () => {
+            const frames = Array.isArray(global.__modalStack) ? global.__modalStack : [];
+            if (frames[frames.length - 1] !== owner.caller || owner.caller?._token !== owner.callerToken) return;
+            await owner.callback();
+          }).catch(() => notify('The source list could not be refreshed. Recheck before continuing.'));
+        }
+      }
+    };
+  }
+
+  async function leaveReview() {
+    const review = state.review;
+    if (review?.returnOwner && !review.returnOwner.completed) {
+      if (currentImportFrame() !== review.returnOwner.reviewFrame) return;
+      dismissActiveImportModal();
+      return;
+    }
+    return openImportsModalV1();
+  }
+
   async function openReview(importId, options = {}) {
+    const previousReview = state.review;
+    const frames = Array.isArray(global.__modalStack) ? global.__modalStack : [];
+    const caller = frames[frames.length - 1] || null;
+    const returnOwner = typeof options.returnTo === 'function'
+      ? { callback: options.returnTo, caller, callerToken: caller?._token, reviewFrame: null, completed: false }
+      : previousReview?.importId === importId && !previousReview.returnOwner?.completed ? previousReview.returnOwner : null;
+    const returnCallerCurrent = () => {
+      if (!returnOwner) return true;
+      const stack = Array.isArray(global.__modalStack) ? global.__modalStack : [];
+      return !returnOwner.completed && !!returnOwner.caller
+        && typeof returnOwner.callerToken === 'string' && !!returnOwner.callerToken
+        && returnOwner.caller._token === returnOwner.callerToken
+        && stack[stack.length - 1] === (returnOwner.reviewFrame || returnOwner.caller);
+    };
+    if (!returnCallerCurrent()) return;
     cancelDocumentPreparationPoll();
     const epoch = ++state.reviewEpoch;
     let header = await fetchReviewHeader(importId);
-    if (epoch !== state.reviewEpoch) return;
+    if (epoch !== state.reviewEpoch || !returnCallerCurrent()) return;
     let autoRecheckWarning = '';
     const canRefresh = Array.isArray(header?.state?.editability?.allowed_commands)
       && header.state.editability.allowed_commands.includes('REFRESH');
@@ -827,6 +879,7 @@
         autoRecheckWarning = `Current records could not be rechecked automatically. This saved view may be out of date; choose Recheck before continuing. ${error?.message || ''}`.trim();
       }
     }
+    if (epoch !== state.reviewEpoch || !returnCallerCurrent()) return;
     const saved = header?.state?.ui_state || {};
     const prior = options.preserveLocal === true && state.review && state.review.importId === importId ? state.review : null;
     const savedView = ACTIVE_VIEWS.includes(String(saved.active_section || '').toUpperCase()) ? String(saved.active_section).toUpperCase() : 'PENDING';
@@ -834,6 +887,7 @@
     state.review = {
       importId,
       header,
+      returnOwner,
       view: options.view || prior?.view || savedView,
       page: options.page || prior?.page || Number(saved.page_number || 1),
       pageSize: prior?.pageSize || pageSize,
@@ -859,8 +913,9 @@
     if (isSingleClientHealthRoster(state.review) && state.review.sortBy === 'CLIENT') state.review.sortBy = 'CANDIDATE';
     state.review.scope = await fetchScope(importId, 1, 25).catch(() => null);
     state.review.pageData = await fetchActionPage(state.review);
-    if (epoch !== state.reviewEpoch) return;
+    if (epoch !== state.reviewEpoch || !returnCallerCurrent()) return;
     showScreen('Import review', renderReview, 'import-review-v1');
+    installReviewReturn(state.review);
     scheduleDocumentPreparationPoll(state.review);
   }
 
@@ -1700,7 +1755,7 @@
         reason: 'Operator abandoned the import review to start again.', confirmed: true
       })
     });
-    await openImportsModalV1();
+    await leaveReview();
   }
 
   async function applyReview() {
@@ -1942,7 +1997,7 @@
           state.coverage = null;
         }
         if (action === 'home' && !(await flushSelections({ quiet: true }))) return;
-        return openImportsModalV1();
+        return action === 'home' ? leaveReview() : openImportsModalV1();
       }
       if (action === 'home-page') {
         const page = Number(button.getAttribute('data-page'));

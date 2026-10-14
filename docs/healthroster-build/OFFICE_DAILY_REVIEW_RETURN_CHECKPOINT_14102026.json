@@ -1,0 +1,71 @@
+{
+  "status": "SOURCE_READY_FOR_CRITIC_NATIVE_NOT_RUN",
+  "parent": "34f4e9c056ea1aff90a6c799d86bf39b0141f7cd",
+  "recordedAt": "2026-10-14T12:19:10.586Z",
+  "pins": [
+    {
+      "file": "js/import-review-v1.js",
+      "sha256": "555cdfa53736208f97644955c1fdd22b71fac9cc5e653e587e138d8b2b3e9dbc",
+      "bytes": 160619,
+      "rawSavedSha256": "555cdfa53736208f97644955c1fdd22b71fac9cc5e653e587e138d8b2b3e9dbc",
+      "stagedSha256": "b5f8d0779b74e029c68a900a53a80bcfe92cc58390d090f07cb76ca967d7dad6",
+      "rawSavedEqualsStaged": false,
+      "canonicalLfEqualsStaged": true
+    },
+    {
+      "file": "index.html",
+      "sha256": "0669690d43af553c98982b91dd4d0bbc3d29495b083c8838a237ec3db1b182e7",
+      "bytes": 97749,
+      "rawSavedSha256": "0669690d43af553c98982b91dd4d0bbc3d29495b083c8838a237ec3db1b182e7",
+      "stagedSha256": "0669690d43af553c98982b91dd4d0bbc3d29495b083c8838a237ec3db1b182e7",
+      "rawSavedEqualsStaged": true,
+      "canonicalLfEqualsStaged": true
+    },
+    {
+      "file": "tests/import-review-caller-return.test.mjs",
+      "sha256": "7760326c40797c2b7d2e3d62dd2a4ba9d164f91934ff922def206a292a6ec3ee",
+      "bytes": 4720,
+      "rawSavedSha256": "7760326c40797c2b7d2e3d62dd2a4ba9d164f91934ff922def206a292a6ec3ee",
+      "stagedSha256": "7760326c40797c2b7d2e3d62dd2a4ba9d164f91934ff922def206a292a6ec3ee",
+      "rawSavedEqualsStaged": true,
+      "canonicalLfEqualsStaged": true
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_DAILY_REVIEW_RETURN_CHECKS_14102026.json",
+      "sha256": "b7a7111d32899c3914db6336e59e35b96f8a2e154a530511b6121c24769c443c",
+      "bytes": 3405,
+      "rawSavedSha256": "b7a7111d32899c3914db6336e59e35b96f8a2e154a530511b6121c24769c443c",
+      "stagedSha256": "b7a7111d32899c3914db6336e59e35b96f8a2e154a530511b6121c24769c443c",
+      "rawSavedEqualsStaged": true,
+      "canonicalLfEqualsStaged": true
+    }
+  ],
+  "fullReverseCheck": true,
+  "completeDiffSha256": "13967d10b901218c20a9778a6cdaaed397121d761fa6b52cb70c91cbbc6c60cc",
+  "rawWhitespaceExitCode": 0,
+  "credentialFindings": 0,
+  "syntax": [
+    {
+      "file": "js/import-review-v1.js",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/import-review-caller-return.test.mjs",
+      "exitCode": 0
+    }
+  ],
+  "sourceTests": 535,
+  "native": false,
+  "installation": false,
+  "limitations": [
+    "Actual browser/phone caller-pop and native Checklist reader not yet qualified.",
+    "Historical legacy Imports fallback retained when no returnTo caller exists; original frozen receipts untouched."
+  ],
+  "lineEndings": {
+    "reviewRawPreserved": "CRLF",
+    "reviewGitFilter": "LF",
+    "sourceBodiesEquivalent": true,
+    "rawByteEqualityClaim": false
+  },
+  "rawStagedWhitespaceExitCode": 0
+}

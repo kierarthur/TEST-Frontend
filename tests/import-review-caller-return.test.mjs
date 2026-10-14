@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import fs from 'node:fs';
+const source=fs.readFileSync(new URL('../js/import-review-v1.js',import.meta.url),'utf8');
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+function setup(){
+ const listeners=new Map(),caller={kind:'weekly-source-imports-v1',_token:'caller-1'},stack=[caller],requests=[],notices=[];
+ let frameNumber=0;
+ const close={click(){const child=stack.at(-1);child?._onDismiss?.();stack.pop();}};
+ const doc={documentElement:{},addEventListener(type,callback){if(!listeners.has(type))listeners.set(type,[]);listeners.get(type).push(callback);},getElementById(id){if(id==='btnCloseModal')return close;if(id==='irv1Review'&&stack.at(-1)?.kind==='import-review-v1')return{isConnected:true};return null;},querySelector(){return null;}};
+ const window={addEventListener(){},__modalStack:stack,sessionStorage:{getItem(){return null;},setItem(){},removeItem(){}},API:p=>'https://controlled.test'+p,setTimeout,clearTimeout,console,__toast:m=>notices.push(m),openUiConfirmModal:async()=>({confirmed:true}),showModal(title,tabs,render,a,b,c,options){stack.push({kind:options.kind,_token:'child-'+(++frameNumber),_onDismiss:options.onDismiss,renderTab:render});},authFetch:async(url,options)=>{requests.push({url,method:options?.method??'GET'});let value={};if(url.includes('/actions?'))value={items:[],total:0};else if(url.includes('/scope'))value={};else value={import:{source_route:'HR_DAILY',source_system:'HEALTHROSTER_DAILY'},state:{editability:{allowed_commands:[]},ui_state:{},state_version:1},evidence:{}};return{ok:true,text:async()=>JSON.stringify(value)};}};
+ vm.runInNewContext(source,{window,document:doc,MutationObserver:class{observe(){}},URLSearchParams,setTimeout,clearTimeout,console,Promise});
+ function action(name){const target={getAttribute:key=>key==='data-ir-action'?name:null,closest:selector=>selector==='[data-ir-action]'?target:null};for(const callback of listeners.get('click'))callback({target,preventDefault(){},stopImmediatePropagation(){}});}
+ function headerClose(){const target={closest:selector=>selector==='#btnCloseModal'?close:null};for(const callback of listeners.get('click'))callback({target,preventDefault(){},stopImmediatePropagation(){}});}
+ return{window,api:window.CloudTmsImportReviewV1,stack,caller,close,action,headerClose,requests,notices};
+}
+for(const name of ['home','header-close','abandon'])test('actual whole Daily review returns '+name+' to exact caller after pop',async()=>{const f=setup();let calls=0;await f.api.openReview('import-a',{returnTo:()=>{assert.equal(f.stack.at(-1),f.caller);calls++;}});assert.equal(f.stack.length,2);if(name==='header-close')f.headerClose();else f.action(name);await tick();await tick();assert.equal(calls,1);assert.equal(f.stack.length,1);assert.equal(f.requests.some(r=>r.url.includes('/contract')),false);});
+test('same-review internal reopen retains caller hook and only returns once',async()=>{const f=setup();let calls=0;await f.api.openReview('import-a',{returnTo:()=>calls++});const child=f.stack.at(-1);await f.api.openReview('import-a',{skipAutoRecheck:true});assert.equal(f.stack.at(-1),child);f.close.click();await tick();assert.equal(calls,1);child._onDismiss();await tick();assert.equal(calls,1);});
+test('wrong caller token or replaced parent cannot refresh another workspace',async()=>{for(const replace of [false,true]){const f=setup();let calls=0;await f.api.openReview('import-a',{returnTo:()=>calls++});if(replace)f.stack[0]={kind:'weekly-source-imports-v1',_token:'other'};else f.caller._token='changed';f.close.click();await tick();assert.equal(calls,0);}});
+test('save-close waits an actual failed selection save instead of popping or refreshing',async()=>{const f=setup();let calls=0;await f.api.openReview('import-a',{returnTo:()=>calls++});const review=f.api._state.review;review.dirty.set('a',true);f.window.authFetch=async()=>({ok:false,status:409,text:async()=>JSON.stringify({ok:false,error:{message:'Conflict',code:'CONFLICT'}})});f.action('home');await tick();await tick();assert.equal(calls,0);assert.equal(f.stack.length,2);assert.equal(review.dirty.size,1);});
+
+test('caller disappearing while real header is pending cannot open on another frame',async()=>{const f=setup();let release,calls=0;const original=f.window.authFetch;f.window.authFetch=(url,options)=>new Promise(resolve=>{release=async()=>resolve(await original(url,options));});const opening=f.api.openReview('import-a',{returnTo:()=>calls++});f.stack[0]={kind:'unrelated',_token:'other'};await release();await opening;assert.equal(f.stack.length,1);assert.equal(f.stack[0].kind,'unrelated');assert.equal(calls,0);});
