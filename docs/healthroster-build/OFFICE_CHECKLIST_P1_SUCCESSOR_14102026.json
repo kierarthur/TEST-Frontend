@@ -1,0 +1,29 @@
+{
+  "status": "P1_OFFICE_CHECKLIST1_SOURCE_CLOSED_NATIVE_NOT_RUN",
+  "parent": "b4c396a23f6989b68f43e647b62248035c4254cd",
+  "recordedAt": "2026-10-14T12:00:53.645Z",
+  "pins": [
+    {
+      "file": "js/weekly-source/checklist.js",
+      "rawSavedSha256": "0dac7d42cb656c304064855622ce6763127d4f9b9fae03a4347a603c6b3a8f6e",
+      "parentGitSha256": "5a178b496fd9a1736af27ad6d2082218fb2b3ec9a873a37655a7c3d58d9b1b00",
+      "wholeDiffSha256": "db4759ae08a463d292de885bcd9f25f0481ae2d35b7c1b522ea13db4e3ee44f8",
+      "syntaxExitCode": 0
+    },
+    {
+      "file": "tests/unit/weekly-source-checklist.test.cjs",
+      "rawSavedSha256": "9f154a15afe04bb52e097e68cb66fb184f3083c20d45784c102a15630d72e684",
+      "parentGitSha256": "cc973c27ac7965346d3ce9ad4c957b993b89275154411c54f2b7dfcfe57e34b6",
+      "wholeDiffSha256": "b1414461f4aa6e524c949f58bb52f3ab2426779c9d713c91821d8b969dcb732d",
+      "syntaxExitCode": 0
+    }
+  ],
+  "tests": {
+    "count": 17,
+    "exitCode": 0,
+    "outputSha256": "ce624b602e0516f9b47b20a3b685104cc6cd676fbd98acc0b1c3a67a806a43a1"
+  },
+  "nativeAcceptance": "NOT_RUN",
+  "rawWhitespaceExitCode": 0,
+  "scope": "Main finally owns main busy only; refresh-generation barrier invalidates old expansion completions; actual overlap regressions. No original snapshot/critic receipt rewritten."
+}

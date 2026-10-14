@@ -39,7 +39,7 @@
   }
   function create(options){
     if(typeof options.read!=='function'||typeof options.current!=='function'||!options.actorId||!['ADMIN','PAY_READONLY'].includes(options.permissionView))throw new Error('Checklist access is unavailable.');
-    const state={rows:[],binding:null,revision:null,next:null,more:false,loaded:false,busy:false,error:'',sort:'week_ending',direction:'DESC',filters:{},expansions:new Map(),scroll:0,anchor:null,anchorOffset:0};
+    const state={rows:[],binding:null,revision:null,next:null,more:false,loaded:false,busy:false,refreshing:false,error:'',sort:'week_ending',direction:'DESC',filters:{},expansions:new Map(),scroll:0,anchor:null,anchorOffset:0};
     let generation=0,disposed=false,mainObserver=null,host=null;
     const current=()=>!disposed&&options.current()===true;
     const notify=()=>{if(current())options.changed?.();};
@@ -62,7 +62,7 @@
         state.rows=append?appendRows(state.rows,value.rows,'row_id'):value.rows;state.binding=value.binding;state.revision=value.read_revision;
         state.next=value.next_cursor;state.more=value.has_more;state.loaded=true;
       }catch(error){if(current()&&stamp===generation)state.error=error.code==='WEEKLY_SOURCE_CHECKLIST_ANCHORED_REFRESH_REQUIRED'?'Checklist information has changed. Recheck to keep your place.':'Checklist information could not be loaded. Try again.';}
-      finally{if(stamp===generation){state.busy=false;for(const entry of state.expansions.values())entry.busy=false;notify();}}
+      finally{if(stamp===generation){state.busy=false;notify();}}
     }
     // Refresh every previously consumed prefix, plus the surviving visible
     // anchor. New rows before a consumed keyset are discovered from the origin.
@@ -80,7 +80,7 @@
       }fail();
     }
     async function refresh(){
-      if(!current()||state.busy)return;capture();disconnect();const stamp=++generation;state.busy=true;state.error='';notify();
+      if(!current()||state.busy)return;capture();disconnect();const stamp=++generation;state.busy=true;state.refreshing=true;state.error='';notify();
       try{const fresh=await refreshPrefix(mainRequest,state.rows,'row_id',state.anchor,stamp);if(!fresh)return;
         const replacements=new Map();
         for(const [id,entry]of state.expansions){const row=fresh.rows.find(row=>row.row_id===id);if(!row)continue;
@@ -89,10 +89,10 @@
         if(!current()||stamp!==generation)return;
         Object.assign(state,fresh,{expansions:replacements,loaded:true});
       }catch(error){if(current()&&stamp===generation)state.error='Checklist information has changed. Recheck to keep your place.';}
-      finally{if(stamp===generation){state.busy=false;notify();}}
+      finally{if(stamp===generation){state.busy=false;state.refreshing=false;for(const entry of state.expansions.values())entry.busy=false;notify();}}
     }
     async function expand(id,append=false){
-      const row=state.rows.find(row=>row.row_id===id);if(!row||!current())return;
+      const row=state.rows.find(row=>row.row_id===id);if(!row||!current()||state.refreshing)return;
       let entry=state.expansions.get(id);
       if(!append&&entry){capture();entry.observer?.disconnect();state.expansions.delete(id);notify();return;}
       if(!entry){entry={items:[],binding:null,revision:null,next:null,more:false,busy:false,error:'',scroll:0,anchor:null,observer:null};state.expansions.set(id,entry);}
@@ -106,7 +106,7 @@
     }
     function reset(filters={},sort=state.sort,direction=state.direction){
       if(!SORTS.includes(sort)||!['ASC','DESC'].includes(direction)||Object.keys(filters).some(key=>!scopes.includes(key)))throw new Error('Checklist filters are unavailable.');
-      disconnect();generation++;Object.assign(state,{rows:[],binding:null,revision:null,next:null,more:false,loaded:false,busy:false,error:'',sort,direction,filters:copy(filters),expansions:new Map(),scroll:0,anchor:null});return load();
+      disconnect();generation++;Object.assign(state,{rows:[],binding:null,revision:null,next:null,more:false,loaded:false,busy:false,refreshing:false,error:'',sort,direction,filters:copy(filters),expansions:new Map(),scroll:0,anchor:null});return load();
     }
     const link=(action,key)=>action?`<button type="button" class="ws-checklist-link" data-ws-checklist-action="${escape(key)}">${escape(action.label)}</button>`:'';
     function cell(row,name){const value=row[name],symbol=value.value===null?'—':value.value?'✓':'✗';

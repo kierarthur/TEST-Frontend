@@ -98,3 +98,20 @@ test('append from duplicate native identities refuses rather than masking overla
   const fixture=setup(100);const reader=api.create({actorId:actor,permissionView:'ADMIN',current:()=>true,read:async request=>{const value=await fixture.read(request);if(request.cursor)value.rows[0]=row('row-0');return value;}});
   await reader.load();await reader.load(true);assert.equal(reader.state.rows.length,50);assert.equal(reader.state.more,true);assert.match(reader.state.error,/Recheck/);
 });
+
+test('main append completion cannot clear or duplicate an independent expansion append',async()=>{
+  const fixture=setup(100);fixture.items.set(client,Array.from({length:120},(_,i)=>item(`i-${i}`)));let release;
+  const reader=api.create({actorId:actor,permissionView:'ADMIN',current:()=>true,read:request=>request.command==='CHECKLIST_ISSUES'&&request.cursor
+    ?new Promise(resolve=>{release=async()=>resolve(await fixture.read(request));}):fixture.read(request)});
+  await reader.load();await reader.expand('row-0');const pending=reader.expand('row-0',true);await reader.load(true);
+  assert.equal(reader.state.expansions.get('row-0').busy,true);const before=fixture.calls.length;await reader.expand('row-0',true);assert.equal(fixture.calls.length,before);
+  await release();await pending;assert.equal(reader.state.expansions.get('row-0').items.length,100);assert.equal(reader.state.error,'');assert.equal(reader.state.expansions.get('row-0').error,'');
+});
+test('one expansion completion owns only its own busy flag while a sibling append remains pending',async()=>{
+  const fixture=setup(2);fixture.items.set(client,Array.from({length:120},(_,i)=>item(`i-${i}`)));const releases=[];
+  const reader=api.create({actorId:actor,permissionView:'ADMIN',current:()=>true,read:request=>request.command==='CHECKLIST_ISSUES'&&request.cursor
+    ?new Promise(resolve=>{releases.push(async()=>resolve(await fixture.read(request)));}):fixture.read(request)});
+  await reader.load();await reader.expand('row-0');await reader.expand('row-1');const a=reader.expand('row-0',true),b=reader.expand('row-1',true);
+  await releases[0]();await a;assert.equal(reader.state.expansions.get('row-0').busy,false);assert.equal(reader.state.expansions.get('row-1').busy,true);
+  await reader.expand('row-1',true);assert.equal(releases.length,2);await releases[1]();await b;assert.equal(reader.state.expansions.get('row-1').items.length,100);assert.equal(reader.state.error,'');
+});
