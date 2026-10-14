@@ -15,9 +15,10 @@
     workspace: '/api/weekly-source/v1/workspace',
     preview: '/api/weekly-source/v1/uploads/preview',
     accept: '/api/weekly-source/v1/uploads/accept',
-    command: '/api/weekly-source/v1/commands'
+    command: '/api/weekly-source/v1/commands',
+    checklist: '/api/weekly-source/v1/checklist'
   });
-  const TABS = Object.freeze(['imports', 'queries', 'finalise', 'history']);
+  const TABS = Object.freeze(['imports', 'queries', 'finalise', 'history', 'checklist']);
   const CYCLE_STATES = new Set(['Before cutoff', 'Ready for finalisation', 'Finalised', 'Correction in progress']);
   const FINALISE_LABELS = Object.freeze({
     NHSP_FINAL_BACKING_V1: 'Finalise report',
@@ -293,13 +294,16 @@
     const journey = asObject(imports.journey);
     const permissions = asObject(source.permissions);
     const payView = permissions.contract === 'WEEKLY_SOURCE_PAYMENT_VIEW_V1' || permissions.view === 'PAY';
+    const payChecklist = permissions.checklist?.available === true
+      && permissions.checklist?.read_only === true && permissions.checklist?.pay_only === true
+      && permissions.checklist?.action_links === false && asArray(permissions.allowed_tabs).includes('checklist');
     return {
       contract: asText(source.contract) || CONTRACT,
       permissions: payView ? {
-        contract: 'WEEKLY_SOURCE_PAYMENT_VIEW_V1', view: 'PAY', allowed_tabs: ['queries'], landing_tab: 'queries',
+        contract: 'WEEKLY_SOURCE_PAYMENT_VIEW_V1', view: 'PAY', allowed_tabs: payChecklist ? ['queries', 'checklist'] : ['queries'], landing_tab: 'queries',
         allowed_sections: asArray(permissions.allowed_sections).filter(section => ['questions', 'checks', 'protected'].includes(section)),
         can_upload: false, can_finalise: false, can_manage_settings: false,
-        checklist: { available: false, read_only: true, pay_only: true, action_links: false }
+        checklist: { available: payChecklist, read_only: true, pay_only: true, action_links: false }
       } : null,
       combined_source_workspace: source.combined_source_workspace === true,
       workspace_version: asText(source.workspace_version || source.record_version),
@@ -372,7 +376,8 @@
       { key: 'imports', label: 'Imports' },
       { key: 'queries', label: `Queries${ws.counts.queries ? ` (${ws.counts.queries})` : ''}` },
       { key: 'finalise', label: `${ws.profile.finalise_label}${ws.finalise.prepared && ws.counts.blockers ? ` (${ws.counts.blockers} blocker${ws.counts.blockers === 1 ? '' : 's'})` : ''}` },
-      { key: 'history', label: 'History' }
+      { key: 'history', label: 'History' },
+      { key: 'checklist', label: 'Checklist' }
     ].filter(tab => !ws.permissions || ws.permissions.allowed_tabs.includes(tab.key));
   }
 
@@ -945,15 +950,18 @@
     const visibleError = state.error === NEXT_PAY_NOTICE && !nextPayNotice
       ? 'Weekly source information is temporarily unavailable. Recheck or try again shortly.' : state.error;
     const error = asText(visibleError) ? `<div class="ws-notice ws-notice--danger" role="alert"><strong>Weekly source information could not be loaded</strong><span>${escapeHtml(visibleError)}</span></div>` : '';
+    const returnLink = state.checklistReturnLink && tab !== 'checklist' ? '<button type="button" class="btn btn-outline" data-ws-checklist-return>Back to Checklist</button>' : '';
     const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;
     const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;
-    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${nextPayNotice}${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
+    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${nextPayNotice}${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
+    if (tab === 'checklist') return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="checklist">${renderContext(workspace)}${state.checklist?.render() || '<p role="status">Checklist information is unavailable. Recheck shortly.</p>'}</div>`;
     const body = state.loading === true ? '<div class="ws-loading" role="status">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);
-    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${body}</div>`;
+    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${body}</div>`;
   }
 
   const session = {
     pendingSourceOutreach: null, pendingSourceFinalise: null, pendingSourceRate: null, openCurrent: null,
+    checklist: null, checklistActor: null, checklistFilters: '', checklistOnReturn: false,
     bankingOwnerClient: null, openGeneration: 0, reviews: {}, reviewSingleScope: false, sourceFilters: {},
     combined: { model: null, filters: {}, list: 'ready', sort: '', direction: 'asc', seek: '', selected: new Set(), exclusions: new Set(), batch: null, error: '' },
     workspace: null, activeTab: 'imports', loading: false, error: '', requestSequence: 0,
@@ -1066,7 +1074,80 @@
     }
   }
 
+  function checklistFilters() {
+    const selected=session.workspace?.selected||{};
+    return Object.fromEntries(['source_group_id','client_id','source_cycle_id','week_ending']
+      .map(key=>[key,session.sourceFilters[key]||selected[key]])
+      .filter(([,value])=>typeof value==='string'&&value));
+  }
+
+  async function loadChecklist(append=false) {
+    session.loading=false;session.loadedTab='checklist';
+    const api=root.CloudTMSWeeklySourceChecklistV1;
+    if(!api||!session.checklistActor||!session.openCurrent?.())return repaint();
+    if(!session.checklist){
+      const generation=session.openGeneration;
+      session.checklist=api.create({actorId:session.checklistActor,
+        permissionView:session.workspace.permissions?'PAY_READONLY':'ADMIN',
+        current:()=>generation===session.openGeneration&&session.openCurrent?.()===true
+          &&session.activeTab==='checklist'&&!!currentFrame(),
+        read:request=>requestJson(`${ENDPOINTS.checklist}?${new URLSearchParams(request)}`),
+        changed:()=>repaint(),onAction:openChecklistAction});
+    }
+    const filters=checklistFilters(),identity=JSON.stringify(filters);
+    if(identity!==session.checklistFilters){session.checklistFilters=identity;return session.checklist.reset(filters);}
+    if(append||!session.checklist.state.loaded)return session.checklist.load(append);
+    return repaint();
+  }
+
+  async function returnToChecklist() {
+    if(!session.openCurrent?.()||!currentFrame())return;
+    session.checklistReturnLink=false;session.activeTab='checklist';session.loadedTab='checklist';
+    await repaint();await session.checklist?.refresh();
+  }
+
+  async function openChecklistAction(action,row) {
+    if(session.checklistActionInFlight||!session.openCurrent?.()||!currentFrame()
+      ||session.workspace.permissions||action.native_allowed!==true)return;
+    const frame=currentFrame(),generation=session.openGeneration;
+    const current=()=>frame===currentFrame()&&generation===session.openGeneration&&session.openCurrent?.();
+    session.checklist?.capture();session.checklistOnReturn=true;
+    try {
+      if(['NO_ONE_WORKED','UNDO_NO_ONE_WORKED'].includes(action.kind)){
+        const message=action.kind==='NO_ONE_WORKED'?'Confirm that no one worked for this client and week?':'Undo the saved “No one worked” decision for this client and week?';
+        if(typeof root.confirm!=='function'||!root.confirm(message))return;
+        if(!current())return;session.checklistActionInFlight=true;
+        const names=action.kind==='UNDO_NO_ONE_WORKED'
+          ?['source_cycle_id','source_group_id','client_id','completion_id','expected_cycle_version']
+          :['source_cycle_id','source_group_id','client_id','expected_cycle_version','attestation_text'];
+        const payload=Object.fromEntries(names.filter(key=>Object.hasOwn(action.payload,key)).map(key=>[key,action.payload[key]]));
+        await issueCommand(action.kind==='NO_ONE_WORKED'?'NO_SHIFTS_TO_IMPORT':'UNDO_NO_ONE_WORKED',payload);
+        if(current()){session.checklistOnReturn=false;await session.checklist.refresh();}
+        return;
+      }
+      const target=action.target;
+      if(action.kind==='TIMESHEET'&&typeof root.openTimesheet==='function')return root.openTimesheet({timesheet_id:target.timesheet_id});
+      if(action.kind==='DAILY_REVIEW'&&typeof root.CloudTmsImportReviewV1?.openReview==='function')
+        return root.CloudTmsImportReviewV1.openReview(target.import_id,{returnTo:returnToChecklist});
+      if(action.kind==='UPLOAD_DETAIL'&&root.CloudTMSWeeklySourceWorkspaceActionsV1)
+        return root.CloudTMSWeeklySourceWorkspaceActionsV1.handleAction({label:'View',payload:target});
+      if(['QUERIES','FINALISE','UPLOAD'].includes(action.kind)){
+        session.checklistReturnLink=true;session.checklistOnReturn=false;
+        session.workspace.selected={...session.workspace.selected,...row.scope,...target};
+        if(action.kind==='QUERIES'){
+          session.reviewSingleScope=true;session.query.filters={};session.checklistQueryTarget=target.row_key;
+        }
+        const tab=action.kind==='QUERIES'?'queries':action.kind==='FINALISE'?'finalise':'imports';
+        session.activeTab=tab;session.loadedTab='';await repaint();
+        return;
+      }
+      throw new Error('Checklist action is unavailable.');
+    }catch(error){if(current()){session.checklist.state.error='This action could not be confirmed. Recheck before trying again.';await repaint();}}
+    finally{session.checklistActionInFlight=false;}
+  }
+
   async function loadWorkspace(tab = session.activeTab, append = false) {
+    if (tab === 'checklist') return loadChecklist(append);
     if(append&&['imports','queries','history'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope)return loadCombinedReview(tab,true);
     if (tab === 'finalise' && session.workspace?.combined_source_workspace) return loadCombinedFinalise(append);
     const sequence = ++session.requestSequence;
@@ -1086,6 +1167,10 @@
         const nextPage = tab === 'finalise' ? next.finalise[next.finalise.active_list] : next[tab];
         const keys = new Set(current.rows.map((row) => asText(row.row_key || row.group_key || row.id)));
         nextPage.rows = [...current.rows, ...nextPage.rows.filter((row) => { const key = asText(row.row_key || row.group_key || row.id); if (!key || keys.has(key)) return false; keys.add(key); return true; })];
+      }
+      if (tab === 'queries' && session.checklistQueryTarget) {
+        const target = next.queries.rows.find(row => asText(row.group_key || row.row_key) === session.checklistQueryTarget);
+        if (target) target.expanded = true;
       }
       session.workspace = next; syncUploadProfile(next); session.activeTab = availableTab(next, tab); session.loadedTab = session.activeTab; session.loading = false;
       session.reloadOnReturn = !currentFrame();
@@ -1653,6 +1738,7 @@
 
   function bindCommon(host) {
     const requestCurrent = sourceRequestContext();
+    host.querySelector('[data-ws-checklist-return]')?.addEventListener('click', returnToChecklist);
     host.querySelector('[data-ws-tracker-cycle]')?.addEventListener('change', (event) => {
       if (!session.workspace?.selected) return;
       session.workspace.selected.source_cycle_id = asText(event.target.value);
@@ -1932,6 +2018,8 @@
       button.classList.toggle('active', descriptor.key === tab);
       button.setAttribute('aria-selected', String(descriptor.key === tab));
     });
+    if(tab==='checklist'){ bindCommon(host); session.checklist?.bind(host); return; }
+    session.checklist?.suspend();
     if(tab==='finalise'&&session.workspace?.combined_source_workspace){ bindCombinedFinalise(host); return; }
     if(['imports','queries','history'].includes(tab)&&session.workspace?.combined_source_workspace&&!session.reviewSingleScope){bindCommon(host);bindCombinedReview(host,tab);return;}
     if(tab==='queries'&&session.reviewSingleScope){
@@ -1947,10 +2035,15 @@
       scroll.scrollTop = Number(session.scrollByTab[tab] || 0);
       scroll.addEventListener('scroll', () => { session.scrollByTab[tab] = scroll.scrollTop; }, { passive: true });
     }
+    if(tab==='queries'&&session.checklistQueryTarget){
+      const target=[...host.querySelectorAll('[data-ws-group-key]')].find(row=>row.dataset.wsGroupKey===session.checklistQueryTarget);
+      if(target){target.scrollIntoView({block:'nearest'});session.checklistQueryTarget=null;}
+    }
     host.querySelector('[data-ws-history-cycle]')?.addEventListener('change', (event) => { session.workspace.history.cycle_filter = event.target.value; session.scrollByTab.history = 0; loadWorkspace('history'); }); bindInfiniteScroll(host);
   }
 
   function renderTab(tab) {
+    if(tab!=='checklist') session.checklist?.suspend();
     session.activeTab = availableTab(session.workspace || emptyWorkspace(), tab);
     if (session.activeTab !== session.loadedTab && !session.loading) {
       session.loading = true;
@@ -1966,8 +2059,10 @@
     const generation = ++session.openGeneration;
     const actorId = options.actorId;
     const current = () => generation === session.openGeneration
-      && (!options.currentActorId || options.currentActorId() === actorId);
+      && (!options.currentActorId || options.currentActorId() === actorId)
+      && (!options.current || options.current());
     if (!current()) return;
+    session.checklist?.dispose(); session.checklist = null; session.checklistActor = actorId; session.checklistFilters = '';
     session.openCurrent = current;
     session.pendingRecheck = null; session.pendingRecheckCurrent = null; session.pendingRecheckBusy = false;
     session.pendingSourceOutreach = null; session.pendingSourceFinalise = null; session.pendingSourceRate = null;
@@ -1996,9 +2091,10 @@
     session.loading = false; root.modalCtx = { entity: 'weekly-source-imports', data: {}, weeklySourceState: session };
     if (typeof root.showModal !== 'function') throw new Error('The Imports screen is unavailable.');
     root.showModal('Weekly source imports', tabDescriptors(session.workspace), renderTab, null, false, () => {
-      if (session.reloadOnReturn && currentFrame()) { session.reloadOnReturn = false; repaint(); }
+      if (session.activeTab === 'checklist' && session.checklistOnReturn && currentFrame()) { session.checklistOnReturn = false; repaint().then(() => session.checklist?.refresh()); }
+      else if (session.reloadOnReturn && currentFrame()) { session.reloadOnReturn = false; repaint(); }
       else wire(session.activeTab);
-    }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true });
+    }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true, onDismiss: () => { session.checklist?.dispose(); session.checklist = null; } });
     if (tab !== 'imports') await currentFrame()?.setTab?.(availableTab(session.workspace, tab));
   }
 
@@ -2055,10 +2151,11 @@
 
   return Object.freeze({
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
+    disposeChecklist: () => { session.checklist?.dispose(); session.checklist = null; },
     normaliseBulkActions, normaliseRateWarnings, buildRateWarningAcceptancePayload, buildOutreachRequest,
     isSourceAdmissionBusy, SOURCE_ADMISSION_BUSY_MESSAGE, open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     acceptSystemShiftSelectionPayload,
-    refresh: (tab = session.activeTab) => loadWorkspace(tab), navigateToExistingShift,
+    refresh: (tab = session.activeTab) => tab === 'checklist' ? session.checklist?.refresh() : loadWorkspace(tab), navigateToExistingShift,
     clearShiftSelections: () => { session.shiftSelections.clear(); },
     _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload, acceptSingleSystemShiftPayload, friendlyWorkspaceError, cycleForClientChange, queryFor }),
     _session: session

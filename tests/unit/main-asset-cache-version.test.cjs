@@ -9,7 +9,7 @@ const main = fs.readFileSync(path.resolve(__dirname, '../../js/main.js'), 'utf8'
 test('loads the current main frontend asset through an explicit cache version', () => {
   const scriptBuildVersion = '20260803-invoice-reference-policy-r2';
   const stylesheetBuildVersion = '20260729-invoice-v8-flat-table-r5';
-  const currentMainAsset = 'main.js?v=20261012-sp10-r1&healthroster=20261014-r3';
+  const currentMainAsset = 'main.js?v=20261012-sp10-r1&healthroster=20261014-checklist-r4';
   const diagnosticAsset = 'invoice-diagnostic-catalog.js?v=20260803-invoice-reference-policy-r2';
   const batchAsset = `invoice-batch-modal.js?v=${scriptBuildVersion}`;
   const asyncAsset = 'invoice-async-ui.js?v=20260730-invoice-refs-ward-r13&invoice-ui-notices=20260822-r1';

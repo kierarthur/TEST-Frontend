@@ -1,0 +1,47 @@
+{
+  "status": "SOURCE_HELD",
+  "sourceOnly": true,
+  "steps": [
+    {
+      "name": "managedOfficeSourceGate",
+      "files": [
+        "tests/unit/candidate-office-api-v1.test.cjs",
+        "tests/unit/candidate-office-bootstrap-v1.test.cjs",
+        "tests/unit/candidate-office-bridge-identity.test.cjs",
+        "tests/unit/candidate-office-contract-v1.test.cjs",
+        "tests/unit/candidate-office-controller-idempotency.test.cjs",
+        "tests/unit/candidate-office-daily-receipt-status.test.cjs",
+        "tests/unit/candidate-office-expense-reconciliation.test.cjs",
+        "tests/unit/candidate-office-finance-summary.test.cjs",
+        "tests/unit/candidate-office-invoice-diagnostic.test.cjs",
+        "tests/unit/candidate-office-openapi-parity.test.cjs",
+        "tests/unit/candidate-office-rate-client-picker.test.cjs",
+        "tests/unit/candidate-office-reminder-workspace.test.cjs",
+        "tests/unit/candidate-office-summary.test.cjs",
+        "tests/unit/candidate-office-ui-policy.test.cjs",
+        "tests/unit/candidate-pay-method-retained-finance.test.cjs",
+        "tests/unit/candidate-pay-method-umbrella-selection.test.cjs",
+        "tests/unit/client-settings-save-version.test.cjs",
+        "tests/unit/cloudtms-branding-assets.test.cjs",
+        "tests/unit/contract-delete-friendly-confirm.test.cjs",
+        "tests/unit/main-asset-cache-version.test.cjs",
+        "tests/unit/mobile-summary-contract-ux.test.cjs",
+        "tests/unit/modal-modernisation-policy.test.cjs",
+        "tests/unit/mytms-office-v1.test.cjs",
+        "tests/unit/record-modal-layout.test.cjs",
+        "tests/unit/summary-money-format.test.cjs",
+        "tests/unit/timesheet-processing-status-badges.test.cjs",
+        "tests/unit/timesheet-summary-issues.test.cjs",
+        "tests/unit/weekly-source-entrypoint-reachability.test.cjs"
+      ],
+      "exitCode": null,
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "outputSha256": "6889a0a43f67512874e529c41ff85264995ddb73f3adfde7745bc88e55f3fd2f",
+      "failures": [
+        "not ok 233 - the public Imports route reaches Weekly Source and the legacy review cannot replace it"
+      ]
+    }
+  ]
+}

@@ -374,7 +374,7 @@ function fixture(overrides = {}) {
 
 test('policy-owned tabs use the exact profile label and non-zero counts', () => {
   assert.deepEqual(workspace.tabDescriptors(fixture()).map((tab) => tab.label), [
-    'Imports', 'Queries (2)', 'Finalise report (1 blocker)', 'History'
+    'Imports', 'Queries (2)', 'Finalise report (1 blocker)', 'History', 'Checklist'
   ]);
 });
 

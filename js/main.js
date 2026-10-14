@@ -282249,6 +282249,7 @@ function isAnyModalDirty(){
 // ==================== discardAllModalsAndState (kept with geometry reset) ====================
 
 function discardAllModalsAndState(){
+  window.CloudTMSWeeklySourceImportWorkspaceV1?.disposeChecklist?.();
   try {
     if (modalCtx && modalCtx._rolesUpdatedHandler) {
       window.removeEventListener('global-roles-updated', modalCtx._rolesUpdatedHandler);
@@ -343843,8 +343844,13 @@ async function apiResolveTimesheetClient(timesheetId, clientId) {
 
 async function openImportsModal() {
   if (window.CloudTMSWeeklySourceImportWorkspaceV1?.open) {
+    const checklistSession = SESSION, checklistUser = SESSION?.user;
+    const checklistPermission = user => JSON.stringify([user?.roles || [], user?.role, user?.is_active, user?.payment_authoriser, user?.payment_golden_key]);
+    const checklistRoles = checklistPermission(checklistUser);
+    const current = () => SESSION === checklistSession && SESSION?.user === checklistUser
+      && checklistPermission(SESSION?.user) === checklistRoles;
     return window.CloudTMSWeeklySourceImportWorkspaceV1.open('imports', { bankingOwnerClient: bankingNextOwnerClient(),
-      actorId: SESSION?.user?.id || null, currentActorId: () => SESSION?.user?.id || null });
+      actorId: checklistUser?.id || null, currentActorId: () => SESSION?.user?.id || null, current });
   }
   // Seed a neutral modalCtx for this screen
   window.modalCtx = {
@@ -351791,6 +351797,7 @@ function closeModal(){
   document.onmouseup   = null;
 
   const closing = window.__modalStack.pop();
+  if (closing?.kind === 'weekly-source-imports-v1') window.CloudTMSWeeklySourceImportWorkspaceV1?.disposeChecklist?.();
   if (closing) {
     // Detach per-frame listeners
     if (closing._detachDirty)  { try { closing._detachDirty();  } catch(_) {} closing._detachDirty  = null; }

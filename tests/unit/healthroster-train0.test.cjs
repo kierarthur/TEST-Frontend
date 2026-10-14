@@ -73,8 +73,16 @@ test('legacy signed checks remain until the replacement producer contract is qua
     authority_mode: 'TIMESHEET_AUTHORITY', title: 'Signed Timesheet decides hours',
     attention_rows: [{ candidate: 'Synthetic worker', attention: 'Existing comparison', actions: ['View Timesheet'] }]
   } } });
-  assert.deepEqual(workspace.tabDescriptors(model).map(tab => tab.key), ['imports', 'queries', 'finalise', 'history']);
+  assert.deepEqual(workspace.tabDescriptors(model).map(tab => tab.key), ['imports', 'queries', 'finalise', 'history', 'checklist']);
   const html = workspace.renderWorkspace(model, 'imports');
   assert.match(html, /Existing comparison/);
   assert.doesNotMatch(html, /Any difference is emailed to Temp Staffing/);
+});
+
+test('native pay Checklist admission requires every reduced-view declaration together', () => {
+  const native={...payPermissions,allowed_tabs:['queries','checklist'],checklist:{available:true,read_only:true,pay_only:true,action_links:false}};
+  assert.deepEqual(workspace.tabDescriptors(workspace.normaliseWorkspace({permissions:native})).map(tab=>tab.key),['queries','checklist']);
+  for(const alter of [value=>value.allowed_tabs=['queries'],value=>value.checklist.available=false,value=>value.checklist.read_only=false,value=>value.checklist.pay_only=false,value=>value.checklist.action_links=true]){
+    const value=structuredClone(native);alter(value);assert.deepEqual(workspace.tabDescriptors(workspace.normaliseWorkspace({permissions:value})).map(tab=>tab.key),['queries']);
+  }
 });

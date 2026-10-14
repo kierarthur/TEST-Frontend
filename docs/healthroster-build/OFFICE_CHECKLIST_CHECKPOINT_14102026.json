@@ -1,0 +1,163 @@
+{
+  "status": "ACTUAL_OFFICE_CHECKLIST_SOURCE_BACKUP_WIP_NATIVE_AND_ACTION_GATES_HELD",
+  "beforeCommit": "cce7b6bce0903d11889f9c16a504bc097087a8df",
+  "sourceOnly": true,
+  "pins": [
+    {
+      "file": "css/weekly-source.css",
+      "bytes": 48623,
+      "sha256": "1ca147f80db7aefb445e9b52b2b88a4f25bdec88a8e7c34402ebfe754cb1f25e"
+    },
+    {
+      "file": "index.html",
+      "bytes": 97710,
+      "sha256": "e509abd1f4ec135c7974c72fad283a4b8bdc94e90c6af7635d3ce37ee98e9ead"
+    },
+    {
+      "file": "js/main.js",
+      "bytes": 17832956,
+      "sha256": "d86f2ef841f53243997c7f5bb73b913a4a04a2c563378ab47e58d1a5ee82c847"
+    },
+    {
+      "file": "js/weekly-source/import-workspace.js",
+      "bytes": 163348,
+      "sha256": "51b41487022414057ef7e1c83f646e484654464bebd635238814ad13fc4b00d4"
+    },
+    {
+      "file": "js/weekly-source/checklist.js",
+      "bytes": 18453,
+      "sha256": "5a178b496fd9a1736af27ad6d2082218fb2b3ec9a873a37655a7c3d58d9b1b00"
+    },
+    {
+      "file": "tests/unit/healthroster-train0.test.cjs",
+      "bytes": 5754,
+      "sha256": "a4cfd8d8882b1669b4050e3cb5b30f1afc9000400c5033ca6b1e102b62aeaf19"
+    },
+    {
+      "file": "tests/unit/main-asset-cache-version.test.cjs",
+      "bytes": 5315,
+      "sha256": "59a7a1aaae3bf23a4825c579760374e18d8cd1c0186540135e6a8d8e16dbb463"
+    },
+    {
+      "file": "tests/unit/weekly-source-entrypoint-reachability.test.cjs",
+      "bytes": 3983,
+      "sha256": "fb172b4f964dafcb82d2b77b282c1b0b9ce8bcef8e6a74240ebdb32b758c85fe"
+    },
+    {
+      "file": "tests/unit/weekly-source-import-workspace.test.cjs",
+      "bytes": 44093,
+      "sha256": "5eb12c81c3abe521a9d23da46b24c6950854021f216f83a8ba907b958f04dd91"
+    },
+    {
+      "file": "tests/unit/weekly-source-protected-resume-asset-cache.test.cjs",
+      "bytes": 1430,
+      "sha256": "b69d9c039bcc631b1d93853df77dd11b6bfbb53244776dd20e25bc67af5d6154"
+    },
+    {
+      "file": "tests/unit/weekly-source-checklist.test.cjs",
+      "bytes": 11379,
+      "sha256": "cc973c27ac7965346d3ce9ad4c957b993b89275154411c54f2b7dfcfe57e34b6"
+    },
+    {
+      "file": "tests/unit/weekly-source-checklist-mounted.test.cjs",
+      "bytes": 3083,
+      "sha256": "1e6839934bdfd6cfe40944f4d3430115e22ed9c434a52f45df68df2cdcf73ad1"
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_CHECKLIST_WIP_14102026.md",
+      "bytes": 3147,
+      "sha256": "f083a922bb7f417718e0d3e25fa4d4ac67c875697af6986c9312342e49bc975f"
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_CHECKLIST_SOURCE_CHECKS_14102026.json",
+      "bytes": 5320,
+      "sha256": "f59babe10980734793e0fbf270063d832763d7fe790caf11e008d4cb0bc5541c"
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_CHECKLIST_SOURCE_CHECKS_FAILED_14102026.json",
+      "bytes": 2178,
+      "sha256": "e4fbf8ebccc4c16920bd01c48094398091110628f852c1445eff579a4af286cd"
+    },
+    {
+      "file": "scripts/healthroster-checklist-checkpoint.mjs",
+      "bytes": 3712,
+      "sha256": "5f3b2e331ef64bca48880979623bf9cc6119202d3f0ecb34329931c8fa34433e"
+    }
+  ],
+  "syntax": [
+    {
+      "file": "js/main.js",
+      "exitCode": 0
+    },
+    {
+      "file": "js/weekly-source/import-workspace.js",
+      "exitCode": 0
+    },
+    {
+      "file": "js/weekly-source/checklist.js",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/healthroster-train0.test.cjs",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/main-asset-cache-version.test.cjs",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/weekly-source-entrypoint-reachability.test.cjs",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/weekly-source-import-workspace.test.cjs",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/weekly-source-protected-resume-asset-cache.test.cjs",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/weekly-source-checklist.test.cjs",
+      "exitCode": 0
+    },
+    {
+      "file": "tests/unit/weekly-source-checklist-mounted.test.cjs",
+      "exitCode": 0
+    },
+    {
+      "file": "scripts/healthroster-checklist-checkpoint.mjs",
+      "exitCode": 0
+    }
+  ],
+  "wholeChangedFilesReverseCheck": true,
+  "changedFiles": [
+    "css/weekly-source.css",
+    "index.html",
+    "js/main.js",
+    "js/weekly-source/import-workspace.js",
+    "tests/unit/healthroster-train0.test.cjs",
+    "tests/unit/main-asset-cache-version.test.cjs",
+    "tests/unit/weekly-source-entrypoint-reachability.test.cjs",
+    "tests/unit/weekly-source-import-workspace.test.cjs",
+    "tests/unit/weekly-source-protected-resume-asset-cache.test.cjs"
+  ],
+  "reverseDiffSha256": "05771d69fbb077cc72383355d0fed8fc5fb96bc455fa82858d9eb948d5697db0",
+  "rawStagedWhitespaceExitCode": 0,
+  "selectedCredentialFindings": 0,
+  "sourceTests": 499,
+  "sourceCheckReceiptSha256": "f59babe10980734793e0fbf270063d832763d7fe790caf11e008d4cb0bc5541c",
+  "historicalCorrectionReadReceiptsPreserved": true,
+  "nativeMissing": [
+    "The actual public weekly_source_checklist_v1 SQL owner and revision/cursor/permission-before-keyset are unfinished.",
+    "Daily existing openReview ignores returnTo today; exact frame return integration remains required.",
+    "Queries deep link finds/expands loaded native group but exact target outside first page needs native anchored scope seek.",
+    "Protected/Report/Agency monetary and row reason native producers remain open.",
+    "Full native endpoint, real browser and physical phone acceptance, final contract and installation are unrun."
+  ],
+  "independentSourceReview": "PENDING",
+  "native": false,
+  "browser": false,
+  "installation": false,
+  "publication": false
+}
