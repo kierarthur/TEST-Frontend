@@ -15,7 +15,7 @@ function harness(){
   vm.runInNewContext(source.replace(seam,'friendlyWorkspaceError, cycleForClientChange, queryFor, openChecklistAction, loadWorkspace, wire, returnToChecklist })'),root);
   const api=root.module.exports,s=api._session;
   s.workspace=api.normaliseWorkspace({selected:{...scope,report_scope_id:'OLD-REPORT',projection_publication_id:'OLD-PUBLICATION'},combined_source_workspace:true});
-  s.openCurrent=()=>true;s.openGeneration=1;s.checklist={capture:()=>{},suspend:()=>{},refresh:async()=>{}};s.activeTab='checklist';
+  s.openCurrent=()=>true;s.openGeneration=1;s.checklist={capture:()=>{},suspend:()=>{},dispose:()=>{},refresh:async()=>{}};s.activeTab='checklist';
   return{api,s,host,root,requests,scrolls,respond:value=>response=value,
     open:()=>api._test.openChecklistAction({kind:'QUERIES',native_allowed:true,target:{row_key:targetKey}},{scope})};
 }
@@ -58,4 +58,18 @@ test('ordinary Queries requests retain report scope and never reuse a stale Chec
 test('pay read-only admission cannot invoke the linked native action',async()=>{
   const h=harness();h.s.workspace.permissions={view:'PAY'};await h.open();
   assert.equal(h.s.checklistQueryTarget,undefined);assert.equal(h.requests.length,0);assert.equal(h.s.activeTab,'checklist');
+});
+test('terminal disposal clears the target before opening another client scope',async()=>{
+  const h=harness();await h.open();await h.api._test.loadWorkspace('queries');h.api._test.wire('queries');
+  h.api.disposeChecklist();h.s.workspace=h.api.normaliseWorkspace({selected:{...scope,client_id:'44444444-4444-4444-8444-444444444444'}});
+  const request=h.api._test.queryFor('queries');assert.equal(request.row_key,undefined);assert.equal(request.client_id,'44444444-4444-4444-8444-444444444444');
+  assert.equal(h.s.checklistReturnLink,false);assert.equal(h.s.reviewSingleScope,false);
+});
+test('new open and its actual onDismiss reset navigation while same-open refresh keeps targeting',async()=>{
+  const h=harness();await h.open();let modalOptions;
+  h.root.showModal=(_title,_tabs,_render,_save,_edit,_wire,options)=>modalOptions=options;
+  await h.api.open('imports',{actorId:'office-actor',current:()=>true});
+  assert.equal(h.api._test.queryFor('queries').row_key,undefined);assert.equal(h.s.checklistReturnLink,false);
+  h.s.checklistReturnLink=true;h.s.reviewSingleScope=true;h.s.checklistQueryTarget=targetKey;h.s.checklistQueryScrollPending=true;
+  modalOptions.onDismiss();assert.equal(h.api._test.queryFor('queries').row_key,undefined);assert.equal(h.s.checklistQueryTarget,null);
 });

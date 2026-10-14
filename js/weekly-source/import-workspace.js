@@ -979,6 +979,10 @@
   };
 
   const currentFrame = () => { const stack = Array.isArray(root.__modalStack) ? root.__modalStack : []; const frame = stack[stack.length - 1]; return frame?.kind === 'weekly-source-imports-v1' ? frame : null; };
+  function clearChecklistNavigation() {
+    session.checklistReturnLink=false;session.checklistOnReturn=false;
+    session.checklistQueryTarget=null;session.checklistQueryScrollPending=false;session.reviewSingleScope=false;
+  }
   // These named UI actions retain literal inputs; there is no automatic reissue.
   function sourceRequestContext() {
     const generation = session.openGeneration, frame = currentFrame(), current = session.openCurrent;
@@ -2077,6 +2081,7 @@
       && (!options.current || options.current());
     if (!current()) return;
     session.checklist?.dispose(); session.checklist = null; session.checklistActor = actorId; session.checklistFilters = '';
+    clearChecklistNavigation();
     session.openCurrent = current;
     session.pendingRecheck = null; session.pendingRecheckCurrent = null; session.pendingRecheckBusy = false;
     session.pendingSourceOutreach = null; session.pendingSourceFinalise = null; session.pendingSourceRate = null;
@@ -2108,7 +2113,7 @@
       if (session.activeTab === 'checklist' && session.checklistOnReturn && currentFrame()) { session.checklistOnReturn = false; repaint().then(() => session.checklist?.refresh()); }
       else if (session.reloadOnReturn && currentFrame()) { session.reloadOnReturn = false; repaint(); }
       else wire(session.activeTab);
-    }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true, onDismiss: () => { session.checklist?.dispose(); session.checklist = null; } });
+    }, { kind: 'weekly-source-imports-v1', noParentGate: true, stayOpenOnSave: false, showSave: false, showApply: false, runOnRender: true, onDismiss: () => { session.checklist?.dispose(); session.checklist = null; clearChecklistNavigation(); } });
     if (tab !== 'imports') await currentFrame()?.setTab?.(availableTab(session.workspace, tab));
   }
 
@@ -2165,7 +2170,7 @@
 
   return Object.freeze({
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
-    disposeChecklist: () => { session.checklist?.dispose(); session.checklist = null; },
+    disposeChecklist: () => { session.checklist?.dispose(); session.checklist = null; clearChecklistNavigation(); },
     normaliseBulkActions, normaliseRateWarnings, buildRateWarningAcceptancePayload, buildOutreachRequest,
     isSourceAdmissionBusy, SOURCE_ADMISSION_BUSY_MESSAGE, open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     acceptSystemShiftSelectionPayload,
