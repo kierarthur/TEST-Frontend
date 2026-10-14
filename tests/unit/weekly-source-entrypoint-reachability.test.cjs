@@ -38,18 +38,21 @@ test('load order and bridges keep new and established import journeys reachable'
   const notificationIndex = html.indexOf('./js/weekly-source/office-notifications.js');
   const actionIndex = html.indexOf('./js/weekly-source/workspace-actions.js');
   const settingsIndex = html.indexOf('./js/weekly-source/settings.js');
+  const correctionIndex = html.indexOf('./js/timesheet-correction-office-context.js');
   const mainIndex = html.indexOf('./js/main.js');
   const legacyIndex = html.indexOf('./js/import-review-v1.js');
   assert.ok(workspaceIndex > 0);
   assert.ok(notificationIndex > workspaceIndex);
   assert.ok(actionIndex > notificationIndex);
   assert.ok(settingsIndex > actionIndex);
-  assert.ok(mainIndex > settingsIndex);
+  assert.ok(correctionIndex > settingsIndex);
+  assert.ok(mainIndex > correctionIndex);
   assert.ok(legacyIndex > mainIndex);
   assert.match(workspace, /data-ws-upload/);
   assert.match(workspace, /data-ws-daily/);
   assert.match(workspace, /root\.handleHrRotaFileDrop/);
-  assert.match(html, /main\.js\?v=20261012-sp10-r1&healthroster=20261014-r1/);
+  assert.match(html, /timesheet-correction-office-context\.js\?v=20261014-correction-read-r1/);
+  assert.match(html, /main\.js\?v=20261012-sp10-r1&healthroster=20261014-r3/);
   assert.match(html, /import-review-v1\.js[^"']*weekly-source-entry=20260922-r1/);
 });
 

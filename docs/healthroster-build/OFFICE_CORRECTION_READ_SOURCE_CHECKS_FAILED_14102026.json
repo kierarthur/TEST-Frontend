@@ -1,0 +1,73 @@
+{
+  "status": "SOURCE_GATE_HELD",
+  "sourceOnly": true,
+  "steps": [
+    {
+      "name": "mounted-source32",
+      "exitCode": 0,
+      "outputSha256": "304ec35d4c4a33b0b23b7115436fcf53ac6b526857f8214831b669df95a4d416",
+      "tests": 32,
+      "pass": 32,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-js/main.js",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-js/timesheet-correction-office-context.js",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-healthroster-mount-correction-read.mjs",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-healthroster-check-correction-read.mjs",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-healthroster-normalize-read-index.mjs",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "managedOfficeSourceGate",
+      "exitCode": 1,
+      "outputSha256": "301b0acef7a84f071c36c43b606dc4317bdee68d9f32fff8984ab09a07cddf4c",
+      "tests": 236,
+      "pass": 235,
+      "fail": 1,
+      "failedTitles": [
+        "not ok 235 - load order and bridges keep new and established import journeys reachable"
+      ]
+    }
+  ],
+  "native": false,
+  "publication": false
+}

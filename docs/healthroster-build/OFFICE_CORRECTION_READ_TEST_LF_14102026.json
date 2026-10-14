@@ -1,0 +1,11 @@
+{
+  "sourceOnly": true,
+  "status": "OWN_TEST_CRLF_TO_EXACT_STAGED_LF",
+  "file": "tests/unit/weekly-source-entrypoint-reachability.test.cjs",
+  "beforeSha256": "b35fc9277359863312922be224f2577f97ede374f191b5da15c796c98571c329",
+  "afterSha256": "44ab2e8a344acfd5107273083934c86301a5329b9bd8dae714410663e7d0de5c",
+  "removedCarriageReturns": 62,
+  "assertionsChangedByNormalization": false,
+  "native": false,
+  "publication": false
+}

@@ -331132,6 +331132,44 @@ try {
   if (LOGM) console.warn('[TS][OVERVIEW] finance action wiring failed', err);
 }
 
+// Current native correction request read only. Original SEND, finance,
+// PREPARE and action eligibility remain with their own qualified producers.
+try {
+  const sessionAtRead = SESSION, currentUser = sessionAtRead?.user;
+  const details = mc.timesheetDetails, physical = details?.timesheet;
+  const token = mc.openToken, actor = currentUser?.id;
+  // Existing /api/me does not carry current active/payment flags. Request the
+  // fixed read and consume its native admitted view; never mint a local role.
+  const view = 'NATIVE';
+  const rolesAtRead = JSON.stringify(Array.isArray(currentUser?.roles) ? currentUser.roles : null);
+  const payFlags = [currentUser?.role, currentUser?.is_active, currentUser?.payment_authoriser, currentUser?.payment_golden_key];
+  const admitted = typeof actor === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actor);
+  const physicalId = physical?.timesheet_id, version = physical?.version;
+  const current = () => root.isConnected && SESSION === sessionAtRead && SESSION?.user === currentUser
+    && SESSION?.user?.id === actor && isActiveTimesheetModalToken(token)
+    && JSON.stringify(Array.isArray(SESSION?.user?.roles) ? SESSION.user.roles : null) === rolesAtRead
+    && window.modalCtx?.timesheetDetails === details && window.modalCtx?.timesheetDetails?.timesheet?.version === version
+    && String(tsNow()).toLowerCase() === String(physicalId).toLowerCase()
+    && String(expectedNow()).toLowerCase() === String(physicalId).toLowerCase()
+    && JSON.stringify([SESSION?.user?.role, SESSION?.user?.is_active, SESSION?.user?.payment_authoriser,
+      SESSION?.user?.payment_golden_key]) === JSON.stringify(payFlags);
+  if (mode === 'view' && admitted && physicalId && Number.isSafeInteger(version) && version > 0 && current()) {
+    window.CloudTmsCorrectionOfficeContext?.mount?.({document,host:root,timesheetId:physicalId,version,view,callerCurrent:current,
+      readContext:async()=>{
+        if (!current()) throw new Error('Context changed');
+        const response = await authFetch(API('/api/timesheets/' + encodeURIComponent(physicalId) + '/corrections/context'));
+        if (!current()) throw new Error('Context changed');
+        let payload;try { payload = await response.json(); } catch { throw new Error('Correction details are unavailable'); }
+        if (!current() || !response.ok) throw new Error('Correction details are unavailable');
+        return payload;
+      },
+      openReplacement:id=>{if (current() && typeof window.openTimesheet === 'function') return window.openTimesheet(id);}
+    });
+  }
+} catch (err) {
+  if (LOGM) console.warn('[TS][OVERVIEW] correction request read wiring unavailable');
+}
+
 
         // ── Pay-hold + mark-paid staging in edit/create (unchanged) ──
         if (mode === 'edit' || mode === 'create') {

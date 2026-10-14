@@ -1,0 +1,137 @@
+{
+  "status": "ACTUAL_MOUNTED_SOURCE_PASS_NATIVE_WORKFLOW_HELD",
+  "sourceOnly": true,
+  "authorCommit": "67fd9f4a0f8262536999f02146aaf47a77c5f701",
+  "sourcePins": 30,
+  "owners": [
+    {
+      "file": "js/main.js",
+      "sha256": "75010872e22408e52bc378aa1acf0ec9d27e559873f4966535cd8efc13512d92",
+      "beforeSha256": "ed486ea92f5a3fde59fa362033425aeee94a98df562d64e999c52c85c5a6d3ed",
+      "fullReverseHunks": 1
+    },
+    {
+      "file": "index.html",
+      "sha256": "dc1f0926754b6758889a44fc31006735d60370b0d2e41f4f75247fc3041c02d5",
+      "beforeSha256": "c15da401fea00a5db095a5dc83fa145951f73dacc68ed10f9ed6df825638c3d1",
+      "fullReverseHunks": 1,
+      "authorRawSha256": "356d202cfa5b1271f7922a11ad499ca022012157e69c085637f615013543a321"
+    },
+    {
+      "file": "js/timesheet-correction-office-context.js",
+      "sha256": "03d2a43688e3b62dd74d17630970b17cf95df9cd6688ebf9d519993244fa3a12",
+      "beforeAbsent": true
+    }
+  ],
+  "reverseSha256": "2260f628d0414b1f90202c628954cb58371854f380a742002ac0759baa6aa5a4",
+  "reboundTestSha256": "529544b2800a45bff2cca5208e21486220b1182b541dc9a4dd9c7da1e3c7ff59",
+  "rebindings": [
+    {
+      "before": "import {fileURLToPath} from 'node:url';",
+      "after": "import {fileURLToPath} from 'node:url';\nimport {execFileSync} from 'node:child_process';",
+      "count": 1
+    },
+    {
+      "before": "const dir=path.dirname(fileURLToPath(import.meta.url));",
+      "after": "const dir=path.dirname(fileURLToPath(import.meta.url));\nconst actualRoot=path.resolve(dir,'../../..');",
+      "count": 1
+    },
+    {
+      "before": "path.join(dir,'forward/js/timesheet-correction-office-context.js')",
+      "after": "path.join(actualRoot,'js/timesheet-correction-office-context.js')",
+      "count": 1
+    },
+    {
+      "before": "path.join(dir,'forward',owner.path)",
+      "after": "path.join(actualRoot,owner.path)",
+      "count": 1
+    },
+    {
+      "before": "fs.readFileSync(path.join(dir,'before',owner.path),'utf8')",
+      "after": "execFileSync('git',['show',recipe.actual_source_commit+':'+owner.path],{cwd:actualRoot,encoding:'utf8',maxBuffer:40000000})",
+      "count": 1
+    }
+  ],
+  "steps": [
+    {
+      "name": "mounted-source32",
+      "exitCode": 0,
+      "outputSha256": "96461a50d8e50ac93a161138d8f2f3c3ca85fcc9522b0fd2dd6bfc65def27b56",
+      "tests": 32,
+      "pass": 32,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-js/main.js",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-js/timesheet-correction-office-context.js",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-healthroster-mount-correction-read.mjs",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-healthroster-check-correction-read.mjs",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "syntax-healthroster-normalize-read-index.mjs",
+      "exitCode": 0,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tests": 0,
+      "pass": 0,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "managedOfficeSourceGate",
+      "exitCode": 0,
+      "outputSha256": "0ae1acf9b96351e8efd3d4977875695933ed296bc8afe667aa4a298e75de02fa",
+      "tests": 236,
+      "pass": 236,
+      "fail": 0,
+      "failedTitles": []
+    },
+    {
+      "name": "healthrosterAndSource",
+      "exitCode": 0,
+      "outputSha256": "7c12137a5eaa8e45250c562258415a921e65928f3a41c93f0cfb0441c5767b00",
+      "tests": 247,
+      "pass": 247,
+      "fail": 0,
+      "failedTitles": []
+    }
+  ],
+  "backendSourceRoot": "C:/Users/KierArthur/OneDrive - Arthur Rai/Documents/GitHub/.codex-worktrees/healthroster-install2-14102026",
+  "native": false,
+  "publication": false,
+  "initialReaderHolds": [
+    "First mount attempted .js rather than pinned .mjs backend path and held before writes; corrected to derive the exact path from published CURRENT_BACKEND_READ_SOURCE_PINS.",
+    "Git filtered one authored HTML CRLF to LF. Exact raw staged gate held; one-byte source normalization is separately proved and original30 frozen inputs remain unchanged.",
+    "Initial managed source gate: 234/236 passed; both failures were stale r1 main-asset expectations after the reviewed r3 reader mount. The r3 expectations now also require the correction module before main; no existing load-order assertion was removed."
+  ]
+}

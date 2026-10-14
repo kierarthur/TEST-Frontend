@@ -1,0 +1,13 @@
+{
+  "sourceOnly": true,
+  "status": "ONE_CRLF_TO_STAGED_LF",
+  "file": "index.html",
+  "authorRawSha256": "356d202cfa5b1271f7922a11ad499ca022012157e69c085637f615013543a321",
+  "savedStagedSha256": "dc1f0926754b6758889a44fc31006735d60370b0d2e41f4f75247fc3041c02d5",
+  "removedCarriageReturns": 1,
+  "beforeBytes": 97601,
+  "afterBytes": 97600,
+  "authorFrozenFilesUntouched": true,
+  "behaviorChanged": false,
+  "publication": false
+}

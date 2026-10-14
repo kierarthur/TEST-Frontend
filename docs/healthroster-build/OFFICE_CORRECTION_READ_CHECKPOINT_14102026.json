@@ -1,0 +1,105 @@
+{
+  "status": "SOURCE_BACKUP_READY_NATIVE_AND_PUBLICATION_HELD",
+  "beforeCommit": "f2de35ec8a376a814aefab1db2d7cf099b888784",
+  "sourceOnly": true,
+  "pins": [
+    {
+      "file": "docs/healthroster-build/OFFICE_CORRECTION_READ_INDEX_LF_14102026.json",
+      "bytes": 434,
+      "sha256": "d415d4832d0ce497ced02b0a5f0d7c28d54f977990eab2eb1d9a95d0fc4b089f"
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_CORRECTION_READ_MOUNT_14102026.json",
+      "bytes": 8974,
+      "sha256": "6f7dcddb1a554166b0caaf5c8cecce0c5f93a46d5c2ddd0e12befcbe525b77bd"
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_CORRECTION_READ_SOURCE_CHECKS_14102026.json",
+      "bytes": 5016,
+      "sha256": "80e6a1e5823385784e5cfa5cd12f6e598038627c5b6d7b089eb703de18613a94"
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_CORRECTION_READ_SOURCE_CHECKS_FAILED_14102026.json",
+      "bytes": 1998,
+      "sha256": "827d765c7b707df9f01a414252e588a87d3b9b56e49577415a3e86395c448e4f"
+    },
+    {
+      "file": "docs/healthroster-build/OFFICE_CORRECTION_READ_TEST_LF_14102026.json",
+      "bytes": 435,
+      "sha256": "506cc2ab3c5d07c79b5e0e5cb54c1e536c7f2d6b74a6fb7f709b6b6e8770aa3e"
+    },
+    {
+      "file": "docs/healthroster-build/office-correction-read-14102026/CURRENT_OFFICE_READ_FULL_REVERSE.json",
+      "bytes": 7279,
+      "sha256": "40f5e504a471878892da522013c4e9968a0acbe92d04aaaa511fc344cdc246f9"
+    },
+    {
+      "file": "docs/healthroster-build/office-correction-read-14102026/office-correction-read-mounted.test.mjs",
+      "bytes": 12629,
+      "sha256": "529544b2800a45bff2cca5208e21486220b1182b541dc9a4dd9c7da1e3c7ff59"
+    },
+    {
+      "file": "index.html",
+      "bytes": 97600,
+      "sha256": "dc1f0926754b6758889a44fc31006735d60370b0d2e41f4f75247fc3041c02d5"
+    },
+    {
+      "file": "js/main.js",
+      "bytes": 17832312,
+      "sha256": "75010872e22408e52bc378aa1acf0ec9d27e559873f4966535cd8efc13512d92"
+    },
+    {
+      "file": "js/timesheet-correction-office-context.js",
+      "bytes": 6550,
+      "sha256": "03d2a43688e3b62dd74d17630970b17cf95df9cd6688ebf9d519993244fa3a12"
+    },
+    {
+      "file": "scripts/healthroster-check-correction-read.mjs",
+      "bytes": 6451,
+      "sha256": "2f65bc7f6e30165df6503337f8b53b1ede6cfb8a4b1900355e6bf46700d4c3f6"
+    },
+    {
+      "file": "scripts/healthroster-mount-correction-read.mjs",
+      "bytes": 4875,
+      "sha256": "61c6207e387b7cebdec8a2845d152fe065fa5b15cbd1dc560bd5f75499a4451c"
+    },
+    {
+      "file": "scripts/healthroster-normalize-own-read-tests.mjs",
+      "bytes": 1031,
+      "sha256": "dfbc80d49697cf9ce0085c3c46657eb0d1f7339b9b85b24267c011e4b9491cde"
+    },
+    {
+      "file": "scripts/healthroster-normalize-read-index.mjs",
+      "bytes": 1240,
+      "sha256": "60522a7781b637fb6cb24dd8a4dfdf99bcdb9c08cc20c5fcab16f003a240c9da"
+    },
+    {
+      "file": "scripts/healthroster-office-read-checkpoint.mjs",
+      "bytes": 2960,
+      "sha256": "91c89cf96b612dac0d86827888a1ee4d3d8c312b2f2a7044d8b009b84ede19d3"
+    },
+    {
+      "file": "tests/unit/main-asset-cache-version.test.cjs",
+      "bytes": 5305,
+      "sha256": "0d6883178f8174b36f0b5a7f7a0b6a2e9118f5e1ccfb9fff2dda6ce16e0e0512"
+    },
+    {
+      "file": "tests/unit/weekly-source-entrypoint-reachability.test.cjs",
+      "bytes": 3610,
+      "sha256": "44ab2e8a344acfd5107273083934c86301a5329b9bd8dae714410663e7d0de5c"
+    }
+  ],
+  "credentialFindings": 0,
+  "rawNewDeltaWhitespaceExitCode": 0,
+  "sourceTests": 515,
+  "initialFailures": [
+    "Initial managed gate 234/236: both stale r1 cache-version expectations.",
+    "First updated load-order check mistakenly expected r3 on the new reader asset; recorded failed receipt is retained. Actual reader asset is 20261014-correction-read-r1, main HealthRoster marker r3.",
+    "First checkpoint byte gate held for CRLF in our edited reachability test. Exact staged LF normalization is separately recorded; no assertion change or byte waiver."
+  ],
+  "testChanges": "Update both exact main asset expectations; additionally require correction reader after settings and before main, retaining all existing load-order and import bridge assertions.",
+  "qualifiedNative": false,
+  "installation": false,
+  "publication": false,
+  "workflowCompletion": false
+}
