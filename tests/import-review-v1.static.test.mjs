@@ -372,10 +372,13 @@ test('HealthRoster eligibility is always reloaded without browser cache and inva
 });
 
 test('Daily Validation is vendor-neutral until the Worker reports the detected format', () => {
-  assert.match(source, /'Daily Validation'/);
-  assert.match(source, /'Choose a Daily Client'/);
-  assert.match(source, /'Drop the daily roster file here'/);
-  assert.match(source, /'No shifts in roster yet'/);
+  // R-247 retires the three upload tiles; retain the actual Daily review and detected-format contract.
+  const home = source.slice(source.indexOf('  function renderHome()'), source.indexOf('  async function openImportsModalV1()'));
+  assert.doesNotMatch(home, /importTile\(|data-ir-drop|data-ir-file/);
+  assert.match(home, /irv1-history/);
+  assert.match(source, /Daily Validation/);
+  assert.match(source, /Choose a Daily Client\./);
+  assert.match(source, /No shifts in roster yet/);
   assert.match(source, /inputFormat === 'NHSP'.*'NHSP import'/s);
   assert.match(source, /return 'HealthRoster import'/);
   assert.doesNotMatch(source, /'HealthRoster daily validation'/);

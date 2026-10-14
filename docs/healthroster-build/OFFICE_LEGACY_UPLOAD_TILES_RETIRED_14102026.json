@@ -1,0 +1,35 @@
+{
+  "status": "SOURCE_CHANGE_NOT_RUNTIME",
+  "ownerAuthority": "03_IMPLEMENTATION_PLAN.md section28.3 /R-247/M19",
+  "scope": "Remove three legacy home upload tiles, retain unfinished/history list and existing review lifecycle; update copy and cache marker.",
+  "files": [
+    {
+      "file": "js/import-review-v1.js",
+      "beforeSha256": "555cdfa53736208f97644955c1fdd22b71fac9cc5e653e587e138d8b2b3e9dbc",
+      "afterSha256": "767051ef2f8f9a5beaf53067bfb80566e4db4992e194be4c6b9fc66320f17034",
+      "wholeByteReverse": true
+    },
+    {
+      "file": "index.html",
+      "beforeSha256": "71a0cd1ea9271c951d8f2ef2d49a1a7eba64b6efc7eb5417c917c6ea6a9c7b1a",
+      "afterSha256": "55ea9b670b13e0374ccf1eb9ff75cacf78695cae19fc5f3ad66485ec96c0d549",
+      "wholeByteReverse": true
+    }
+  ],
+  "existingFileNewlinesPreserved": true,
+  "backendChange": false,
+  "publication": false,
+  "initialChecks": {
+    "failed": 1,
+    "reason": "Existing vendor-neutral static case asserted the four exact quoted strings used only in the removed upload tiles. Actual caller lifecycle cases passed. Reconciled this obsolete tile expectation with R-247 while retaining detected-format and zero-shift review assertions."
+  },
+  "finalChecks": {
+    "selectedExistingTests": 38,
+    "passed": 38,
+    "failed": 0,
+    "syntaxChecks": 1,
+    "rawWhitespaceFindings": 0
+  },
+  "testsFile": "tests/import-review-v1.static.test.mjs",
+  "testsSha256": "3602b373e8e828d5910c37592805606e9a05d8c6927208c8fc113f916c52dcbe"
+}
