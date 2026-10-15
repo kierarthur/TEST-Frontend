@@ -501,20 +501,29 @@
     return payload;
   }
 
+  function canonicalGlobalSettings(value) {
+    const settings = { ...(value || {}) };
+    // These old Office-only aliases are not part of the SQL save contract.
+    // Fresh server canonical fields are authoritative, including cached drafts.
+    delete settings.manager_partial_digest_minutes;
+    delete settings.manager_manual_send_cooldown_minutes;
+    return settings;
+  }
+
   async function loadGlobal(ctx, force = false) {
     if (!force && ctx?.[GLOBAL_STATE]?.loaded) return ctx[GLOBAL_STATE];
     const [globalPayload, groupPayload] = await Promise.all([
       requestJson('/global'), requestJson('/source-groups')
     ]);
-    const settings = {
+    const settings = canonicalGlobalSettings({
       candidate_reminder_minutes: 360,
       candidate_response_deadline_minutes: 720,
-      manager_partial_digest_minutes: 360,
-      manager_manual_send_cooldown_minutes: 5,
+      manager_digest_minutes: 360,
+      manager_manual_resend_cooldown_minutes: 5,
       candidate_manual_reminder_cooldown_minutes: 60,
       manager_secure_link_days: 7,
       ...(globalPayload?.settings || {})
-    };
+    });
     const sourceGroups = (groupPayload?.source_groups || []).map(normaliseSourceGroupDraft);
     const state = {
       loaded: true, settings_version: globalPayload?.settings_version ?? settings.version ?? null,
@@ -531,8 +540,8 @@
     const timing = [
       row('Candidate reminder', `<input type="number" min="1" name="weekly_source_candidate_reminder_hours" value="${esc(Number(d.candidate_reminder_minutes || 360) / 60)}"/><small>hours</small>`),
       row('Candidate response time', `<input type="number" min="1" name="weekly_source_candidate_deadline_hours" value="${esc(Number(d.candidate_response_deadline_minutes || 720) / 60)}"/><small>hours</small>`),
-      row('Manager email wait', `<input type="number" min="1" name="weekly_source_manager_digest_hours" value="${esc(Number(d.manager_partial_digest_minutes || 360) / 60)}"/><small>hours</small>`),
-      row('Manager resend wait', `<input type="number" min="5" name="weekly_source_manager_resend_minutes" value="${esc(d.manager_manual_send_cooldown_minutes || 5)}"/><small>minutes</small>`),
+      row('Manager email wait', `<input type="number" min="0.016666666666666666" step="any" name="weekly_source_manager_digest_hours" value="${esc(Number(d.manager_digest_minutes ?? 360) / 60)}"/><small>hours</small>`),
+      row('Manager resend wait', `<input type="number" min="5" name="weekly_source_manager_resend_minutes" value="${esc(d.manager_manual_resend_cooldown_minutes ?? 5)}"/><small>minutes</small>`),
       row('Candidate reminder wait', `<input type="number" min="60" name="weekly_source_candidate_resend_minutes" value="${esc(d.candidate_manual_reminder_cooldown_minutes || 60)}"/><small>minutes</small>`),
       row('Manager link valid for', `<input type="number" min="1" max="30" name="weekly_source_manager_link_days" value="${esc(d.manager_secure_link_days || 7)}"/><small>days</small>`)
     ].join('');
@@ -574,10 +583,11 @@
   function readGlobal(root, state) {
     const value = (name) => root.querySelector(`[name="${name}"]`)?.value;
     const positive = (name, multiplier = 1) => Math.round(Number(value(name)) * multiplier);
+    state.draft = canonicalGlobalSettings(state.draft);
     state.draft.candidate_reminder_minutes = positive('weekly_source_candidate_reminder_hours', 60);
     state.draft.candidate_response_deadline_minutes = positive('weekly_source_candidate_deadline_hours', 60);
-    state.draft.manager_partial_digest_minutes = positive('weekly_source_manager_digest_hours', 60);
-    state.draft.manager_manual_send_cooldown_minutes = positive('weekly_source_manager_resend_minutes');
+    state.draft.manager_digest_minutes = positive('weekly_source_manager_digest_hours', 60);
+    state.draft.manager_manual_resend_cooldown_minutes = positive('weekly_source_manager_resend_minutes');
     state.draft.candidate_manual_reminder_cooldown_minutes = positive('weekly_source_candidate_resend_minutes');
     state.draft.manager_secure_link_days = positive('weekly_source_manager_link_days');
     state.dirty = JSON.stringify(state.baseline || {}) !== JSON.stringify(state.draft);
@@ -646,6 +656,7 @@
     }
     let globalResult = null;
     if (state.dirty) {
+      state.draft = canonicalGlobalSettings(state.draft);
       globalResult = await requestJson('/global', {
         method: 'PUT', body: JSON.stringify({ expected_settings_version: state.settings_version, settings: state.draft })
       });

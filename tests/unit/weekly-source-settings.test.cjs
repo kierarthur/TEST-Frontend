@@ -264,8 +264,8 @@ test('saving a timing-only edit does not PUT unchanged source groups', async () 
   const globalSettings = {
     candidate_reminder_minutes: 360,
     candidate_response_deadline_minutes: 720,
-    manager_partial_digest_minutes: 360,
-    manager_manual_send_cooldown_minutes: 5,
+    manager_digest_minutes: 360,
+    manager_manual_resend_cooldown_minutes: 5,
     candidate_manual_reminder_cooldown_minutes: 60,
     manager_secure_link_days: 7
   };
@@ -357,8 +357,8 @@ test('saving a changed source group sends expected_version and no read-only vers
   const globalSettings = {
     candidate_reminder_minutes: 360,
     candidate_response_deadline_minutes: 720,
-    manager_partial_digest_minutes: 360,
-    manager_manual_send_cooldown_minutes: 5,
+    manager_digest_minutes: 360,
+    manager_manual_resend_cooldown_minutes: 5,
     candidate_manual_reminder_cooldown_minutes: 60,
     manager_secure_link_days: 7
   };

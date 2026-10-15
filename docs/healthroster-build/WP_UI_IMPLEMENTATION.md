@@ -1,5 +1,11 @@
 # Office HealthRoster consumer implementation
 
+## V5 canonical manager settings correction — 15 October 2026
+
+The reviewed V5 contact contract reopens the global settings consumer. Actual loadGlobal/globalHtml/readGlobal/saveGlobal now use SQL's manager_digest_minutes and manager_manual_resend_cooldown_minutes. Fresh canonical GET values win; stale Office aliases are removed before form edits and every PUT, including an unmounted retained draft. Fractional hour display preserves genuine minute values such as137 rather than forcing the old360-minute default. Existing deadline, worker reminder, secure-link and automatic actor fields remain unchanged.
+
+Thirty focused tests passed across weekly-source-settings, the new canonical137/11 form roundtrip/large-version/failed-save cases, client-settings-save-version and HealthRoster rule settings. JavaScript syntax and whitespace checks pass. The actual load/render/collect/save functions ran against bounded fixture HTTP/DOM adapters; no real TEST API/database/browser acceptance, native scheduler or deployment is claimed. HRV5-RC-11/14 native acceptance stays REQUIRED_NOT_RUN. New first-delay/follow-up/global journal, pause/QT and exact V5 modal consumers remain subsequent work. Original historical records below retain their scope.
+
 13 October 2026. Worktree: `.codex-worktrees/healthroster-v2-office-13102026`; branch `codex/healthroster-v2-office-13102026`. Starting HEAD `7a92afaf85f75839395f4ed4dc0cfc6eda68eff0`, containing reviewed Office main `887e7af7cd15d9f4034ad73806b44344f3eb0791`. Initial worktree was clean. No saved default checkout or Banking worktree was edited.
 
 Authority is the owner’s SEND_5 build-stage instruction (D9/D10) and the integrator’s package/contract allocation. Catalogue preparation was declared closed by the integrator before consumer changes. Runtime, database, feature activation, promotion and app publication remain the integrator’s lane.
