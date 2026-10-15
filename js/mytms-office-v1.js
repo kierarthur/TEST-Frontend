@@ -416,6 +416,7 @@
 
   function renderSettingsTab(tabKey) {
     state.activeSettingsTab = tabKey;
+    if (tabKey === 'push-timing') return global.CloudTMSPushTimingSettings?.render() || '<div class="card">Push timing settings are unavailable.</div>';
     if (!state.settings) return '<div class="card">MyTMS settings are unavailable.</div>';
     if (tabKey === 'activation') return activationPanel();
     if (tabKey === 'invitation') return editorPanel('invitation');
@@ -694,6 +695,7 @@
   function wireSettings() {
     const token = state.openToken;
     if (!token) return;
+    if (state.activeSettingsTab === 'push-timing') { global.CloudTMSPushTimingSettings?.wire(); return; }
     global.document.querySelectorAll('[data-mytms-platform-readonly="1"]').forEach((element) => {
       element.readOnly = true;
       element.disabled = true;
@@ -980,6 +982,7 @@
         { key: 'manager-email', label: 'Manager approval by email' },
         { key: 'home', label: 'Candidate Home' },
         { key: 'daily-information', label: 'Places & contacts' },
+        { key: 'push-timing', label: 'Push timing' },
         { key: 'activation', label: 'Activation state' }
       ],
       (tabKey) => {
@@ -989,6 +992,7 @@
       },
       async () => {
         try {
+          if (state.activeSettingsTab === 'push-timing') return await global.CloudTMSPushTimingSettings?.save() || { ok: false };
           if (state.activeSettingsTab === 'manager-email') return await managerTemplatesSave();
           if (state.activeSettingsTab === 'home') return await homeAnnouncementSave();
           if (state.activeSettingsTab === 'daily-information') return await dailyInformationSave();

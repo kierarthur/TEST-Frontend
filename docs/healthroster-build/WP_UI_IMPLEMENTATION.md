@@ -37,3 +37,12 @@ These are source/local/browser fixture proofs. They do not prove an installed ba
 | Settings/profiles/finalisation | Exact installed catalogue/preset/profile response contracts; reuse current settings/parser surfaces | Pending producer |
 
 No unsupported command is presented as usable. No current signed check is hidden before its replacement exists. UI changes are uncommitted pending integrator scope review; no push, promotion, deployment, database call, TEST fixture mutation, email, payment, provider or LIVE action occurred in this lane. No secret was read or printed.
+
+
+## V6 Push timing administration — 16 October 2026
+
+The actual MyTMS settings host mounts Push timing separately from control-plane settingsPayload. Its policy, decimal-string revision and request UUID are owned by the new agency GET/PUT controller. Uncertain saves retain the exact original body/UUID for retry; revision conflict requires a fresh GET. No unavailable server response is replaced by editable defaults. The new asset and changed host have explicit cache versions.
+
+Nine controller cases and eight existing MyTMS/canonical-settings regressions pass. The actual saved modules also pass a local real-DOM browser fixture at desktop1366x900 and mobile390x844: default server times, collapsed exceptions, Saturday window, Sunday/bank-holiday no-push, draft retention across existing tabs, exact revision9007199254740993 and verified save. External network requests:0. An initial about:blank fixture lacked secure-context crypto; locally fulfilled HTTPS fixed the fixture while preserving the production UUID requirement.
+
+This is local source/browser-fixture evidence. Deployed actual-admin/API, complete modal visual verification, policy bootstrap, native dispatch, phone and full acceptance remain pending. Request retention is within the page controller; no reload-persistence claim. No deployment, TEST data mutation, send, provider/payment action, credential access or Banking message occurred.
