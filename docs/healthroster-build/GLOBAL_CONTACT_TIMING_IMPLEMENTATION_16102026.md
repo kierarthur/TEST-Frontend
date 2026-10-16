@@ -1,0 +1,3 @@
+# Global contact timing Office source checkpoint
+
+Integrated exact settings.js from reviewed Health proposal48db6e9 (SHA256b272cc0fa9e170300a58f58ca4170cbc450200b21a18471e406f0a6f09104edd), preserving the separate MyTMS QT section. New direct delay/follow-ups/recent-week/age form uses existing global GET/PUT owner and string versions, current canonical settings and exact request retention after uncertainty. Updated old fixtures to exact new closed protocol, retaining source-group save behavior.31focused Office tests PASS. No deployment or actual API/browser/native scheduling acceptance is claimed; those gates remain pending with Install2.

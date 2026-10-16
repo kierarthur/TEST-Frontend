@@ -501,6 +501,55 @@
     return payload;
   }
 
+  function assertGlobalTimingState(payload) {
+    const rev = (value) => typeof value === 'string' && /^[1-9][0-9]*$/.test(value)
+      && (value.length < 19 || (value.length === 19 && value <= '9223372036854775807'));
+    const keys = ['candidate_reminder_minutes','candidate_response_deadline_minutes','manager_digest_minutes',
+      'manager_manual_resend_cooldown_minutes','candidate_manual_reminder_cooldown_minutes','manager_secure_link_days',
+      'automatic_reconcile_actor_user_id','manager_first_delay_value','manager_first_delay_unit','manager_followups',
+      'manager_recent_completed_weeks','manager_max_work_age_days'];
+    const exact = (value,allowed) => value && typeof value === 'object' && !Array.isArray(value)
+      && Object.keys(value).length === allowed.length && allowed.every(key => Object.hasOwn(value,key));
+    if (!exact(payload,['ok','settings_version','policy_revision','settings','cutoff','actions']) || payload.ok !== true || !rev(payload.settings_version) || payload.policy_revision !== payload.settings_version
+      || !payload.settings || Object.keys(payload.settings).length !== keys.length || keys.some(key => !Object.hasOwn(payload.settings,key))
+      || !exact(payload.cutoff,['kind','editable','explanation']) || payload.cutoff?.kind !== 'CLIENT_CUTOFF_PRECEDENCE' || payload.cutoff?.editable !== false
+      || typeof payload.cutoff?.explanation !== 'string' || !Array.isArray(payload.actions)
+      || payload.actions.length !== 1 || !exact(payload.actions[0],['action','enabled','reason']) || payload.actions[0]?.action !== 'SAVE_GLOBAL_CONTACT_TIMING'
+      || payload.actions[0]?.enabled !== true || payload.actions[0]?.reason !== null) {
+      throw new Error('Contact settings cannot be confirmed. Refresh settings.');
+    }
+    if (payload.settings.automatic_reconcile_actor_user_id !== null
+      && (typeof payload.settings.automatic_reconcile_actor_user_id !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(payload.settings.automatic_reconcile_actor_user_id))) {
+      throw new Error('Contact settings cannot be confirmed. Refresh settings.');
+    }
+    validateGlobalTimingDraft(payload.settings);
+    return payload;
+  }
+  function validateGlobalTimingDraft(d) {
+    const integer = (v,min,max) => Number.isSafeInteger(v) && v >= min && v <= max;
+    const interval = (v,u,zero) => ['HOURS','CALENDAR_DAYS','CLIENT_WORKING_DAYS'].includes(u)
+      && integer(v,zero ? 0 : 1,u === 'HOURS' ? 8784 : 366);
+    if (!integer(d.candidate_reminder_minutes,1,719)
+      || !integer(d.candidate_response_deadline_minutes,d.candidate_reminder_minutes+1,10080)
+      || !integer(d.manager_digest_minutes,1,10080) || !integer(d.manager_manual_resend_cooldown_minutes,5,1440)
+      || !integer(d.candidate_manual_reminder_cooldown_minutes,60,10080) || !integer(d.manager_secure_link_days,1,30)
+      || !interval(d.manager_first_delay_value,d.manager_first_delay_unit,true)
+      || !integer(d.manager_recent_completed_weeks,1,52) || !integer(d.manager_max_work_age_days,1,366)
+      || !Array.isArray(d.manager_followups) || d.manager_followups.length > 10
+      || d.manager_followups.some((step,index) => !step || Object.keys(step).length !== 4
+        || !['sequence','interval_value','interval_unit','mode'].every(key => Object.hasOwn(step,key))
+        || step.sequence !== index+1 || !interval(step.interval_value,step.interval_unit,false)
+        || !['MANUAL','AUTOMATIC'].includes(step.mode))) {
+      throw new Error('Check the contact timing values and ordered follow-ups.');
+    }
+    return d;
+  }
+  function timingUnitOptions(selected) {
+    return [['HOURS','Hours'],['CALENDAR_DAYS','Calendar days'],['CLIENT_WORKING_DAYS','Client working days']]
+      .map(([value,label]) => option(value,label,selected)).join('');
+  }
+
   function canonicalGlobalSettings(value) {
     const settings = { ...(value || {}) };
     // These old Office-only aliases are not part of the SQL save contract.
@@ -515,6 +564,7 @@
     const [globalPayload, groupPayload] = await Promise.all([
       requestJson('/global'), requestJson('/source-groups')
     ]);
+    assertGlobalTimingState(globalPayload);
     const settings = canonicalGlobalSettings({
       candidate_reminder_minutes: 360,
       candidate_response_deadline_minutes: 720,
@@ -529,7 +579,8 @@
       loaded: true, settings_version: globalPayload?.settings_version ?? settings.version ?? null,
       baseline: clone(settings), draft: clone(settings),
       source_groups: clone(sourceGroups), source_groups_baseline: clone(sourceGroups),
-      dirty: false, groups_dirty: false
+      policy_revision: globalPayload.policy_revision, cutoff: clone(globalPayload.cutoff), actions: clone(globalPayload.actions),
+      pending_global_save: null, dirty: false, groups_dirty: false
     };
     if (ctx) ctx[GLOBAL_STATE] = state;
     return state;
@@ -545,6 +596,21 @@
       row('Candidate reminder wait', `<input type="number" min="60" name="weekly_source_candidate_resend_minutes" value="${esc(d.candidate_manual_reminder_cooldown_minutes || 60)}"/><small>minutes</small>`),
       row('Manager link valid for', `<input type="number" min="1" max="30" name="weekly_source_manager_link_days" value="${esc(d.manager_secure_link_days || 7)}"/><small>days</small>`)
     ].join('');
+    const followups = (d.manager_followups || []).map((step,index) => `<div data-manager-followup-index="${index}">
+      <label>Follow-up ${index+1}<input type="number" min="1" max="8784" name="manager_followup_value" value="${esc(step.interval_value)}"/></label>
+      <select name="manager_followup_unit">${timingUnitOptions(step.interval_unit)}</select>
+      <select name="manager_followup_mode">${option('MANUAL','Manual',step.mode)}${option('AUTOMATIC','Automatic',step.mode)}</select>
+      <button type="button" class="btn" data-remove-manager-followup="${index}">Remove follow-up ${index+1}</button>
+    </div>`).join('');
+    const managerTiming = `<h3>Manager contact timing</h3>
+      <label>First enquiry delay<input type="number" min="0" max="8784" name="weekly_source_manager_first_delay_value" value="${esc(d.manager_first_delay_value)}"/></label>
+      <select name="weekly_source_manager_first_delay_unit">${timingUnitOptions(d.manager_first_delay_unit)}</select>
+      <div data-manager-followups>${followups}</div>
+      <button type="button" class="btn" data-add-manager-followup ${d.manager_followups?.length >= 10 ? 'disabled' : ''}>Add follow-up</button>
+      <p>Each follow-up runs from the preceding accepted send. Manual steps wait for an Office action.</p>
+      <label>Recent completed weeks<input type="number" min="1" max="52" name="weekly_source_manager_recent_completed_weeks" value="${esc(d.manager_recent_completed_weeks)}"/></label>
+      <label>Maximum work age (calendar days)<input type="number" min="1" max="366" name="weekly_source_manager_max_work_age_days" value="${esc(d.manager_max_work_age_days)}"/></label>
+      <p>${esc(state.cutoff?.explanation || '')}</p>`;
     const nhspGroupIndex = (state.source_groups || []).findIndex((group) => upper(group.source_family) === 'NHSP');
     const groups = (state.source_groups || []).map((group, index) => `<div class="weekly-source-group-row" data-source-group-index="${index}">
       <input type="hidden" name="source_group_id" value="${esc(group.id || '')}"/>
@@ -559,6 +625,7 @@
     </div>`).join('');
     return `<section class="card weekly-source-global-settings" data-weekly-source-global-settings="1">
       <h3>Weekly source</h3><div class="weekly-source-settings-fields">${timing}</div>
+      ${managerTiming}
       <h3>Source groups</h3><div data-weekly-source-groups>${groups}</div>
       <button type="button" class="btn" data-add-weekly-source-group>Add source group</button>
     </section>`;
@@ -590,6 +657,14 @@
     state.draft.manager_manual_resend_cooldown_minutes = positive('weekly_source_manager_resend_minutes');
     state.draft.candidate_manual_reminder_cooldown_minutes = positive('weekly_source_candidate_resend_minutes');
     state.draft.manager_secure_link_days = positive('weekly_source_manager_link_days');
+    state.draft.manager_first_delay_value = value('weekly_source_manager_first_delay_value') === '' ? NaN : Number(value('weekly_source_manager_first_delay_value'));
+    state.draft.manager_first_delay_unit = value('weekly_source_manager_first_delay_unit');
+    state.draft.manager_recent_completed_weeks = Number(value('weekly_source_manager_recent_completed_weeks'));
+    state.draft.manager_max_work_age_days = Number(value('weekly_source_manager_max_work_age_days'));
+    state.draft.manager_followups = Array.from(root.querySelectorAll('[data-manager-followup-index]')).map((step,index) => ({
+      sequence:index+1,interval_value:Number(step.querySelector('[name="manager_followup_value"]')?.value),
+      interval_unit:step.querySelector('[name="manager_followup_unit"]')?.value,mode:step.querySelector('[name="manager_followup_mode"]')?.value
+    }));
     state.dirty = JSON.stringify(state.baseline || {}) !== JSON.stringify(state.draft);
     const priorGroups = state.source_groups || [];
     const nextGroups = Array.from(root.querySelectorAll('[data-source-group-index]')).map((groupRoot, index) => normaliseSourceGroupDraft({
@@ -617,6 +692,19 @@
         const groupRoot = host?.querySelector(`[data-source-group-index="${index}"]`);
         if (groupRoot) groupRoot.dataset.expectedVersion = String(group.expected_version || group.version || 0);
       });
+      host?.querySelector('[data-add-manager-followup]')?.addEventListener('click', () => {
+        readGlobal(host,state);
+        if (state.draft.manager_followups.length >= 10) return;
+        state.draft.manager_followups.push({sequence:state.draft.manager_followups.length+1,interval_value:2,interval_unit:'CLIENT_WORKING_DAYS',mode:'MANUAL'});
+        state.dirty = true; mount(state); signalDirty('weekly-source-global-settings');
+      });
+      host?.querySelectorAll('[data-remove-manager-followup]').forEach(button => button.addEventListener('click', () => {
+        readGlobal(host,state);
+        state.draft.manager_followups.splice(Number(button.dataset.removeManagerFollowup),1);
+        state.draft.manager_followups.forEach((step,index) => {step.sequence=index+1;});
+        state.dirty = JSON.stringify(state.baseline || {}) !== JSON.stringify(state.draft);
+        mount(state); signalDirty('weekly-source-global-settings');
+      }));
       host?.querySelector('[data-add-weekly-source-group]')?.addEventListener('click', () => {
         readGlobal(host, state);
         state.source_groups.push(normaliseSourceGroupDraft({ display_name: '', source_family: 'ROSTER', cutoff_weekday: 3, cutoff_local_time: '15:00', active: true }));
@@ -656,10 +744,23 @@
     }
     let globalResult = null;
     if (state.dirty) {
-      state.draft = canonicalGlobalSettings(state.draft);
-      globalResult = await requestJson('/global', {
-        method: 'PUT', body: JSON.stringify({ expected_settings_version: state.settings_version, settings: state.draft })
-      });
+      state.draft = validateGlobalTimingDraft(canonicalGlobalSettings(state.draft));
+      const content = JSON.stringify({expected_settings_version:state.settings_version,settings:state.draft});
+      if (state.pending_global_save && state.pending_global_save.content !== content) {
+        throw new Error('A previous save is being checked. Retry that save or refresh settings before changing it.');
+      }
+      if (!state.pending_global_save) {
+        if (typeof global.crypto?.randomUUID !== 'function') throw new Error('A save identity could not be created. Refresh settings.');
+        state.pending_global_save = {content,body:JSON.stringify({request_id:global.crypto.randomUUID(),...JSON.parse(content)})};
+      }
+      // Keep this exact request on transport/response uncertainty, including a
+      // successful HTTP response which fails the strict current-state decoder.
+      globalResult = assertGlobalTimingState(await requestJson('/global', {method:'PUT',body:state.pending_global_save.body}));
+      state.settings_version = globalResult.settings_version;
+      state.policy_revision = globalResult.policy_revision;
+      state.baseline = clone(globalResult.settings); state.draft = clone(globalResult.settings);
+      state.cutoff = clone(globalResult.cutoff); state.actions = clone(globalResult.actions);
+      state.pending_global_save = null; state.dirty = false;
     }
     if (state.groups_dirty) {
       for (const sourceGroup of state.source_groups) {

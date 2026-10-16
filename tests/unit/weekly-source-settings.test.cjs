@@ -1,3 +1,4 @@
+const {timingSettings,timingState}=require('./helpers/global-contact-timing.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -261,21 +262,23 @@ test('saving a timing-only edit does not PUT unchanged source groups', async () 
     active: true,
     version: 7
   });
-  const globalSettings = {
+  const globalSettings = timingSettings({
     candidate_reminder_minutes: 360,
     candidate_response_deadline_minutes: 720,
     manager_digest_minutes: 360,
     manager_manual_resend_cooldown_minutes: 5,
     candidate_manual_reminder_cooldown_minutes: 60,
     manager_secure_link_days: 7
-  };
+  });
   const values = {
     weekly_source_candidate_reminder_hours: '7',
     weekly_source_candidate_deadline_hours: '12',
     weekly_source_manager_digest_hours: '6',
     weekly_source_manager_resend_minutes: '5',
     weekly_source_candidate_resend_minutes: '60',
-    weekly_source_manager_link_days: '7'
+    weekly_source_manager_link_days: '7',
+    weekly_source_manager_first_delay_value:'0',weekly_source_manager_first_delay_unit:'HOURS',
+    weekly_source_manager_recent_completed_weeks:'1',weekly_source_manager_max_work_age_days:'14'
   };
   const groupControls = {
     source_group_id: { value: groupId },
@@ -301,7 +304,7 @@ test('saving a timing-only edit does not PUT unchanged source groups', async () 
   const globalCtx = {
     [settings.stateKeys.GLOBAL_STATE]: {
       loaded: true,
-      settings_version: 3,
+      settings_version: '3',
       baseline: structuredClone(globalSettings),
       draft: structuredClone(globalSettings),
       source_groups: [structuredClone(group)],
@@ -316,12 +319,12 @@ test('saving a timing-only edit does not PUT unchanged source groups', async () 
     const method = options.method || 'GET';
     calls.push({ url: String(url), method, body: options.body ? JSON.parse(options.body) : null });
     if (method === 'GET' && String(url).endsWith('/global')) {
-      return new Response(JSON.stringify({ settings_version: 4, settings: { ...globalSettings, candidate_reminder_minutes: 420 } }), { status: 200 });
+      return new Response(JSON.stringify(timingState({...globalSettings,candidate_reminder_minutes:420},'4')), { status: 200 });
     }
     if (method === 'GET' && String(url).endsWith('/source-groups')) {
       return new Response(JSON.stringify({ source_groups: [{ ...group, expected_version: undefined, version: 7 }] }), { status: 200 });
     }
-    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    return new Response(JSON.stringify(timingState({...globalSettings,candidate_reminder_minutes:420},'4')), {status:200});
   };
 
   try {
@@ -329,7 +332,7 @@ test('saving a timing-only edit does not PUT unchanged source groups', async () 
     const puts = calls.filter((call) => call.method === 'PUT');
     assert.equal(puts.length, 1);
     assert.equal(puts[0].url.endsWith('/global'), true);
-    assert.equal(puts[0].body.expected_settings_version, 3);
+    assert.equal(puts[0].body.expected_settings_version, '3');
     assert.equal(puts[0].body.settings.candidate_reminder_minutes, 420);
     assert.equal(calls.some((call) => call.method === 'PUT' && call.url.endsWith('/source-groups')), false);
   } finally {
@@ -354,18 +357,18 @@ test('saving a changed source group sends expected_version and no read-only vers
     active: true,
     version: 11
   });
-  const globalSettings = {
+  const globalSettings = timingSettings({
     candidate_reminder_minutes: 360,
     candidate_response_deadline_minutes: 720,
     manager_digest_minutes: 360,
     manager_manual_resend_cooldown_minutes: 5,
     candidate_manual_reminder_cooldown_minutes: 60,
     manager_secure_link_days: 7
-  };
+  });
   const globalCtx = {
     [settings.stateKeys.GLOBAL_STATE]: {
       loaded: true,
-      settings_version: 3,
+      settings_version: '3',
       baseline: structuredClone(globalSettings),
       draft: structuredClone(globalSettings),
       source_groups: [group],
@@ -380,7 +383,7 @@ test('saving a changed source group sends expected_version and no read-only vers
     const method = options.method || 'GET';
     calls.push({ url: String(url), method, body: options.body ? JSON.parse(options.body) : null });
     if (method === 'GET' && String(url).endsWith('/global')) {
-      return new Response(JSON.stringify({ settings_version: 3, settings: globalSettings }), { status: 200 });
+      return new Response(JSON.stringify(timingState(globalSettings,'3')), { status: 200 });
     }
     if (method === 'GET' && String(url).endsWith('/source-groups')) {
       return new Response(JSON.stringify({ source_groups: [{ ...group, expected_version: undefined, version: 12 }] }), { status: 200 });
