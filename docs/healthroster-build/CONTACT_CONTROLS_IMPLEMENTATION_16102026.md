@@ -1,0 +1,7 @@
+# Contact controls and native Reference source continuation
+
+The Office contact decoder is generated from the actual Health Worker closed decoder. Contact controls show the server-computed next Monday, exact scope and selected audience; an uncertain save retains its original request/CAS/body and permits only exact retry. A replay is a saved acknowledgement until fresh current GET. Resume is a recheck request, never a sent receipt or fabricated no-message result.9functional tests PASS. Existing parent action/drawer registration, native expiry and real API/Office acceptance are pending; components are not registered as a finished flow.
+
+The mandated cleanVisibleCopy fix preserves input/select/textarea nodes themselves and their descendants. The full actual saved enhancer passed real Chromium at1366x900 and390x844, retaining native Reference values, node identity and listeners; empty copy cleanup remains effective.6existing policy tests PASS. A cache qualifier preserves the earlier modal asset version. This is local real-DOM evidence, not installed application/phone proof.
+
+Actual saved contact component also passed local Chromium at1366x900 and390x844: server Monday copy, selected worker only, large revision, retained identical request after a lost acknowledgement, disabled editing/refresh while uncertain and explicit fresh read after replay. Command replies were isolated fixtures; zero external network requests. Parent Imports/Queries/More registration, real native API and installed acceptance remain pending.

@@ -1223,7 +1223,7 @@
       const value = safeText(node.textContent).replace(/\s+/g, ' ');
       if (!value) return;
       const isoDate = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      const containsControl = !!node.querySelector('input,select,textarea,button,a');
+      const containsControl = node.matches('input,select,textarea') || !!node.querySelector('input,select,textarea,button,a');
       if (isoDate && !containsControl && !node.closest('code,pre')) {
         const displayDate = `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`;
         if (node.textContent !== displayDate) node.textContent = displayDate;
@@ -1292,7 +1292,7 @@
 
     copyRoot.querySelectorAll('.mini:empty,.hint:empty,p:empty,span:empty').forEach((node) => {
       if (node.hasAttribute('data-next-live-copy')) return;
-      if (!node.querySelector('input,select,textarea,button,a')) node.remove();
+      if (!node.matches('input,select,textarea') && !node.querySelector('input,select,textarea,button,a')) node.remove();
     });
     hideUserFacingInternalIds(copyRoot);
   };
