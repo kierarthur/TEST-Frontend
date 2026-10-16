@@ -1419,6 +1419,12 @@
       reload();
     }));
     host.querySelectorAll('[data-wsr-sort]').forEach(button=>button.addEventListener('click',()=>{if(state.busy)return;const key=button.dataset.wsrSort;state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc';state.sort=key;reload();}));
+    host.querySelectorAll('[data-wsr-contact-control]').forEach(button=>button.addEventListener('click',()=>{
+      if(state.busy)return;
+      const row=model.rows.find(item=>item.combined_key===button.dataset.wsrRow);
+      const action=root.CloudTMSCombinedReviewV1?.contactControlAction(row,model,button.dataset.wsrContactControl);
+      if(action)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:action}));
+    }));
     host.querySelectorAll('[data-wsr-action]').forEach(button=>button.addEventListener('click',()=>{
       const row=model.rows.find(item=>item.combined_key===button.dataset.wsrRow);
       const actions=button.hasAttribute('data-wsr-child')?row?.children?.[Number(button.dataset.wsrChild)]?.actions:row?.actions;

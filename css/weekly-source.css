@@ -888,3 +888,8 @@
   }
   .ws-invoice-source-details { max-width: none; }
 }
+
+/* Scoped contact metadata stays secondary to the existing issue state. */
+.ws-contact-paused { display:block; margin-top:.25rem; }
+.ws-contact-more { display:inline-block; margin:.25rem; }
+.ws-contact-more[open] > button { display:block; margin-top:.25rem; }

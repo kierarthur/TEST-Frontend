@@ -1349,9 +1349,46 @@
     return opened;
   }
 
+  const contactControllersByParent=new WeakMap();
+  function openContactControls(detail){
+    const controlsApi=root.CloudTMSContactPauseControlsV1;
+    const parentFrame=(root.__modalStack||[]).at(-1),workspace=workspaceApi();
+    const actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;
+    const payload=asObject(detail.payload),operation=detail.label==='Resume messages'?'RESUME':'PAUSE';
+    if(!controlsApi||!actor||!parentFrame||typeof workspace?.issueCommand!=='function')return false;
+    const kind=operation==='PAUSE'?'weekly-source-contact-pause':'weekly-source-contact-resume';
+    let entries=contactControllersByParent.get(parentFrame);
+    if(!entries){entries=new Map();contactControllersByParent.set(parentFrame,entries);}
+    const key=[actor,payload.candidate_id,payload.client_id,operation].join(':');
+    let entry=entries.get(key);
+    if(!entry){
+      entry={frame:null,controller:null};
+      entry.controller=controlsApi.create({candidateId:payload.candidate_id,clientId:payload.client_id,
+        candidate:detail.context?.candidate,client:detail.context?.client,operation,
+        command:(action,args)=>workspace.issueCommand(action,args),
+        isCurrent:()=>entry.frame&&currentChild(kind)===entry.frame&&(root.__modalStack||[]).at(-2)===parentFrame&&workspaceApi()===workspace
+          &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor});
+      entries.set(key,entry);
+    }
+    const render=()=>'<div class="ws-child" data-wsa-screen="contact-controls"><div data-contact-controls-host></div><div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-contact-back>Back</button></div></div>';
+    const wire=()=>{
+      const host=root.document?.querySelector('[data-wsa-screen="contact-controls"]');
+      if(!host||host.dataset.wsaWired==='1')return;host.dataset.wsaWired='1';
+      entry.frame=currentChild(kind);entry.controller.mount(host.querySelector('[data-contact-controls-host]'));
+      host.querySelector('[data-wsa-contact-back]')?.addEventListener('click',()=>{
+        closeChild();Promise.resolve(workspace.refresh?.()).catch(()=>{});
+      });
+      if(!entry.controller.snapshot().pending&&!entry.controller.snapshot().busy){
+        void entry.controller.load().catch(()=>{});
+      }
+    };
+    return openChild({title:operation==='PAUSE'?'Pause messages':'Resume messages',kind,render,wire});
+  }
+
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
+    if(['Pause messages','Resume messages'].includes(label))return openContactControls(detail);
     if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) return openCommand(detail);
     if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
     if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
@@ -1419,7 +1456,7 @@
     CONTRACT, normalisePreview, renderPreview, buildUploadAcceptancePayload,
     normaliseDetail, renderDetail, normaliseContractChooser, renderContractChooser,
     normaliseCorrectFinal, normaliseCorrectFinalPreview, renderCorrectFinal, renderCommandConfirmation,
-    openPreview, openBatchPreview, handleAction, _plainMessage: plainMessage,
+    openPreview, openBatchPreview, openContactControls, handleAction, _plainMessage: plainMessage,
     _test: Object.freeze({ commandAuthorityAvailable, isCandidateComparisonAmbiguity })
   });
 });

@@ -7,6 +7,38 @@
   const e=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
   const a=value=>Array.isArray(value)?value:[];
   const audience=value=>value==='manager'?'manager':'candidate';
+  function contactControlState(row,model){
+    if(model?.permissions?.contract==='WEEKLY_SOURCE_PAYMENT_VIEW_V1'||model?.permissions?.view==='PAY')return null;
+    const c=row?.contact_controls;
+    const exact=(x,keys)=>x&&typeof x==='object'&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
+    const uuid=x=>typeof x==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(x);
+    if(!exact(c,['version','candidate_id','client_id','scope_revision','worker','manager','actions'])||c.version!=='CONTACT_CONTROLS_ROW_V1'
+      ||!uuid(c.candidate_id)||!uuid(c.client_id)||c.candidate_id!==row.candidate_id||c.client_id!==row.client_id
+      ||typeof c.scope_revision!=='string'||!/^(0|[1-9][0-9]*)$/.test(c.scope_revision)
+      ||c.scope_revision.length>19||(c.scope_revision.length===19&&c.scope_revision>'9223372036854775807')
+      ||!Array.isArray(c.actions)||!c.actions.length||c.actions.length>2)return null;
+    for(const key of ['worker','manager'])if(!exact(c[key],['paused','until_local'])||typeof c[key].paused!=='boolean'
+      ||(c[key].paused?typeof c[key].until_local!=='string'||!/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2} \(UK\)$/.test(c[key].until_local):c[key].until_local!==null))return null;
+    const seen=new Set();
+    for(const action of c.actions){
+      if(!exact(action,['operation','label'])||!['PAUSE','RESUME'].includes(action.operation)||seen.has(action.operation)
+        ||action.label!==(action.operation==='PAUSE'?'Pause messages':'Resume messages'))return null;
+      seen.add(action.operation);
+    }
+    return c;
+  }
+  function contactControlAction(row,model,operation){
+    const c=contactControlState(row,model),action=c?.actions.find(x=>x.operation===operation);
+    return action?{label:action.label,payload:{candidate_id:c.candidate_id,client_id:c.client_id},context:{candidate:row.candidate,client:row.client}}:null;
+  }
+  function contactControlMenu(row,model,state){
+    const c=contactControlState(row,model);if(!c)return '';
+    return '<details class="ws-contact-more"><summary>More</summary>'+c.actions.map(action=>'<button type="button" class="btn btn-outline" data-wsr-contact-control="'+e(action.operation)+'" data-wsr-row="'+e(row.combined_key)+'"'+(state.busy?' disabled':'')+'>'+e(action.label)+'</button>').join('')+'</details>';
+  }
+  function contactPauseLine(row,model){
+    const c=contactControlState(row,model);if(!c)return '';
+    return ['worker','manager'].filter(key=>c[key].paused).map(key=>'<small class="ws-contact-paused">'+(key==='worker'?'Worker contact':'Manager contact')+' paused until '+e(c[key].until_local)+'</small>').join('');
+  }
   function contactPolicy(row,model,kind='candidate'){
     kind=audience(kind);
     const policy=row?.contact_policy?.contract==='WEEKLY_SOURCE_CONTACT_POLICY_V1'?row.contact_policy[kind]:null;
@@ -181,7 +213,7 @@
     const rows=a(model.rows).map(row=>`<tr data-wsr-group="${e(row.combined_key)}" class="${model.section==='questions'?(a(row.children).some(child=>child.issue!=='Timesheet missing')?'ws-query-hold':'ws-query-nonblocking'):model.section==='checks'?(row.pay_blocking===true?'ws-query-hold':'ws-query-nonblocking'):model.section==='protected'?'ws-query-nonblocking':''}">${columns.map(([label,key])=>{
       if(key==='selection'){const policy=contactPolicy(row,model,state.audience);return `<td data-label="Select"><input type="checkbox" data-wsr-select="${e(row.combined_key)}"${selected.has(row.combined_key)?' checked':''}${!policy.eligible||state.busy||state.contactReview?' disabled':''} aria-label="Select ${e(row.candidate)} for ${audience(state.audience)} contact" aria-description="${e(policy.reason)}" title="${e(policy.reason)}"><span class="ws-contact-eligibility${policy.eligible?' ws-contact-eligibility--ready':''}">${policy.eligible?'Ready':'Not eligible'}</span></td>`;}
       if(key.startsWith('question_')){const summary=questionSummary(row),part=key.slice(9),hint=summary[`${part}Hint`];const policy=['candidate','manager'].includes(part)?contactPolicy(row,model,part):null;return `<td data-label="${e(label)}"${hint?` title="${e(hint)}"`:''}>${part==='problem'?groupProblem(row,summary):e(summary[part])}${policy?`<span class="ws-contact-eligibility${policy.eligible?' ws-contact-eligibility--ready':''}">${policy.eligible?'Ready to contact':e(policy.reason)}</span>`:''}</td>`;}
-      if(key==='actions')return `<td data-label="Actions" class="ws-actions">${row.follow_up_scope?`<button class="btn btn-outline" data-wsr-follow-up="${e(row.combined_key)}">Open</button>`:actionButtons(row,row.actions,undefined,action=>model.section!=='questions'||action.label==='Open')}</td>`;
+      if(key==='actions')return `<td data-label="Actions" class="ws-actions">${row.follow_up_scope?`<button class="btn btn-outline" data-wsr-follow-up="${e(row.combined_key)}">Open</button>`:actionButtons(row,row.actions,undefined,action=>model.section!=='questions'||action.label==='Open')}${contactControlMenu(row,model,state)}</td>`;
       if(key==='status')return `<td data-label="${e(label)}">${row.manual_query
         ?manualProblem({issue:'Manually queried',manual_query:row.manual_query})
         :`<span class="ws-status">${e(row.status?.text||'—')}</span>${row.problem?`<p>${e(row.problem)}</p>`:''}`}</td>`;
@@ -189,11 +221,11 @@
         const sourceRef=String(row.source_reference||'').trim();
         const bookingRef=String(row.booking_reference||'').trim();
         const ids=[sourceRef&&sourceRef.toLocaleLowerCase('en-GB')!==String(row.candidate||'').trim().toLocaleLowerCase('en-GB')?`Source ref: ${e(sourceRef)}`:'',bookingRef?`Booking: ${e(bookingRef)}`:''].filter(Boolean);
-        return `<td data-label="${e(label)}">${e(row.candidate||'—')}${ids.length?`<span class="ws-source-ids">${ids.join(' · ')}</span>`:''}</td>`;
+        return `<td data-label="${e(label)}">${e(row.candidate||'—')}${contactPauseLine(row,model)}${ids.length?`<span class="ws-source-ids">${ids.join(' · ')}</span>`:''}</td>`;
       }
       if(key==='candidate_asked'||key==='manager_informed')return `<td data-label="${e(label)}">${row[key]===true?'Yes':'Not yet'}</td>`;
       if(key==='purpose_label')return `<td data-label="${e(label)}">${e(row.purpose_label||'Not recorded')}</td>`;
-      return `<td data-label="${e(label)}">${e(row[key]??'—')}${key===(filters.client_id?'candidate':'client')?`<span class="ws-status-sub">${e(row.source)} · ${e(row.period)}</span>`:''}</td>`;
+      return `<td data-label="${e(label)}">${e(row[key]??'—')}${key==='candidate'?contactPauseLine(row,model):''}${key===(filters.client_id?'candidate':'client')?`<span class="ws-status-sub">${e(row.source)} · ${e(row.period)}</span>`:''}</td>`;
     }).join('')}</tr>${model.section==='questions'?`<tr class="ws-query-expansion"><td colspan="${columns.length}"><details><summary>Shifts for ${e(row.candidate)}</summary><div class="ws-query-contact-actions">${actionButtons(row,row.actions,undefined,action=>action.label!=='Open')}</div><table class="grid mini ws-query-shifts"><thead><tr><th>Day/date</th><th>Candidate hours</th><th>Client hours</th><th>Problem</th><th>Actions</th></tr></thead><tbody>${a(row.children).map((child,childIndex)=>`<tr class="${child.issue==='Timesheet missing'?'ws-query-nonblocking':'ws-query-hold'}"><td data-label="Day/date">${e(child.day_date)}</td><td data-label="Candidate hours">${e(child.candidate_hours||'Not submitted')}</td><td data-label="Client hours">${e(child.system_hours||'Not recorded')}</td><td data-label="Problem">${manualProblem(child)}</td><td data-label="Actions" class="ws-actions">${actionButtons(row,child.actions,childIndex)}</td></tr>`).join('')}</tbody></table></details></td></tr>`:''}`).join('');
     const outreach=cohortContacts?contactPanel(model,state):'';
     const add=model.tab==='queries'&&a(model.owners).some(owner=>owner.protected_pay_enabled)?'<button class="btn btn-outline" data-wsr-add-protected>Add protected shift</button>':'';
@@ -220,5 +252,5 @@
     const actions=detail?a(detail.actions).map((action,index)=>`<button class="btn btn-outline" data-wsr-report-action="${index}"${action.enabled===false?' disabled':''}>${e(action.label)}</button>`).join(''):'';
     return `${detailView?detailView+actions:`<div class="ws-toolbar">${select('Source','source_group_id','source_group_id','source','All sources')}${select('Client','client_id','client_id','client','All clients')}${select('Period','week_ending','week_ending','period','All completed periods')}<label>Finalised from<input type="date" data-wsr-filter="date_from" value="${e(filters.date_from||'')}"></label><label>To<input type="date" data-wsr-filter="date_to" value="${e(filters.date_to||'')}"></label><button class="btn btn-outline" data-wsr-refresh>Refresh list</button></div><div class="ws-scroll" data-wsr-table tabindex="0" aria-label="Completed reports. Type to jump in the sorted column."><table class="grid mini ws-grid"><thead><tr>${columns.map(([label,key])=>`<th>${['client','source','period','report','finalised_at'].includes(key)?`<button class="ws-sort" data-wsr-sort="${key}">${label}${model.sort_key===key?(model.sort_direction==='desc'?' ↓':' ↑'):''}</button>`:label}</th>`).join('')}</tr></thead><tbody>${rows||`<tr><td colspan="${columns.length}">No completed reports for this selection.</td></tr>`}</tbody></table>${model.has_more?'<button class="btn btn-outline" data-wsr-more>Load more</button>':''}</div>`}`;
   }
-  return Object.freeze({render,questionSummary,renderHistory,attentionSummary,contactPolicy,contactPlan,contactSignature,contactOutcome});
+  return Object.freeze({render,questionSummary,renderHistory,attentionSummary,contactPolicy,contactPlan,contactSignature,contactOutcome,contactControlState,contactControlAction,contactControlMenu,contactPauseLine});
 });
