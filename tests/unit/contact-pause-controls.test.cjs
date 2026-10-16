@@ -81,3 +81,9 @@ test('note uses codepoints and content is escaped without changing native form i
  assert.throws(()=>f.controls.edit({note:'🙂'.repeat(501)}));
  f.controls.edit({note:'<script>no</script>'});assert.match(f.controls.html(),/&lt;script&gt;no&lt;\/script&gt;/);
 });
+
+test('legacy original claim is rendered separately without a fabricated provider start or timestamp',async()=>{
+ const claim={kind:'LEGACY_QUERY_CLAIM',mail_outbox_id:id(30),query_delivery_id:id(31),claim_identity_sha256:'a'.repeat(64),claimed_at_utc:null,lease_expires_at_utc:null,status:'CHECKING_ORIGINAL_LEGACY_CLAIM',provider_submission_established:false,can_auto_resend:false};
+ const f=fixture({send:()=>({ok:true,version:'CONTACT_PAUSE_STATE_V1',scope:{...scope(),in_flight:[claim]}})});await f.controls.load();
+ assert.match(f.controls.html(),/Earlier query claimed/);assert.match(f.controls.html(),/will not be sent again automatically/);assert.doesNotMatch(f.controls.html(),/Invalid Date|already started|Worker push/);
+});

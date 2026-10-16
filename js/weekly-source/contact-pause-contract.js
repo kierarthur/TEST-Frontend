@@ -1,4 +1,4 @@
-// Generated from Health contact-pause-office.mjs SHA256 47d3e4db19d29addfedaefd63c36c8b13a43abf4fe4d5a260531b2a1a51ceca9.
+// Generated from Health contact-pause-office.mjs SHA256 43173220dac2074254bc731979f3617f0c3d99639dab5990b5506eb4684e4352.
 (function(root){'use strict';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
@@ -35,6 +35,15 @@ function scope(value,request,mutation) {
     || !Array.isArray(value.in_flight) || value.in_flight.length>500) unavailable();
   audience(value.worker);audience(value.manager);
   for (const item of value.in_flight) {
+    if (item?.kind==='LEGACY_QUERY_CLAIM') {
+      if (!exact(item,['kind','mail_outbox_id','query_delivery_id','claim_identity_sha256','claimed_at_utc','lease_expires_at_utc','status','provider_submission_established','can_auto_resend'])
+        || !uuid(item.mail_outbox_id) || !uuid(item.query_delivery_id)
+        || typeof item.claim_identity_sha256!=='string' || !/^[0-9a-f]{64}$/.test(item.claim_identity_sha256)
+        || (item.claimed_at_utc!==null && !instant(item.claimed_at_utc))
+        || (item.lease_expires_at_utc!==null && !instant(item.lease_expires_at_utc))
+        || item.status!=='CHECKING_ORIGINAL_LEGACY_CLAIM' || item.provider_submission_established!==false || item.can_auto_resend!==false) unavailable();
+      continue;
+    }
     if (!exact(item,['permit_id','owner_kind','delivery_id','provider_attempt_id','channel','status','started_at_utc','memberships'])
       || !uuid(item.permit_id) || !uuid(item.delivery_id) || (item.provider_attempt_id!==null && !uuid(item.provider_attempt_id))
       || !['WEEKLY_SOURCE_TARGET','TIMESHEET_QUERY_OUTBOX'].includes(item.owner_kind)
