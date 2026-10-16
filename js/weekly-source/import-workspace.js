@@ -1419,6 +1419,18 @@
       reload();
     }));
     host.querySelectorAll('[data-wsr-sort]').forEach(button=>button.addEventListener('click',()=>{if(state.busy)return;const key=button.dataset.wsrSort;state.direction=(state.sort||model.sort_key)===key&&state.direction==='asc'?'desc':'asc';state.sort=key;reload();}));
+    host.querySelectorAll('[data-wsr-new-enquiry]').forEach(button=>button.addEventListener('click',()=>{
+      if(state.busy||!requestCurrent())return;
+      const row=model.rows.find(item=>item.combined_key===button.dataset.wsrNewEnquiry);
+      const action=root.CloudTMSCombinedReviewV1?.manualEnquiryAction(row,model,state.selected);
+      if(action)root.dispatchEvent?.(new CustomEvent('cloudtms:weekly-source-action',{detail:action}));
+    }));
+    if(root.CloudTMSWeeklySourceWorkspaceActionsV1?.hasPendingContactManualEnquiry?.()){
+      const notice=root.document.createElement('div');notice.className='ws-notice';
+      notice.innerHTML='<p>The original enquiry result is being checked.</p><button type="button" class="btn btn-outline" data-wsr-original-enquiry>Check original enquiry</button>';
+      notice.querySelector('button').addEventListener('click',()=>root.CloudTMSWeeklySourceWorkspaceActionsV1.openContactManualEnquiry());
+      host.prepend(notice);
+    }
     host.querySelectorAll('[data-wsr-contact-control]').forEach(button=>button.addEventListener('click',()=>{
       if(state.busy)return;
       const row=model.rows.find(item=>item.combined_key===button.dataset.wsrRow);
@@ -2181,6 +2193,11 @@
     isSourceAdmissionBusy, SOURCE_ADMISSION_BUSY_MESSAGE, open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     acceptSystemShiftSelectionPayload,
     refresh: (tab = session.activeTab) => tab === 'checklist' ? session.checklist?.refresh() : loadWorkspace(tab), navigateToExistingShift,
+    captureContactContext: () => {
+      const frame=currentFrame(),generation=session.openGeneration,filters=JSON.stringify(session.sourceFilters),tab=session.activeTab,current=session.openCurrent;
+      return () => !!frame&&(root.__modalStack||[]).includes(frame)&&generation===session.openGeneration
+        &&filters===JSON.stringify(session.sourceFilters)&&tab===session.activeTab&&(!current||current());
+    },
     clearShiftSelections: () => { session.shiftSelections.clear(); },
     _test: Object.freeze({ exactAcceptSystemHoursPayload, combinedAcceptSystemHoursPayload, acceptSingleSystemShiftPayload, friendlyWorkspaceError, cycleForClientChange, queryFor }),
     _session: session

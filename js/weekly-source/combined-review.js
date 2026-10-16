@@ -1,8 +1,8 @@
 (function initialise(root,factory){
-  'use strict'; const api=factory();
+  'use strict'; const api=factory(root);
   if(typeof module==='object'&&module.exports)module.exports=api;
   if(typeof window==='object'&&root===window)Object.defineProperty(root,'CloudTMSCombinedReviewV1',{value:api});
-})(typeof globalThis!=='undefined'?globalThis:this,function build(){
+})(typeof globalThis!=='undefined'?globalThis:this,function build(root){
   'use strict';
   const e=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
   const a=value=>Array.isArray(value)?value:[];
@@ -31,9 +31,41 @@
     const c=contactControlState(row,model),action=c?.actions.find(x=>x.operation===operation);
     return action?{label:action.label,payload:{candidate_id:c.candidate_id,client_id:c.client_id},context:{candidate:row.candidate,client:row.client}}:null;
   }
+  function manualEnquiryState(row,model){
+    if(model?.permissions?.contract==='WEEKLY_SOURCE_PAYMENT_VIEW_V1'||model?.permissions?.view==='PAY'||model?.tab!=='queries'||model?.section!=='questions')return null;
+    try{
+      const read=row?.contact_manual_enquiry,api=root.CloudTMSContactManualEnquiryV1;
+      if(!api||!row?.scope_key)return null;
+      api.decodeRow(read,row);
+      const seen=new Set(),choices=a(row.children).filter(c=>read.available_issue_ids.includes(c.incident_id)&&!seen.has(c.incident_id)&&seen.add(c.incident_id)).map(c=>({
+        candidate_id:row.candidate_id,client_id:row.client_id,issue_id:c.incident_id,
+        label:[row.candidate,row.client,c.day_date,c.booking_reference||c.source_reference].filter(Boolean).join(' · '),
+        candidate_hours:c.candidate_hours,system_hours:c.system_hours,status:c.issue||c.status?.text
+      }));
+      return choices.length&&read.actions.some(x=>x.enabled)?{read,choices}:null;
+    }catch{return null;}
+  }
+  function manualEnquiryAction(row,model,selected=new Set()){
+    const rows=selected.has(row?.combined_key)?a(model?.rows).filter(r=>selected.has(r.combined_key)):[row];
+    const contexts=new Map(),choices=new Map();
+    for(const item of rows){
+      const state=manualEnquiryState(item,model);if(!state)return null;
+      const key=state.read.candidate_id+'/'+state.read.client_id,previous=contexts.get(key);
+      if(previous&&JSON.stringify(previous)!==JSON.stringify(state.read))return null;
+      contexts.set(key,state.read);for(const c of state.choices){
+        const previousChoice=choices.get(c.issue_id);
+        if(previousChoice&&(previousChoice.candidate_id!==c.candidate_id||previousChoice.client_id!==c.client_id))return null;
+        choices.set(c.issue_id,c);
+      }
+    }
+    if(!choices.size||choices.size>500||contexts.size>100)return null;
+    return {label:'New enquiry',payload:{contexts:[...contexts.values()],choices:[...choices.values()],
+      selections:[...contexts.values()].map(c=>({candidate_id:c.candidate_id,client_id:c.client_id,
+        selected_issue_ids:[...choices.values()].filter(x=>x.candidate_id===c.candidate_id&&x.client_id===c.client_id).map(x=>x.issue_id)}))}};
+  }
   function contactControlMenu(row,model,state){
-    const c=contactControlState(row,model);if(!c)return '';
-    return '<details class="ws-contact-more"><summary>More</summary>'+c.actions.map(action=>'<button type="button" class="btn btn-outline" data-wsr-contact-control="'+e(action.operation)+'" data-wsr-row="'+e(row.combined_key)+'"'+(state.busy?' disabled':'')+'>'+e(action.label)+'</button>').join('')+'</details>';
+    const c=contactControlState(row,model),manual=manualEnquiryState(row,model);if(!c&&!manual)return '';
+    return '<details class="ws-contact-more"><summary>More</summary>'+(manual?'<button type="button" class="btn btn-outline" data-wsr-new-enquiry="'+e(row.combined_key)+'"'+(state.busy?' disabled':'')+'>New enquiry</button>':'')+a(c?.actions).map(action=>'<button type="button" class="btn btn-outline" data-wsr-contact-control="'+e(action.operation)+'" data-wsr-row="'+e(row.combined_key)+'"'+(state.busy?' disabled':'')+'>'+e(action.label)+'</button>').join('')+'</details>';
   }
   function contactPauseLine(row,model){
     const c=contactControlState(row,model);if(!c)return '';
@@ -252,5 +284,5 @@
     const actions=detail?a(detail.actions).map((action,index)=>`<button class="btn btn-outline" data-wsr-report-action="${index}"${action.enabled===false?' disabled':''}>${e(action.label)}</button>`).join(''):'';
     return `${detailView?detailView+actions:`<div class="ws-toolbar">${select('Source','source_group_id','source_group_id','source','All sources')}${select('Client','client_id','client_id','client','All clients')}${select('Period','week_ending','week_ending','period','All completed periods')}<label>Finalised from<input type="date" data-wsr-filter="date_from" value="${e(filters.date_from||'')}"></label><label>To<input type="date" data-wsr-filter="date_to" value="${e(filters.date_to||'')}"></label><button class="btn btn-outline" data-wsr-refresh>Refresh list</button></div><div class="ws-scroll" data-wsr-table tabindex="0" aria-label="Completed reports. Type to jump in the sorted column."><table class="grid mini ws-grid"><thead><tr>${columns.map(([label,key])=>`<th>${['client','source','period','report','finalised_at'].includes(key)?`<button class="ws-sort" data-wsr-sort="${key}">${label}${model.sort_key===key?(model.sort_direction==='desc'?' ↓':' ↑'):''}</button>`:label}</th>`).join('')}</tr></thead><tbody>${rows||`<tr><td colspan="${columns.length}">No completed reports for this selection.</td></tr>`}</tbody></table>${model.has_more?'<button class="btn btn-outline" data-wsr-more>Load more</button>':''}</div>`}`;
   }
-  return Object.freeze({render,questionSummary,renderHistory,attentionSummary,contactPolicy,contactPlan,contactSignature,contactOutcome,contactControlState,contactControlAction,contactControlMenu,contactPauseLine});
+  return Object.freeze({render,questionSummary,renderHistory,attentionSummary,contactPolicy,contactPlan,contactSignature,contactOutcome,contactControlState,contactControlAction,contactControlMenu,contactPauseLine,manualEnquiryState,manualEnquiryAction});
 });

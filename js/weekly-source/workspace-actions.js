@@ -1349,6 +1349,49 @@
     return opened;
   }
 
+  const manualEnquiriesByParent=new WeakMap();
+  function retainedManualEnquiry(){
+    const parent=(root.__modalStack||[]).at(-1),entry=parent&&manualEnquiriesByParent.get(parent);
+    const actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;
+    return entry&&entry.actor===actor&&entry.workspace===workspaceApi()?entry:null;
+  }
+  function hasPendingContactManualEnquiry(){
+    const state=retainedManualEnquiry()?.controller.snapshot();return !!(state?.pending||state?.busy);
+  }
+  function openContactManualEnquiry(detail){
+    const api=root.CloudTMSContactManualEnquiryV1,workspace=workspaceApi();
+    const parentFrame=(root.__modalStack||[]).at(-1),actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;
+    if(!api||!actor||!parentFrame||typeof workspace?.issueCommand!=='function'||typeof workspace?.captureContactContext!=='function')return false;
+    let entry=retainedManualEnquiry();
+    const saved=entry?.controller.snapshot();
+    // One uncertain controller per actual parent/actor. Another row cannot
+    // bypass it by allocating a fresh review/send request on reopening.
+    if(!saved?.pending&&!saved?.busy){
+      const payload=asObject(detail?.payload);
+      if(!Array.isArray(payload.contexts)||!Array.isArray(payload.choices)||!payload.choices.length)return false;
+      try{
+        entry={frame:null,actor,workspace,current:null,controller:null};
+        entry.controller=api.create({...payload,command:(action,args)=>workspace.issueCommand(action,args),
+          isCurrent:()=>entry.frame&&currentChild('weekly-source-new-enquiry')===entry.frame
+            &&(root.__modalStack||[]).at(-2)===parentFrame&&workspaceApi()===workspace
+            &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor&&entry.current?.()===true});
+      }catch{return false;}
+      manualEnquiriesByParent.set(parentFrame,entry);
+    }
+    entry.current=workspace.captureContactContext();
+    const kind='weekly-source-new-enquiry';
+    const render=()=>'<div class="ws-child" data-wsa-screen="manual-enquiry"><div data-manual-enquiry-host></div><div class="ws-child-actions"><button type="button" class="btn btn-outline" data-wsa-enquiry-back>Back</button></div></div>';
+    const wire=()=>{
+      const host=root.document?.querySelector('[data-wsa-screen="manual-enquiry"]');
+      if(!host||host.dataset.wsaWired==='1')return;host.dataset.wsaWired='1';
+      entry.frame=currentChild(kind);entry.controller.mount(host.querySelector('[data-manual-enquiry-host]'));
+      host.querySelector('[data-wsa-enquiry-back]')?.addEventListener('click',()=>{
+        closeChild();Promise.resolve(workspace.refresh?.()).catch(()=>{});
+      });
+    };
+    return openChild({title:'New enquiry',kind,render,wire});
+  }
+
   const contactControllersByParent=new WeakMap();
   function openContactControls(detail){
     const controlsApi=root.CloudTMSContactPauseControlsV1;
@@ -1388,6 +1431,7 @@
   function handleAction(detailValue) {
     const detail = asObject(detailValue);
     const label = asText(detail.label);
+    if(label==='New enquiry')return openContactManualEnquiry(detail);
     if(['Pause messages','Resume messages'].includes(label))return openContactControls(detail);
     if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) return openCommand(detail);
     if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
@@ -1456,7 +1500,7 @@
     CONTRACT, normalisePreview, renderPreview, buildUploadAcceptancePayload,
     normaliseDetail, renderDetail, normaliseContractChooser, renderContractChooser,
     normaliseCorrectFinal, normaliseCorrectFinalPreview, renderCorrectFinal, renderCommandConfirmation,
-    openPreview, openBatchPreview, openContactControls, handleAction, _plainMessage: plainMessage,
+    openPreview, openBatchPreview, openContactControls, openContactManualEnquiry, hasPendingContactManualEnquiry, handleAction, _plainMessage: plainMessage,
     _test: Object.freeze({ commandAuthorityAvailable, isCandidateComparisonAmbiguity })
   });
 });

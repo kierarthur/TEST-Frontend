@@ -897,3 +897,6 @@
 /* Manual enquiry: scoped to the existing focused child review. */
 .ws-contact-manual-enquiry { min-width: 0; overflow-wrap: anywhere; }
 .ws-contact-manual-enquiry textarea { display: block; width: 100%; min-height: 84px; box-sizing: border-box; }
+
+/* This focused review can exceed phone height; its usable exit must not cover the reviewed facts. */
+[data-wsa-screen="manual-enquiry"] > .ws-child-actions { position: static; }
