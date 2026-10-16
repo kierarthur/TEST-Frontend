@@ -16,17 +16,17 @@
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/BROWSER_RESULT.json",
       "bytes": 1813,
-      "sha256": "da59c7e163788737f8f8adc6319bafcd968868580b949c231d2cee1da64ccbbd"
+      "sha256": "addf03cb248c1f126fb418bd6dd68bd04658fc64daa2cfa76b5ea0c1b4c67b2f"
     },
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/PARENT_EDITS.json",
-      "bytes": 76797,
-      "sha256": "e74fb1ef758370726e865101f3edffbc90daa77b75e9bf5a75e38929e1216160"
+      "bytes": 76885,
+      "sha256": "21e28f51ce62ee6b2e3700590d1c6442fed44c6483f4797179997b0190ae16a0"
     },
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/README.md",
-      "bytes": 4735,
-      "sha256": "03483104a662abf09ea6530907b8e9001b69cbd088ac935022c185030d49b0bc"
+      "bytes": 5066,
+      "sha256": "ff56dbf030c05172024aed2a4cc20bafd14775368bac4b40cdc2cd1bdce3ad73"
     },
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/SOURCE_SUCCESSORS.json",
@@ -36,7 +36,7 @@
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/TEST_RESULT.json",
       "bytes": 2729,
-      "sha256": "89a3c3a51288b3c51658b44101110a7da5eaae002c6ca6b0ac4b373b45b2445d"
+      "sha256": "573f29e702d5288b7b6d63f9bfc56017aa774a6ad36ddf27714120c8d64c4130"
     },
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/build-parent.mjs",
@@ -45,8 +45,8 @@
     },
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/host-functions.jsinc",
-      "bytes": 7106,
-      "sha256": "74afb5abce16d7f0c3978329eb6a5e04dbf1c61b5e6ded7ab627ef5ac9f605dd"
+      "bytes": 7191,
+      "sha256": "68c2f04c434ee7de19b9afadfd0250b8f485e86014a9022b1076aa1c8e6adf13"
     },
     {
       "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/inputs/00f/css__daily-rate-correction.css",
@@ -106,7 +106,7 @@
     {
       "file": "index.html",
       "bytes": 99114,
-      "sha256": "7ab1974e2dab3cd6f6410c29d160a7ed97802601aa75b45a559f2f0030cb4aad"
+      "sha256": "81934ab673376dbdc39143d69f20e5813273652da235d6b7c1336c43f7896dc6"
     },
     {
       "file": "js/correction-contract-v3.js",
@@ -125,13 +125,13 @@
     },
     {
       "file": "js/main.js",
-      "bytes": 17840877,
-      "sha256": "aaa6559fa2ed20b4ef6008ecc2982f097dd570dd409755a64fcdbc7d06b541ec"
+      "bytes": 17840963,
+      "sha256": "5e7f4c3b793c8dcb29ec0b89650111065183eb943aeef5b15b85b385177ab1d0"
     },
     {
       "file": "js/timesheet-correction-host-v3.js",
-      "bytes": 8413,
-      "sha256": "dde3f6a223e59f42dcb14795af161fc14aad39c87e3179b2791bd83c64f600f0"
+      "bytes": 9312,
+      "sha256": "c70af338ace918d767df26de79fd00aa3605fdc7bb0ff8645ff6ab281265cee5"
     },
     {
       "file": "tests/ui/health-correction-host-local-browser.mjs",
@@ -140,8 +140,8 @@
     },
     {
       "file": "tests/unit/health-correction-host-v3.test.mjs",
-      "bytes": 15678,
-      "sha256": "06459b98094d7098156b1fb4bd48e3e09faa5021b8c49c581bc0c4f18006a5c0"
+      "bytes": 15913,
+      "sha256": "04ce586096c8e5d70680b1d58a590a8bfd1fe2cbc695068404f03bc2c27ac529"
     },
     {
       "file": "tests/unit/main-asset-cache-version.test.cjs",

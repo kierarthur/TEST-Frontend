@@ -368245,6 +368245,7 @@ function wireHealthTimesheetCorrectionHost(frame) {
   if (['overview','finance'].includes(frame.currentTabKey)) {
     body.querySelectorAll('[data-health-correction-result]').forEach(node => node.remove());
     body.insertAdjacentHTML('beforeend', host.resultHtml(context));
+    host.fillResult(body.querySelector('[data-health-correction-result]'), context);
     for (const button of body.querySelectorAll('[data-health-correction-action]')) {
       button.onclick = async () => {
         if (button.disabled) return;

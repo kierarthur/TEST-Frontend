@@ -108,6 +108,7 @@ test('actual native refresh refuses late caller drift before adopting its read r
 });
 test('role-redacted and hostile text remains shape-safe and never becomes markup',()=>{
  const r=result();r.financial.summary={visibility:'REDACTED',text:'private'};assert.throws(()=>dto.validateResult(r),/CORRECTION_CONTRACT_INVALID/);
- r.financial.summary={visibility:'FULL',text:'<img src=x onerror=alert(1)>'};const f=fixture();f.context.__healthCorrectionResult=r;const html=host.resultHtml(f.context);assert.match(html,/&lt;img/);assert.doesNotMatch(html,/<img/);
+ r.financial.summary={visibility:'FULL',text:'<img src=x onerror=alert(1)>'};const f=fixture();f.context.__healthCorrectionResult=r;const html=host.resultHtml(f.context);assert.doesNotMatch(html,/img src/);
+ const nodes=new Map();host.fillResult({querySelector(selector){if(!nodes.has(selector))nodes.set(selector,{});return nodes.get(selector);}},f.context);assert.equal(nodes.get('[data-health-correction-effect="financial"]').textContent,r.financial.summary.text);
  r.links=[{kind:'READ_RESULT',target_type:'CONTRACT_MOVE_OPERATION',target_id:id(3),url:'/actual/saved/owner',caption:'Check saved result',enabled:true,disabled_reason:null}];assert.match(host.resultHtml(f.context),/data-health-correction-action="0" disabled/);
 });

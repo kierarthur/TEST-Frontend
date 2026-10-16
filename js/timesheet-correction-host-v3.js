@@ -86,11 +86,20 @@
   const value=context?.__healthCorrectionResult;if(!value)return '';
   try{dto().validateResult(value);}catch{return '';}
   const heading=value.state==='COMPLETE'?(value.purpose==='CONTRACT_CORRECTION'?'Contract corrected':'Updated rates applied'):'Saved correction result';
-  const effect=value=>value===null?'':`<p>${value.visibility==='FULL'?escape(value.text):'Restricted for your current role.'}</p>`;
+  const effect=(value,key)=>value===null?'':`<p data-health-correction-effect="${key}"></p>`;
   const actions=[...value.next_actions,...value.links],available=new Set(['OPEN_TIMESHEET:TIMESHEET','OPEN_INVOICE:INVOICE']);
   const controls=actions.map((action,index)=>{const enabled=action.enabled&&available.has(action.kind+':'+action.target_type),reason=!action.enabled?action.disabled_reason:enabled?null:'This action is temporarily unavailable.';
-   return `<div><button type="button" class="btn btn-outline" data-health-correction-action="${index}"${enabled?'':' disabled'}>${escape(action.caption)}</button>${reason?`<p class="mini">${escape(reason)}</p>`:''}</div>`;}).join('');
-  return `<section class="health-correction-result card" data-health-correction-result aria-live="polite"><h3>${heading}</h3><p>${escape(financial[value.financial.status])}</p>${effect(value.financial.summary)}<p>${escape(billing[value.billing.status])}</p>${effect(value.billing.visible_summary)}${controls}<p data-health-correction-action-notice role="status"></p></section>`;
+   return `<div><button type="button" class="btn btn-outline" data-health-correction-action="${index}"${enabled?'':' disabled'}>${escape(action.caption)}</button>${reason?`<p class="mini" data-health-correction-action-reason="${index}"></p>`:''}</div>`;}).join('');
+  return `<section class="health-correction-result card" data-health-correction-result aria-live="polite"><h3>${heading}</h3><p>${escape(financial[value.financial.status])}</p>${effect(value.financial.summary,'financial')}<p>${escape(billing[value.billing.status])}</p>${effect(value.billing.visible_summary,'billing')}${controls}<p data-health-correction-action-notice role="status"></p></section>`;
+ }
+ function fillResult(element,context){
+  const value=context?.__healthCorrectionResult;if(!element||!value)return;dto().validateResult(value);
+  for(const [key,effect] of [['financial',value.financial.summary],['billing',value.billing.visible_summary]]){
+   const node=element.querySelector(`[data-health-correction-effect="${key}"]`);
+   if(node&&effect!==null)node.textContent=effect.visibility==='FULL'?effect.text:'Restricted for your current role.';
+  }
+  const actions=[...value.next_actions,...value.links],available=new Set(['OPEN_TIMESHEET:TIMESHEET','OPEN_INVOICE:INVOICE']);
+  actions.forEach((action,index)=>{const node=element.querySelector(`[data-health-correction-action-reason="${index}"]`);if(node)node.textContent=!action.enabled?action.disabled_reason:available.has(action.kind+':'+action.target_type)?'':'This action is temporarily unavailable.';});
  }
  async function resolveAction(action,owners){
   dto().validateAction(action);if(!action.enabled)fail('CORRECTION_ACTION_DISABLED');
@@ -99,6 +108,6 @@
   if(typeof owner!=='function')fail('CORRECTION_ACTION_DEPENDENCY_REQUIRED');
   return owner(clone(action));
  }
- root.CloudTMSHealthCorrectionHostV3=Object.freeze({identity,dailyEligible,capture,ownOverlay,activeOverlay,requestOverlayClose,moreHtml,resultHtml,resolveAction});
+ root.CloudTMSHealthCorrectionHostV3=Object.freeze({identity,dailyEligible,capture,ownOverlay,activeOverlay,requestOverlayClose,moreHtml,resultHtml,fillResult,resolveAction});
  if(typeof module==='object'&&module.exports)module.exports=root.CloudTMSHealthCorrectionHostV3;
 })(typeof window!=='undefined'?window:globalThis);
