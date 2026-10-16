@@ -332661,6 +332661,7 @@ if (this.noParentGate) {
   setFormReadOnly(byId('modalBody'), (this.mode === 'view' || this.mode === 'saving'));
 }
 if (timesheetTabLifecycleGuard && typeof timesheetTabLifecycleGuard.enforceCurrentPermissionState === 'function') timesheetTabLifecycleGuard.enforceCurrentPermissionState();
+if (typeof wireHealthTimesheetCorrectionHost === 'function') wireHealthTimesheetCorrectionHost(this);
 
 // ✅ TIMESHEETS → LINES: import-authoritative + PROCESSED → allow deferrals, lock hours/schedule/extras
 if (this.entity === 'timesheets' && k === 'lines') {
@@ -337118,6 +337119,7 @@ if (ownsPrimaryRecordWorkflow && top.entity === 'contracts') {
   const handleSecondary = async (ev)=>{
     if (currentFrame && currentFrame() !== top) return;
     if (top._confirmingDiscard || top._closing) return;
+    if (window.CloudTMSHealthCorrectionHostV3?.requestOverlayClose(top, 'parent-close')) return;
 
     if (top.kind === 'bpay-next-read' && typeof top._beforeClose === 'function') {
       const prefix = stack().slice(), token = top._token;
@@ -338498,6 +338500,7 @@ bindSave(btnSave, top);
     window.addEventListener('contract-margins-updated', onMarginsEvt);
     const onModalKey = (e) => {
       if (currentFrame() !== top) return;
+      if (['Escape','Tab'].includes(e.key) && window.CloudTMSHealthCorrectionHostV3?.activeOverlay(top)) return;
       if (e.key === 'Escape') {
         if (top._confirmingDiscard || top._closing) return;
         e.preventDefault();
@@ -351776,6 +351779,7 @@ function renderContractAdditionalRatesTab(ctx) {
 // =============================== closeModal (kept) ===============================
 // ================== FRONTEND: closeModal (UPDATED to refresh if pending focus) ==================
 function closeModal(){
+  if (window.CloudTMSHealthCorrectionHostV3?.requestOverlayClose(window.__modalStack?.at(-1), 'direct-close')) return;
   if (!window.__modalStack || !window.__modalStack.length) {
     // nothing to close; ensure overlay hidden and geometry clean
     discardAllModalsAndState();
@@ -365953,7 +365957,8 @@ function renderTimesheetOverviewTab(ctx) {
   const candidateOverviewHtml = candidateOfficeSlot('overview');
   const candidateActionsHtml = candidateOfficeSlot('actions');
 
-  const routeActionsRowHtml = (suppressActionButtons || openingDetailsPending || (!actionsHtml && !candidateActionsHtml))
+  const healthCorrectionMoreHtml = (typeof renderHealthTimesheetCorrectionMore === 'function') ? renderHealthTimesheetCorrectionMore() : '';
+  const routeActionsRowHtml = (suppressActionButtons || openingDetailsPending || (!actionsHtml && !candidateActionsHtml && !healthCorrectionMoreHtml))
     ? ''
     : `
       <div class="row" data-view-only="true">
@@ -365961,6 +365966,7 @@ function renderTimesheetOverviewTab(ctx) {
         <div class="controls" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
           ${actionsHtml}
           ${candidateActionsHtml}
+          ${healthCorrectionMoreHtml}
         </div>
       </div>
     `;
@@ -368124,6 +368130,131 @@ async function saveMyEmailSignature() {
   }
 }
 
+
+// Health B051 parent plumbing. The sole Bank CM17 dialog is a separate producer.
+function healthTimesheetCorrectionBinding() {
+  const frame = window.__getModalFrame?.(), context = window.modalCtx;
+  return window.CloudTMSHealthCorrectionHostV3.capture({
+    frame, context, actorId: SESSION?.user?.id,
+    currentActorId: () => SESSION?.user?.id || null,
+    getFrame: () => window.__getModalFrame?.(),
+    getStack: () => window.__modalStack || []
+  });
+}
+
+function renderHealthTimesheetCorrectionMore() {
+  const frame = window.__getModalFrame?.(), context = window.modalCtx;
+  if (frame?.kind !== 'timesheets' || frame.entity !== 'timesheets' || frame.mode !== 'view'
+    || frame._ctxRef !== context) return '';
+  return window.CloudTMSHealthCorrectionHostV3?.moreHtml(context, SESSION?.user) || '';
+}
+
+async function resolveTimesheetCorrectionAction(action) {
+  const binding = healthTimesheetCorrectionBinding();
+  binding.assertCurrent();
+  return window.CloudTMSHealthCorrectionHostV3.resolveAction(action, {
+    'OPEN_TIMESHEET:TIMESHEET': value => openTimesheet({timesheet_id:value.target_id, current_timesheet_id:value.target_id}),
+    'OPEN_INVOICE:INVOICE': value => openInvoiceModal({invoice_id:value.target_id})
+  });
+}
+
+async function adoptHealthTimesheetCorrectionResult(binding, result) {
+  const value = await binding.adopt(result, async (target, tabKey) => {
+    const refreshed = await refreshTimesheetModalAfterLifecycleAction(binding.context.openToken, {
+      timesheetId: target, tabKey, forceFullDetails: true, identity_moved: target !== binding.initialTimesheetId,
+      blocking: true, action: result.purpose, callerCurrent: binding.current
+    });
+    return refreshed === true || refreshed?.ok === true;
+  });
+  if (binding.current()) await safeRerenderTimesheetModal(binding.context.openToken, binding.frame.currentTabKey);
+  return value;
+}
+
+async function openTimesheetContractMoveReview({timesheetId, triggerElement}) {
+  const binding = healthTimesheetCorrectionBinding();
+  if (binding.initialTimesheetId !== timesheetId || binding.context.timesheetDetails.timesheet.sheet_scope === 'DAILY') {
+    throw new Error('CORRECTION_CURRENT_PARENT_REQUIRED');
+  }
+  const module = window.CloudTMSTimesheetContractMoveV1;
+  if (typeof module?.open !== 'function' || typeof module?.createTimesheetOverlayAdapter !== 'function') {
+    throw new Error('CONTRACT_MOVE_COMPONENT_DEPENDENCY_REQUIRED');
+  }
+  // The reviewed pack requires an actual native Move capability. Current Office
+  // has no declared projection for it. Presence of CM17, Admin, a Contract or a
+  // private SQL event capability cannot substitute for that missing authority.
+  // Preserve this closed seam until the exact public producer ABI is published.
+  const publishedNativeMoveCapability = false;
+  if (!publishedNativeMoveCapability) throw new Error('CONTRACT_MOVE_CAPABILITY_PROJECTION_REQUIRED');
+  const tabKey = binding.frame.currentTabKey, body = document.getElementById('modalBody');
+  const scrollTop = body?.scrollTop || 0;
+  let owned;
+  const mountReviewOverlay = module.createTimesheetOverlayAdapter({
+    document, window, modalElement:document.getElementById('modal'), triggerElement, current:binding.current,
+    onBind: handle => { owned = window.CloudTMSHealthCorrectionHostV3.ownOverlay(binding, handle); },
+    onUnbind: handle => { if (binding.frame._healthCorrectionOverlay === handle) owned?.remove(); },
+    restoreParentView: () => {
+      if (!binding.current()) return;
+      if (binding.frame.currentTabKey !== tabKey) return;
+      const currentBody = document.getElementById('modalBody');
+      if (currentBody) currentBody.scrollTop = scrollTop;
+      if (triggerElement?.isConnected) triggerElement.focus();
+    }
+  });
+  return module.open({document, window, actorId:binding.actorId, timesheetId, api:API, authFetch,
+    listContracts, openContract, currentActorId:() => SESSION?.user?.id || null, current:binding.current,
+    resolveAction:resolveTimesheetCorrectionAction, onResult:value => adoptHealthTimesheetCorrectionResult(binding,value), mountReviewOverlay});
+}
+
+function openNativeDailyRateCorrection({timesheetId, triggerElement}) {
+  const binding = healthTimesheetCorrectionBinding(), host = window.CloudTMSHealthCorrectionHostV3;
+  if (binding.initialTimesheetId !== timesheetId || !host.dailyEligible(binding.context, SESSION?.user)) {
+    throw new Error('DAILY_RATE_CURRENT_CONTEXT_REQUIRED');
+  }
+  let owned;
+  const adapter = window.CloudTMSDailyRateCorrectionHttpV1.create({
+    timesheetId, actorUserId: binding.actorId, current: binding.current,
+    request: (url, init) => { binding.assertCurrent(); return authFetch(API(url), {...init, auth401Mode:'return'}); },
+    runAction: resolveTimesheetCorrectionAction,
+    onResult: value => adoptHealthTimesheetCorrectionResult(binding, value),
+    onClose: () => { owned?.remove(); if (binding.current() && triggerElement?.isConnected) triggerElement.focus(); }
+  });
+  const handle = window.CloudTMSDailyRateCorrectionV1.open({timesheetId, adapter});
+  owned = host.ownOverlay(binding, handle);
+  return handle;
+}
+
+function wireHealthTimesheetCorrectionHost(frame) {
+  const host = window.CloudTMSHealthCorrectionHostV3, context = window.modalCtx;
+  if (!host || frame?.kind !== 'timesheets' || frame.entity !== 'timesheets' || frame._ctxRef !== context) return;
+  // Native repaint invalidates only this frame's transient view; its immutable
+  // actor-scoped request journal remains owned by the correction controller.
+  frame._healthCorrectionOverlay?.dispose();
+  const body = document.getElementById('modalBody');
+  if (!body || frame.mode !== 'view') return;
+  const daily = body.querySelector('[data-health-daily-rates]');
+  if (daily) {
+    daily.disabled = !host.dailyEligible(context, SESSION?.user);
+    daily.onclick = () => {
+      if (daily.disabled) return;
+      try { openNativeDailyRateCorrection({timesheetId:host.identity(context)?.timesheet_id, triggerElement:daily}); }
+      catch { const notice = body.querySelector('[data-health-correction-notice]'); if (notice) notice.textContent = 'This check is temporarily unavailable. Try again.'; }
+    };
+  }
+  const move = body.querySelector('[data-health-contract-move]');
+  if (move) move.disabled = true;
+  if (['overview','finance'].includes(frame.currentTabKey)) {
+    body.querySelectorAll('[data-health-correction-result]').forEach(node => node.remove());
+    body.insertAdjacentHTML('beforeend', host.resultHtml(context));
+    for (const button of body.querySelectorAll('[data-health-correction-action]')) {
+      button.onclick = async () => {
+        if (button.disabled) return;
+        const result = context.__healthCorrectionResult, actions = [...(result?.next_actions || []), ...(result?.links || [])];
+        try { await resolveTimesheetCorrectionAction(actions[Number(button.dataset.healthCorrectionAction)]); }
+        catch { const notice = body.querySelector('[data-health-correction-action-notice]'); if (notice) notice.textContent = 'This action is temporarily unavailable. Try again.'; }
+      };
+    }
+  }
+}
 
 async function openTimesheet(row) {
   const { LOGM, L, GC, GE } = getTsLoggers('[TS][OPEN]');
@@ -372608,7 +372739,11 @@ function renderWeeklyManualScheduleEditor(opts) {
 
 
 async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
-  if (!isActiveTimesheetModalToken(openToken)) return false;
+  const isCurrentCaller = () => {
+    try { return isActiveTimesheetModalToken(openToken) && (typeof opts?.callerCurrent !== 'function' || opts.callerCurrent() === true); }
+    catch { return false; }
+  };
+  if (!isCurrentCaller()) return false;
 
   const mc = (window.modalCtx && typeof window.modalCtx === 'object') ? window.modalCtx : null;
   if (!mc || mc.entity !== 'timesheets') return false;
@@ -372656,7 +372791,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
   if (!startingTimesheetId && !startingContractWeekId) return false;
 
   const patchHydration = (patch) => {
-    if (!isActiveTimesheetModalToken(openToken)) return false;
+    if (!isCurrentCaller()) return false;
     const h = (mc.timesheetHydration && typeof mc.timesheetHydration === 'object') ? mc.timesheetHydration : {};
     mc.timesheetHydration = {
       ...(typeof makeInitialTimesheetHydrationState === 'function' ? makeInitialTimesheetHydrationState() : {}),
@@ -372723,7 +372858,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
       });
     }
   } catch (err) {
-    if (!isActiveTimesheetModalToken(openToken)) return false;
+    if (!isCurrentCaller()) return false;
     if (startingContractWeekId) {
       try {
         fetchedFromPlannedWeek = true;
@@ -372753,7 +372888,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     }
   }
 
-  if (!isActiveTimesheetModalToken(openToken)) return false;
+  if (!isCurrentCaller()) return false;
 
   details = (details && typeof details === 'object') ? details : {};
   const detTs = (details.timesheet && typeof details.timesheet === 'object') ? details.timesheet : {};
@@ -372857,7 +372992,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
         skipTabRefresh: true,
         tabKey
       });
-      if (!isActiveTimesheetModalToken(openToken)) return false;
+      if (!isCurrentCaller()) return false;
     }
   }
 
@@ -373216,7 +373351,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     console.warn('[TS][HYDRATE] lifecycle refresh hydration failed (non-fatal)', err);
   }
 
-  if (!isActiveTimesheetModalToken(openToken)) return false;
+  if (!isCurrentCaller()) return false;
   window.modalCtx = mc;
 
   if (opts.skipSummaryRefresh !== true) {
@@ -373252,7 +373387,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
     }
   }
 
-  if (!isActiveTimesheetModalToken(openToken)) return false;
+  if (!isCurrentCaller()) return false;
   const fr = getFrame();
   if (fr && fr.entity === 'timesheets') {
     fr.mode = 'view';
@@ -373261,7 +373396,7 @@ async function refreshTimesheetModalAfterLifecycleAction(openToken, opts = {}) {
 
   await safeRerenderTimesheetModal(openToken, tabKey, { refreshTabs: true });
 
-  if (!isActiveTimesheetModalToken(openToken)) return false;
+  if (!isCurrentCaller()) return false;
   try {
     const fr2 = getFrame();
     if (fr2 && fr2.entity === 'timesheets') fr2._updateButtons && fr2._updateButtons();

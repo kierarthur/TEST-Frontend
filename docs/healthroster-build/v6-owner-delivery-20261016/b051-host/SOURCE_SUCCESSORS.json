@@ -1,0 +1,110 @@
+{
+  "version": "HEALTH_B051_SOURCE_SUCCESSORS_V1",
+  "baseline": "045c95cecf2dcbb632c0a5827f19c38548ee3a11",
+  "reviewedFinalContent": "afaf162e59b2e7901ef0dbc3f484ce51c741f0971557f80fdc877bb8b9ecaa88",
+  "predecessors": [
+    {
+      "file": "js/correction-contract-v3.js",
+      "originalCommit": "00f25571ac7fb65f44351a52beced0710211138e",
+      "originalPath": "docs/healthroster-build/proposals/checklist-v6-contract-correction-20261016/forward/office/js/correction-contract-v3.js",
+      "beforeSha256": "19cd7b652b1c58c310f011dfbfb5af8eec96130fa2aa7a4ea4ad847561b5ee27",
+      "afterSha256": "19cd7b652b1c58c310f011dfbfb5af8eec96130fa2aa7a4ea4ad847561b5ee27",
+      "preservedOriginal": "inputs/00f/js__correction-contract-v3.js",
+      "unchanged": true
+    },
+    {
+      "file": "js/daily-rate-correction.js",
+      "originalCommit": "00f25571ac7fb65f44351a52beced0710211138e",
+      "originalPath": "docs/healthroster-build/proposals/checklist-v6-contract-correction-20261016/forward/office/js/daily-rate-correction.js",
+      "beforeSha256": "a58f703e822745ee7af610e1a542767c21d6e6d2da62b607c80a0cfdc925a2e1",
+      "afterSha256": "29854552d2c41dbddd7cf61bfb54eeb3902089d73a2966f32d936aa31d59df21",
+      "preservedOriginal": "inputs/00f/js__daily-rate-correction.js",
+      "unchanged": false
+    },
+    {
+      "file": "js/daily-rate-correction-http-adapter.js",
+      "originalCommit": "00f25571ac7fb65f44351a52beced0710211138e",
+      "originalPath": "docs/healthroster-build/proposals/checklist-v6-contract-correction-20261016/forward/office/js/daily-rate-correction-http-adapter.js",
+      "beforeSha256": "7cf1917c0f6aedf4df3254fabc0afac1d4873d74bbd508cac45f408be38909f8",
+      "afterSha256": "1f204803633df98d6e51c78237bd536eca6fd36811c78acac50e4b84e0eef7c1",
+      "preservedOriginal": "inputs/00f/js__daily-rate-correction-http-adapter.js",
+      "unchanged": false
+    },
+    {
+      "file": "css/daily-rate-correction.css",
+      "originalCommit": "00f25571ac7fb65f44351a52beced0710211138e",
+      "originalPath": "docs/healthroster-build/proposals/checklist-v6-contract-correction-20261016/forward/office/css/daily-rate-correction.css",
+      "beforeSha256": "2909ef0063e1d30d3b517e9e71044b7dd2f7b60de0eb3675db644c8f8f907a26",
+      "afterSha256": "2e12097be045a72999ec9bee5dc9eb1dfdf63bc93fe1b67ca26aa4bf764e6ae0",
+      "preservedOriginal": "inputs/00f/css__daily-rate-correction.css",
+      "unchanged": false
+    }
+  ],
+  "preserved": [
+    {
+      "file": "js/weekly-source/contact-manual-enquiry-controls.mjs",
+      "sha256": "3032be0fc47d6c8967bbacc636e7500c06c2c0ca11f3a0657a013c8cf019d615",
+      "wholeFileEqualBaseline": true
+    },
+    {
+      "file": "js/weekly-source/contact-manual-enquiry-contract.mjs",
+      "sha256": "f6c5f6f2335f3e2ea69f36bcdd4a2b3b19315d1d8a6f9831e9355db43e3ffe23",
+      "wholeFileEqualBaseline": true
+    },
+    {
+      "file": "js/weekly-source/workspace-actions.js",
+      "sha256": "80128cb485d8e72ba52595c9d78a16bbe924fe1aed8fbaee87868581b54b93ee",
+      "wholeFileEqualBaseline": true
+    },
+    {
+      "file": "js/weekly-source/import-workspace.js",
+      "sha256": "1064233f1ffb870c76d7a5788717b2b6f67e7bebe1d7150a23b42f0cd65b8b5b",
+      "wholeFileEqualBaseline": true
+    },
+    {
+      "file": "js/weekly-source/combined-review.js",
+      "sha256": "1b072b2de1dbf79cef82f3d57b7b505e07266825fb500f28705a5777a904df5b",
+      "wholeFileEqualBaseline": true
+    },
+    {
+      "file": "css/weekly-source.css",
+      "sha256": "0507e15f13c0f1e9f7b1cf192a9f3f719a80bf6cc2f3dd012615518bc07c4a2b",
+      "wholeFileEqualBaseline": true
+    },
+    {
+      "file": "js/timesheet-correction-office-context.js",
+      "sha256": "03d2a43688e3b62dd74d17630970b17cf95df9cd6688ebf9d519993244fa3a12",
+      "wholeFileEqualBaseline": true
+    },
+    {
+      "file": "js/contract-correction-v3.mjs",
+      "sha256": "57034c72103454ed956e7cbd7fbd9425b83171152a684237a94425147b33b087",
+      "wholeFileEqualBaseline": true
+    }
+  ],
+  "completeFinance": {
+    "beforeSha256": "11c7098dc57083ec051dad7e9b93648d168a549051ac581ff95005f63429cef7",
+    "bytes": 65647,
+    "exactWholeBodyPresentOnce": true,
+    "bankingCashFragmentChanged": false
+  },
+  "assetCacheTest": {
+    "file": "tests/unit/main-asset-cache-version.test.cjs",
+    "beforeSha256": "59a7a1aaae3bf23a4825c579760374e18d8cd1c0186540135e6a8d8e16dbb463",
+    "afterSha256": "dedf3a78ddf0de002fda52b9123ae39ff27291c811043896fdaa84896b4e4f00",
+    "edits": [
+      {
+        "before": "const test = require('node:test');",
+        "after": "const test = require('node:test');\nconst { createHash } = require('node:crypto');"
+      },
+      {
+        "before": "  const currentMainAsset = 'main.js?v=20261012-sp10-r1&healthroster=20261014-checklist-r4';",
+        "after": "  const currentMainAsset = 'main.js?v=20261012-sp10-r1&healthroster=20261014-checklist-r4&correction-host=' + createHash('sha256').update(main).digest('hex');"
+      }
+    ],
+    "fullRawReverseEqual": true
+  },
+  "status": "INDEPENDENT_HEALTH_HOST_SOURCE_WITH_EXPLICIT_COMPONENT_AND_NATIVE_CAPABILITY_HOLDS",
+  "native": "NOT_RUN",
+  "partB": "NOT_RUN"
+}

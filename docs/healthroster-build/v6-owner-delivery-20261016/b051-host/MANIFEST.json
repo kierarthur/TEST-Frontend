@@ -1,0 +1,155 @@
+{
+  "version": "HEALTH_B051_OFFICE_SOURCE_PACKET_V1",
+  "baseline": "045c95cecf2dcbb632c0a5827f19c38548ee3a11",
+  "branch": "codex/healthroster-v2-office-13102026",
+  "files": [
+    {
+      "file": "css/daily-rate-correction.css",
+      "bytes": 2237,
+      "sha256": "2e12097be045a72999ec9bee5dc9eb1dfdf63bc93fe1b67ca26aa4bf764e6ae0"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/BASELINE_COVERAGE.json",
+      "bytes": 8699,
+      "sha256": "b0f287e43381c7c1450db76628fb4b95cf8491e9aad44f052692756700324835"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/BROWSER_RESULT.json",
+      "bytes": 1813,
+      "sha256": "da59c7e163788737f8f8adc6319bafcd968868580b949c231d2cee1da64ccbbd"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/PARENT_EDITS.json",
+      "bytes": 76797,
+      "sha256": "e74fb1ef758370726e865101f3edffbc90daa77b75e9bf5a75e38929e1216160"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/README.md",
+      "bytes": 4735,
+      "sha256": "03483104a662abf09ea6530907b8e9001b69cbd088ac935022c185030d49b0bc"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/SOURCE_SUCCESSORS.json",
+      "bytes": 5147,
+      "sha256": "8f1b20732ad01e5d81f0d045d4a9fbaa877e673f1c584c96aba3050772b58d90"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/TEST_RESULT.json",
+      "bytes": 2729,
+      "sha256": "89a3c3a51288b3c51658b44101110a7da5eaae002c6ca6b0ac4b373b45b2445d"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/build-parent.mjs",
+      "bytes": 6691,
+      "sha256": "f06e2767742f6965a7382a229a982cdfedde4c97e9462ebb394913950567cc02"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/host-functions.jsinc",
+      "bytes": 7106,
+      "sha256": "74afb5abce16d7f0c3978329eb6a5e04dbf1c61b5e6ded7ab627ef5ac9f605dd"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/inputs/00f/css__daily-rate-correction.css",
+      "bytes": 1824,
+      "sha256": "2909ef0063e1d30d3b517e9e71044b7dd2f7b60de0eb3675db644c8f8f907a26"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/inputs/00f/js__correction-contract-v3.js",
+      "bytes": 12803,
+      "sha256": "19cd7b652b1c58c310f011dfbfb5af8eec96130fa2aa7a4ea4ad847561b5ee27"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/inputs/00f/js__daily-rate-correction-http-adapter.js",
+      "bytes": 3278,
+      "sha256": "7cf1917c0f6aedf4df3254fabc0afac1d4873d74bbd508cac45f408be38909f8"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/inputs/00f/js__daily-rate-correction.js",
+      "bytes": 10094,
+      "sha256": "a58f703e822745ee7af610e1a542767c21d6e6d2da62b607c80a0cfdc925a2e1"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/screenshots/1366-contract-closed.png",
+      "bytes": 52048,
+      "sha256": "48045fc85987285357bff7a530aaa6a72f73f9b0c0b3815ed14278bb671fa5b3"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/screenshots/1366-result.png",
+      "bytes": 59556,
+      "sha256": "86ac54aaa4f467bed2f03ed25173a77dfde244841186965ebb75f20ab10db472"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/screenshots/1366-review.png",
+      "bytes": 59681,
+      "sha256": "a10cd6b99389d884e4ee34c580f1fd8758b2e29906c3fb3276ecb04cc38f17d5"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/screenshots/390-contract-closed.png",
+      "bytes": 38844,
+      "sha256": "ca2696bb1702e231778312d200ff4ac3bd3bb519b6276ba2ca662d9eb7cfe559"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/screenshots/390-result.png",
+      "bytes": 45826,
+      "sha256": "ec54c5ed98c33a65d8208dbc8725aef5c309a570686509c17927123a9a6f42f7"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/screenshots/390-review.png",
+      "bytes": 29108,
+      "sha256": "b381b067b8ffda6ba690bb774019a47319187d8ad140df017ac304d3b00844ca"
+    },
+    {
+      "file": "docs/healthroster-build/v6-owner-delivery-20261016/b051-host/seal.mjs",
+      "bytes": 7119,
+      "sha256": "edafeb1bd6718c6c1abba058c0b746f834eee7a13cca80a2a270792c8f483cef"
+    },
+    {
+      "file": "index.html",
+      "bytes": 99114,
+      "sha256": "7ab1974e2dab3cd6f6410c29d160a7ed97802601aa75b45a559f2f0030cb4aad"
+    },
+    {
+      "file": "js/correction-contract-v3.js",
+      "bytes": 12803,
+      "sha256": "19cd7b652b1c58c310f011dfbfb5af8eec96130fa2aa7a4ea4ad847561b5ee27"
+    },
+    {
+      "file": "js/daily-rate-correction-http-adapter.js",
+      "bytes": 4382,
+      "sha256": "1f204803633df98d6e51c78237bd536eca6fd36811c78acac50e4b84e0eef7c1"
+    },
+    {
+      "file": "js/daily-rate-correction.js",
+      "bytes": 10925,
+      "sha256": "29854552d2c41dbddd7cf61bfb54eeb3902089d73a2966f32d936aa31d59df21"
+    },
+    {
+      "file": "js/main.js",
+      "bytes": 17840877,
+      "sha256": "aaa6559fa2ed20b4ef6008ecc2982f097dd570dd409755a64fcdbc7d06b541ec"
+    },
+    {
+      "file": "js/timesheet-correction-host-v3.js",
+      "bytes": 8413,
+      "sha256": "dde3f6a223e59f42dcb14795af161fc14aad39c87e3179b2791bd83c64f600f0"
+    },
+    {
+      "file": "tests/ui/health-correction-host-local-browser.mjs",
+      "bytes": 11228,
+      "sha256": "b0d5faa4c566863a60cc0335656531d22da153c6878bb83090a9d630d31a1251"
+    },
+    {
+      "file": "tests/unit/health-correction-host-v3.test.mjs",
+      "bytes": 15678,
+      "sha256": "06459b98094d7098156b1fb4bd48e3e09faa5021b8c49c581bc0c4f18006a5c0"
+    },
+    {
+      "file": "tests/unit/main-asset-cache-version.test.cjs",
+      "bytes": 5429,
+      "sha256": "dedf3a78ddf0de002fda52b9123ae39ff27291c811043896fdaa84896b4e4f00"
+    }
+  ],
+  "native": "NOT_RUN",
+  "partB": "NOT_RUN",
+  "deployment": false
+}

@@ -1,0 +1,68 @@
+{
+  "version": "HEALTH_B051_SOURCE_TEST_RESULT_V1",
+  "files": [
+    "tests/unit/health-correction-host-v3.test.mjs",
+    "tests/unit/main-asset-cache-version.test.cjs",
+    "tests/unit/timesheet-overview-state-precedence.test.cjs",
+    "tests/unit/unassigned-contract-week-ui.test.cjs",
+    "tests/unit/weekly-source-candidate-office-surface.test.cjs",
+    "tests/unit/contact-manual-enquiry-parent.test.mjs",
+    "tests/unit/weekly-source-protected-resume-asset-cache.test.cjs"
+  ],
+  "exitCode": 0,
+  "tests": 35,
+  "pass": 35,
+  "fail": 0,
+  "skipped": 0,
+  "outputSha256": "2f53452b7bcc3469eb9641489a0330826b1d7f3935167107d1bec7e9b7d4486f",
+  "syntaxFiles": 5,
+  "isolatedBrowser": {
+    "version": "HEALTH_B051_LOCAL_BROWSER_V1",
+    "scope": "ACTUAL_RENDERER_HOST_MARKUP_WITH_CONTROLLED_CONTEXT_AND_HTTP_NOT_NATIVE_OR_INSTALLED",
+    "overviewSha256": "9731aa61c6ff0bb2410d72beb976be0de5977f135c3f9099fec327acdbcbdc91",
+    "closeModalSha256": "5a3abbf46f6a5dff2370cd4f81bc1548fdebdd20512943f668842efa91133620",
+    "tabsSha256": "7e6b7f4295757aa301745cbaa49fc34368d2edd6ac4c9bb5f20c5d3290cbd8a2",
+    "hostFunctionsSha256": "74afb5abce16d7f0c3978329eb6a5e04dbf1c61b5e6ded7ab627ef5ac9f605dd",
+    "nativeModalMarkupSha256": "aa9c951f6ce5df75575570d975a2bb1825c597cd83c274db7fdc530845f31895",
+    "results": [
+      {
+        "viewport": {
+          "width": 1366,
+          "height": 900
+        },
+        "actualCompleteOverviewRenderer": true,
+        "actualHealthHostFunctions": true,
+        "actualNativeModalMarkup": true,
+        "sevenNativeTabDefinitions": true,
+        "fixturePermissionAndHydration": true,
+        "sameParentRetainedAfterCloseAndRecovery": true,
+        "unknownRequestRecoveredByExactGet": true,
+        "registeredPayAndPreparingDraftsVisible": true,
+        "externalRequests": 0,
+        "pageErrors": 0
+      },
+      {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "actualCompleteOverviewRenderer": true,
+        "actualHealthHostFunctions": true,
+        "actualNativeModalMarkup": true,
+        "sevenNativeTabDefinitions": true,
+        "fixturePermissionAndHydration": true,
+        "sameParentRetainedAfterCloseAndRecovery": true,
+        "unknownRequestRecoveredByExactGet": true,
+        "registeredPayAndPreparingDraftsVisible": true,
+        "externalRequests": 0,
+        "pageErrors": 0
+      }
+    ],
+    "screenshots": "C:\\Users\\KierArthur\\OneDrive - Arthur Rai\\Documents\\GitHub\\.codex-worktrees\\healthroster-v2-office-13102026\\.codex-tmp\\health-correction-host-20261016"
+  },
+  "screenshotsVisuallyInspected": 6,
+  "noExternalCalls": true,
+  "native": "NOT_RUN",
+  "installedOffice": "NOT_RUN",
+  "partB": "NOT_RUN"
+}

@@ -1,0 +1,124 @@
+// Health B051 parent plumbing. The sole Bank CM17 dialog is a separate producer.
+function healthTimesheetCorrectionBinding() {
+  const frame = window.__getModalFrame?.(), context = window.modalCtx;
+  return window.CloudTMSHealthCorrectionHostV3.capture({
+    frame, context, actorId: SESSION?.user?.id,
+    currentActorId: () => SESSION?.user?.id || null,
+    getFrame: () => window.__getModalFrame?.(),
+    getStack: () => window.__modalStack || []
+  });
+}
+
+function renderHealthTimesheetCorrectionMore() {
+  const frame = window.__getModalFrame?.(), context = window.modalCtx;
+  if (frame?.kind !== 'timesheets' || frame.entity !== 'timesheets' || frame.mode !== 'view'
+    || frame._ctxRef !== context) return '';
+  return window.CloudTMSHealthCorrectionHostV3?.moreHtml(context, SESSION?.user) || '';
+}
+
+async function resolveTimesheetCorrectionAction(action) {
+  const binding = healthTimesheetCorrectionBinding();
+  binding.assertCurrent();
+  return window.CloudTMSHealthCorrectionHostV3.resolveAction(action, {
+    'OPEN_TIMESHEET:TIMESHEET': value => openTimesheet({timesheet_id:value.target_id, current_timesheet_id:value.target_id}),
+    'OPEN_INVOICE:INVOICE': value => openInvoiceModal({invoice_id:value.target_id})
+  });
+}
+
+async function adoptHealthTimesheetCorrectionResult(binding, result) {
+  const value = await binding.adopt(result, async (target, tabKey) => {
+    const refreshed = await refreshTimesheetModalAfterLifecycleAction(binding.context.openToken, {
+      timesheetId: target, tabKey, forceFullDetails: true, identity_moved: target !== binding.initialTimesheetId,
+      blocking: true, action: result.purpose, callerCurrent: binding.current
+    });
+    return refreshed === true || refreshed?.ok === true;
+  });
+  if (binding.current()) await safeRerenderTimesheetModal(binding.context.openToken, binding.frame.currentTabKey);
+  return value;
+}
+
+async function openTimesheetContractMoveReview({timesheetId, triggerElement}) {
+  const binding = healthTimesheetCorrectionBinding();
+  if (binding.initialTimesheetId !== timesheetId || binding.context.timesheetDetails.timesheet.sheet_scope === 'DAILY') {
+    throw new Error('CORRECTION_CURRENT_PARENT_REQUIRED');
+  }
+  const module = window.CloudTMSTimesheetContractMoveV1;
+  if (typeof module?.open !== 'function' || typeof module?.createTimesheetOverlayAdapter !== 'function') {
+    throw new Error('CONTRACT_MOVE_COMPONENT_DEPENDENCY_REQUIRED');
+  }
+  // The reviewed pack requires an actual native Move capability. Current Office
+  // has no declared projection for it. Presence of CM17, Admin, a Contract or a
+  // private SQL event capability cannot substitute for that missing authority.
+  // Preserve this closed seam until the exact public producer ABI is published.
+  const publishedNativeMoveCapability = false;
+  if (!publishedNativeMoveCapability) throw new Error('CONTRACT_MOVE_CAPABILITY_PROJECTION_REQUIRED');
+  const tabKey = binding.frame.currentTabKey, body = document.getElementById('modalBody');
+  const scrollTop = body?.scrollTop || 0;
+  let owned;
+  const mountReviewOverlay = module.createTimesheetOverlayAdapter({
+    document, window, modalElement:document.getElementById('modal'), triggerElement, current:binding.current,
+    onBind: handle => { owned = window.CloudTMSHealthCorrectionHostV3.ownOverlay(binding, handle); },
+    onUnbind: handle => { if (binding.frame._healthCorrectionOverlay === handle) owned?.remove(); },
+    restoreParentView: () => {
+      if (!binding.current()) return;
+      if (binding.frame.currentTabKey !== tabKey) return;
+      const currentBody = document.getElementById('modalBody');
+      if (currentBody) currentBody.scrollTop = scrollTop;
+      if (triggerElement?.isConnected) triggerElement.focus();
+    }
+  });
+  return module.open({document, window, actorId:binding.actorId, timesheetId, api:API, authFetch,
+    listContracts, openContract, currentActorId:() => SESSION?.user?.id || null, current:binding.current,
+    resolveAction:resolveTimesheetCorrectionAction, onResult:value => adoptHealthTimesheetCorrectionResult(binding,value), mountReviewOverlay});
+}
+
+function openNativeDailyRateCorrection({timesheetId, triggerElement}) {
+  const binding = healthTimesheetCorrectionBinding(), host = window.CloudTMSHealthCorrectionHostV3;
+  if (binding.initialTimesheetId !== timesheetId || !host.dailyEligible(binding.context, SESSION?.user)) {
+    throw new Error('DAILY_RATE_CURRENT_CONTEXT_REQUIRED');
+  }
+  let owned;
+  const adapter = window.CloudTMSDailyRateCorrectionHttpV1.create({
+    timesheetId, actorUserId: binding.actorId, current: binding.current,
+    request: (url, init) => { binding.assertCurrent(); return authFetch(API(url), {...init, auth401Mode:'return'}); },
+    runAction: resolveTimesheetCorrectionAction,
+    onResult: value => adoptHealthTimesheetCorrectionResult(binding, value),
+    onClose: () => { owned?.remove(); if (binding.current() && triggerElement?.isConnected) triggerElement.focus(); }
+  });
+  const handle = window.CloudTMSDailyRateCorrectionV1.open({timesheetId, adapter});
+  owned = host.ownOverlay(binding, handle);
+  return handle;
+}
+
+function wireHealthTimesheetCorrectionHost(frame) {
+  const host = window.CloudTMSHealthCorrectionHostV3, context = window.modalCtx;
+  if (!host || frame?.kind !== 'timesheets' || frame.entity !== 'timesheets' || frame._ctxRef !== context) return;
+  // Native repaint invalidates only this frame's transient view; its immutable
+  // actor-scoped request journal remains owned by the correction controller.
+  frame._healthCorrectionOverlay?.dispose();
+  const body = document.getElementById('modalBody');
+  if (!body || frame.mode !== 'view') return;
+  const daily = body.querySelector('[data-health-daily-rates]');
+  if (daily) {
+    daily.disabled = !host.dailyEligible(context, SESSION?.user);
+    daily.onclick = () => {
+      if (daily.disabled) return;
+      try { openNativeDailyRateCorrection({timesheetId:host.identity(context)?.timesheet_id, triggerElement:daily}); }
+      catch { const notice = body.querySelector('[data-health-correction-notice]'); if (notice) notice.textContent = 'This check is temporarily unavailable. Try again.'; }
+    };
+  }
+  const move = body.querySelector('[data-health-contract-move]');
+  if (move) move.disabled = true;
+  if (['overview','finance'].includes(frame.currentTabKey)) {
+    body.querySelectorAll('[data-health-correction-result]').forEach(node => node.remove());
+    body.insertAdjacentHTML('beforeend', host.resultHtml(context));
+    for (const button of body.querySelectorAll('[data-health-correction-action]')) {
+      button.onclick = async () => {
+        if (button.disabled) return;
+        const result = context.__healthCorrectionResult, actions = [...(result?.next_actions || []), ...(result?.links || [])];
+        try { await resolveTimesheetCorrectionAction(actions[Number(button.dataset.healthCorrectionAction)]); }
+        catch { const notice = body.querySelector('[data-health-correction-action-notice]'); if (notice) notice.textContent = 'This action is temporarily unavailable. Try again.'; }
+      };
+    }
+  }
+}
