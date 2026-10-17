@@ -1,0 +1,36 @@
+{
+  "source": "Independent literal expectations in tests/unit/paid-match-controls.test.mjs and paid-match-parent.test.mjs; expected values are not computed by controller under test.",
+  "questionKeys": 13,
+  "choiceKeys": 7,
+  "ordinaryPayloadKeys": 14,
+  "correctionPayloadKeys": 18,
+  "correctionContextKeys": 16,
+  "sourceOptions": [
+    "Separate shift",
+    "Same shift (already billed)"
+  ],
+  "same": {
+    "pay_effect": "NONE",
+    "variant": "work_event_id",
+    "same_allowed": true,
+    "target": "explicit selected genuine choice"
+  },
+  "separate": {
+    "pay_effect": "NORMAL",
+    "variant": "separate_shift=true",
+    "target": "explicit genuine comparison target; no browser new-event identity"
+  },
+  "counters": [
+    "3",
+    "9007199254740993",
+    "9223372036854775807"
+  ],
+  "journal": "Origin-wide actor Web Lock ifAvailable across recover/persist/send/receipt-clear; all refusals retain exact bytes.",
+  "terminal": "Exact current publication/upload/scope-version receipt; correction additionally requires exact genuine native review/session/prior/report/replacement/request/successor counter identity.",
+  "unknown": "No new UUID, auto-refresh, false failure or assumed success. Reopen recovery remains reachable after actual row disappearance.",
+  "permissions": "Current Source admin caller and unchanged actor/frame/Source generation/record/selection/tab/filters; server injects and rechecks current actor/paid authority.",
+  "sourceOnly": true,
+  "native": "NOT_RUN",
+  "API": "NOT_RUN",
+  "inApp": "NOT_RUN"
+}

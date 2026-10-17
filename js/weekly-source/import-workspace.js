@@ -34,7 +34,7 @@
     imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager', 'Continue daily check', 'View daily check']),
     queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet', 'Retry recheck', 'Send reminder', 'Send reminder for selected', 'Send again', 'Correct this Timesheet', 'Cancel correction', 'Authorise both', 'Open Timesheet']),
     shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay', 'Review and reconcile']),
-    finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),
+    finalise: new Set(['Confirm paid shift match', 'Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),
     tracker: new Set(['No shifts to import', 'View'])
   });
   const TONES = new Set(['neutral', 'info', 'warning', 'positive', 'danger']);
@@ -58,7 +58,7 @@
   const MUTATING_ACTIONS = new Set([
     'Review', 'Review pricing', 'Correct final source', 'Remind candidate', 'Accept system hours',
     'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band',
-    'Review overlapping shift', 'Upload corrected source', 'Protect pay', 'No shifts to import', 'Confirm shift match',
+    'Review overlapping shift', 'Upload corrected source', 'Protect pay', 'No shifts to import', 'Confirm paid shift match', 'Confirm shift match',
     'Accept current source hours', 'Send to Pay Queries', 'Send back to Queries'
   ]);
   const asText = (value) => String(value == null ? '' : value).trim();
@@ -949,6 +949,7 @@
     const nextPayNotice = state.bankingOwnerClient?.peek()?.active_owner === 'NEXT'
       ? `<div class="ws-notice ws-notice--info" role="status"><span>${escapeHtml(NEXT_PAY_NOTICE)}</span></div>` : '';
     const kept = ['queries','finalise'].includes(tab) ? root.CloudTMSKeptAsPaidV1?.renderRows(workspace.kept_as_paid_contexts,'SOURCE_WORKSPACE') || '' : '';
+    const paidRecovery=root.CloudTMSPaidMatchV1?.recovery(typeof SESSION!=='undefined'?SESSION?.user?.id:null,paidScopeKey(workspace,tab,session.sourceFilters))||'';
     const notices = workspace.notices.map((notice) => `<div class="ws-notice ws-notice--${escapeHtml(notice.tone)}"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');
     const visibleError = state.error === NEXT_PAY_NOTICE && !nextPayNotice
       ? 'Weekly source information is temporarily unavailable. Recheck or try again shortly.' : state.error;
@@ -956,10 +957,10 @@
     const returnLink = state.checklistReturnLink && tab !== 'checklist' ? '<button type="button" class="btn btn-outline" data-ws-checklist-return>Back to Checklist</button>' : '';
     const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;
     const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;
-    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${nextPayNotice}${error}${kept}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
+    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${nextPayNotice}${error}${paidRecovery}${kept}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
     if (tab === 'checklist') return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="checklist">${renderContext(workspace)}${state.checklist?.render() || '<p role="status">Checklist information is unavailable. Recheck shortly.</p>'}</div>`;
     const body = state.loading === true ? '<div class="ws-loading" role="status">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);
-    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${kept}${body}</div>`;
+    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${paidRecovery}${kept}${body}</div>`;
   }
 
   const session = {
@@ -2188,6 +2189,12 @@
     return true;
   }
 
+  function paidScopeKey(workspace,tab,filters){
+    const selected=workspace?.selected||{};
+    return JSON.stringify(['SOURCE_PAID_MATCH_V1',selected.source_group_id,selected.source_cycle_id,selected.client_id,
+      selected.report_scope_id,tab,Object.entries(filters||{}).sort(([a],[b])=>a.localeCompare(b)),endpoint(ENDPOINTS.command)]);
+  }
+
   return Object.freeze({
     CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,
     disposeChecklist: () => { session.checklist?.dispose(); session.checklist = null; clearChecklistNavigation(); },
@@ -2198,6 +2205,21 @@
     keepAsPaidRequest: options => {
       if(typeof root.authFetch!=='function')throw new Error('Current authenticated Office access is required.');
       return root.authFetch(endpoint(ENDPOINTS.command),options);
+    },
+    paidMatchRequest: options => {
+      if(typeof root.authFetch!=='function')throw new Error('Current authenticated Office access is required.');
+      return root.authFetch(endpoint(ENDPOINTS.command),options);
+    },
+    capturePaidContext: () => {
+      const frames=(root.__modalStack||[]).filter(f=>f.kind==='weekly-source-imports-v1'&&f._ctxRef?.weeklySourceState===session);
+      const frame=frames.length===1?frames[0]:null,generation=session.openGeneration,current=session.openCurrent,tab=session.activeTab,workspace=session.workspace;
+      const selection=JSON.stringify(workspace?.selected),filters=JSON.stringify(session.sourceFilters),version=workspace?.workspace_version;
+      const authTransport=root.authFetch,commandEndpoint=endpoint(ENDPOINTS.command);
+      return {key:paidScopeKey(workspace,tab,session.sourceFilters),
+        current:()=>!!frame&&(root.__modalStack||[]).includes(frame)&&generation===session.openGeneration&&current===session.openCurrent
+          &&current?.()===true&&tab===session.activeTab&&workspace===session.workspace&&version===session.workspace?.workspace_version
+          &&selection===JSON.stringify(session.workspace?.selected)&&filters===JSON.stringify(session.sourceFilters)
+          &&authTransport===root.authFetch&&commandEndpoint===endpoint(ENDPOINTS.command)};
     },
     captureKeepContext: () => {
       const frame=currentFrame(),generation=session.openGeneration,current=session.openCurrent,tab=session.activeTab;

@@ -1,0 +1,66 @@
+{
+  "scope": "ACTUAL_SAVED_HEALTH_SOURCE_UNIT_PARENT_AND_ADJACENT_TESTS",
+  "base": "0840c9b0cf53d4f0152c83f0a34bca96ad3345da",
+  "originalTestsUnchanged": 170,
+  "newProtocolAndHostTests": 22,
+  "counts": {
+    "tests": 192,
+    "pass": 192,
+    "fail": 0,
+    "skipped": 0
+  },
+  "files": [
+    {
+      "file": "tests/unit/kept-as-paid-controls.test.mjs",
+      "sha256": "0448570c86a6d9afe5c6841fdc7d3c61e86e3da2eb229251222dca8279330ba5"
+    },
+    {
+      "file": "tests/unit/kept-as-paid-parent.test.mjs",
+      "sha256": "a7fb61f3b14bcf9bd3c46949a60fc52ca88276e9ab6b92e5adab39e325433c00"
+    },
+    {
+      "file": "tests/unit/health-correction-host-v3.test.mjs",
+      "sha256": "21f7f7c28cfd3e3b2d2eca9c7e3ef6dc97e6a18c3d074b1512a8f4579a2d00c7"
+    },
+    {
+      "file": "tests/unit/correction-entry-native-host.test.mjs",
+      "sha256": "979eb6188a0f7402fd60ee58e17e50fe9f2ace222c2ddd3a848e538a19095491"
+    },
+    {
+      "file": "tests/unit/contact-controls-parent.test.cjs",
+      "sha256": "b4b8bfe84ee289df0cceef964dc734a534c418d490c8f489ebe238140b0b6017"
+    },
+    {
+      "file": "tests/unit/contact-manual-enquiry-parent.test.mjs",
+      "sha256": "7be0a4c40b4db69e8a672e8c441002a224ea33ec92a5ea9fbb2035776a8fc467"
+    },
+    {
+      "file": "tests/unit/contact-pause-controls.test.cjs",
+      "sha256": "ad33ec3c38976c1a2eaa6fa8a9e8fd8e298c6927f4c5aaf374f4ade46e4dbcb9"
+    },
+    {
+      "file": "tests/unit/weekly-source-presentation-v1.test.cjs",
+      "sha256": "1077e41a06e2f1bf73d7bda8ac39239ae34545134a38247179a1297922d4181e"
+    },
+    {
+      "file": "tests/unit/weekly-source-workspace-actions.test.cjs",
+      "sha256": "0ca77976892f7a0ebf64bca5c6c6f96d2f6e83ac59069a2fddb2dccd025f06dc"
+    },
+    {
+      "file": "tests/unit/weekly-source-import-workspace.test.cjs",
+      "sha256": "5eb12c81c3abe521a9d23da46b24c6950854021f216f83a8ba907b958f04dd91"
+    },
+    {
+      "file": "tests/unit/paid-match-controls.test.mjs",
+      "sha256": "c72de39395b9ea5c98a5d57b5aa7c644cf4a3a3e6f44700f3655ec8ad15b1742"
+    },
+    {
+      "file": "tests/unit/paid-match-parent.test.mjs",
+      "sha256": "16795904b51b2ec298b12aeb12c55a6fa23c381a7c186b99cc4affaa34522551"
+    }
+  ],
+  "native": "NOT_RUN",
+  "API": "NOT_RUN",
+  "inApp": "NOT_RUN",
+  "externalRequests": 0
+}

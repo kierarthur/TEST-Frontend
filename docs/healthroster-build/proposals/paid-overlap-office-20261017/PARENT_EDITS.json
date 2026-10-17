@@ -1,0 +1,248 @@
+{
+  "base": "0840c9b0cf53d4f0152c83f0a34bca96ad3345da",
+  "alternateCompleteCheckoutForms": [
+    "LF",
+    "COMPLETE_CRLF"
+  ],
+  "edits": [
+    {
+      "target": "js/weekly-source/workspace-actions.js",
+      "inputSha256": "2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f",
+      "inputGitSha256": "2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f",
+      "inputCanonicalSha256": "2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f",
+      "outputSha256": "3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447",
+      "outputCanonicalSha256": "3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447",
+      "canonicalGitAllowed": false,
+      "hunks": [
+        {
+          "oldStartLine": 348,
+          "newStartLine": 348,
+          "oldLineCount": 6,
+          "newLineCount": 9,
+          "before": "\n  function normaliseCorrectFinalPreview(payload) {\n    const raw = asObject(payload);\n    const changes = asArray(raw.changes).map((rowValue) => {\n      const row = asObject(rowValue);\n      return {\n",
+          "after": "\n  function normaliseCorrectFinalPreview(payload) {\n    const raw = asObject(payload);\n    const paidQuestions=raw.paid_match_questions===undefined?[]:root.CloudTMSPaidMatchV1.questions(raw.paid_match_questions);\n    if(paidQuestions.some(row=>row.paid_match_question.state!=='READY')||(paidQuestions.length&&raw.status!=='BLOCKED'))\n      throw new Error('The current paid-shift comparison could not be confirmed. Retry the original review.');\n    const changes = asArray(raw.changes).map((rowValue) => {\n      const row = asObject(rowValue);\n      return {\n"
+        },
+        {
+          "oldStartLine": 374,
+          "newStartLine": 377,
+          "oldLineCount": 14,
+          "newLineCount": 16,
+          "before": "      blockers,\n      confirmation_text: plainMessage(raw.confirmation_text, 'I understand this will replace the current final version.'),\n      review_context: asObject(raw.review_context),\n      apply_context: asObject(raw.apply_context)\n    };\n  }\n\n  function correctFinalTable(model, activeTab) {\n    if (activeTab === 'blocked') {\n      const rows = model.blockers.map((row) => `<tr><td>${escapeHtml(row.candidate)}</td><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.problem)}</td><td>${escapeHtml(row.action)}</td></tr>`).join('');\n      return `<div class=\"ws-child-scroll\"><table class=\"grid mini ws-child-table\"><thead><tr><th>Candidate</th><th>Day/date</th><th>Problem</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan=\"4\" class=\"ws-empty\">Nothing is blocking this correction.</td></tr>'}</tbody></table></div>`;\n    }\n    const rows = model.changes.map((row) => `<tr><td>${escapeHtml(row.candidate)}</td><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.current_final)}</td><td>${escapeHtml(row.replacement)}</td><td>${escapeHtml(row.result)}</td></tr>`).join('');\n    return `<div class=\"ws-child-scroll\"><table class=\"grid mini ws-child-table\"><thead><tr><th>Candidate</th><th>Day/date</th><th>Current final</th><th>Replacement</th><th>Result</th></tr></thead><tbody>${rows || '<tr><td colspan=\"5\" class=\"ws-empty\">No changed rows were found.</td></tr>'}</tbody></table></div>`;\n",
+          "after": "      blockers,\n      confirmation_text: plainMessage(raw.confirmation_text, 'I understand this will replace the current final version.'),\n      review_context: asObject(raw.review_context),\n      apply_context: asObject(raw.apply_context),\n      paid_match_questions: paidQuestions\n    };\n  }\n\n  function correctFinalTable(model, activeTab) {\n    if (activeTab === 'blocked') {\n      const rows = model.blockers.map((row) => `<tr><td>${escapeHtml(row.candidate)}</td><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.problem)}</td><td>${escapeHtml(row.action)}</td></tr>`).join('');\n      const paid=(model.paid_match_questions||[]).map((row,index)=>`<div class=\"ws-notice\"><strong>${escapeHtml(row.candidate)} \u00b7 ${escapeHtml(row.client)} \u00b7 ${escapeHtml(row.shift)}</strong><p>${escapeHtml(row.system_hours)}</p>${row.paid_match_question.state==='READY'?`<button type=\"button\" class=\"btn btn-outline\" data-wsa-paid-question=\"${index}\">Confirm paid shift match</button>`:'<p>The current paid-shift comparison is unavailable. Recheck current Source and payment authority.</p>'}</div>`).join('');\n      return `<div class=\"ws-child-scroll\"><table class=\"grid mini ws-child-table\"><thead><tr><th>Candidate</th><th>Day/date</th><th>Problem</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan=\"4\" class=\"ws-empty\">Nothing is blocking this correction.</td></tr>'}</tbody></table>${paid}</div>`;\n    }\n    const rows = model.changes.map((row) => `<tr><td>${escapeHtml(row.candidate)}</td><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.current_final)}</td><td>${escapeHtml(row.replacement)}</td><td>${escapeHtml(row.result)}</td></tr>`).join('');\n    return `<div class=\"ws-child-scroll\"><table class=\"grid mini ws-child-table\"><thead><tr><th>Candidate</th><th>Day/date</th><th>Current final</th><th>Replacement</th><th>Result</th></tr></thead><tbody>${rows || '<tr><td colspan=\"5\" class=\"ws-empty\">No changed rows were found.</td></tr>'}</tbody></table></div>`;\n"
+        },
+        {
+          "oldStartLine": 745,
+          "newStartLine": 750,
+          "oldLineCount": 12,
+          "newLineCount": 13,
+          "before": "      && (kind === 'NHSP_REPORT_SCOPE') === !!asText(raw.report_scope_id);\n  }\n\n  function openCorrectFinal(payload) {\n    const model = normaliseCorrectFinal(payload);\n    if (!correctFinalAuthorityReady(model.base_payload)) {\n      return openDetail({ detail: { problem: 'This action is not available yet.', guidance: 'Recheck the Weekly source screen and try again.' } }, 'View details');\n    }\n    const state = { file: null, filename: '', phase: 'choose', preview: null, active_tab: 'changes', reason: '', confirmed: false, busy: false, error: '', recheck_count: 0, pendingReview: null, pendingApply: null };\n    const kind = 'weekly-source-correct-final-v1';\n    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;\n    let initiatingFrame = null;\n",
+          "after": "      && (kind === 'NHSP_REPORT_SCOPE') === !!asText(raw.report_scope_id);\n  }\n\n  function openCorrectFinal(payload, resumedReview) {\n    const model = normaliseCorrectFinal(payload);\n    if (!correctFinalAuthorityReady(model.base_payload)) {\n      return openDetail({ detail: { problem: 'This action is not available yet.', guidance: 'Recheck the Weekly source screen and try again.' } }, 'View details');\n    }\n    const state = { file: null, filename: '', phase: 'choose', preview: null, active_tab: 'changes', reason: '', confirmed: false, busy: false, error: '', recheck_count: 0, pendingReview: null, pendingApply: null };\n    if(resumedReview){state.preview=normaliseCorrectFinalPreview(resumedReview);state.phase='reviewed';state.active_tab=state.preview.blockers.length?'blocked':'changes';}\n    const kind = 'weekly-source-correct-final-v1';\n    const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;\n    let initiatingFrame = null;\n"
+        },
+        {
+          "oldStartLine": 788,
+          "newStartLine": 794,
+          "oldLineCount": 8,
+          "newLineCount": 9,
+          "before": "          state.pendingReview = JSON.parse(JSON.stringify(request));\n          const response = await workspaceApi()?.issueCommand?.('PREVIEW_CORRECT_FINAL_SOURCE', state.pendingReview);\n          if (!callerCurrent()) return;\n          state.pendingReview = null; state.sourceAdmissionBusy = false;\n          state.preview = normaliseCorrectFinalPreview(response);\n          state.phase = 'reviewed';\n          state.active_tab = state.preview.blockers.length ? 'blocked' : 'changes';\n          state.confirmed = false; state.reason = ''; state.busy = false; rerender(kind);\n",
+          "after": "          state.pendingReview = JSON.parse(JSON.stringify(request));\n          const response = await workspaceApi()?.issueCommand?.('PREVIEW_CORRECT_FINAL_SOURCE', state.pendingReview);\n          if (!callerCurrent()) return;\n          const acceptedPreview=normaliseCorrectFinalPreview(response);\n          state.pendingReview = null; state.sourceAdmissionBusy = false;\n          state.preview = acceptedPreview;\n          state.phase = 'reviewed';\n          state.active_tab = state.preview.blockers.length ? 'blocked' : 'changes';\n          state.confirmed = false; state.reason = ''; state.busy = false; rerender(kind);\n"
+        },
+        {
+          "oldStartLine": 807,
+          "newStartLine": 814,
+          "oldLineCount": 6,
+          "newLineCount": 15,
+          "before": "        rerender(kind);\n      });\n      host.querySelector('[data-wsa-review-correction]')?.addEventListener('click', review);\n      host.querySelectorAll('[data-wsa-correction-tab]').forEach((button) => button.addEventListener('click', () => {\n        state.active_tab = button.dataset.wsaCorrectionTab === 'blocked' ? 'blocked' : 'changes';\n        rerender(kind);\n",
+          "after": "        rerender(kind);\n      });\n      host.querySelector('[data-wsa-review-correction]')?.addEventListener('click', review);\n      host.querySelectorAll('[data-wsa-paid-question]').forEach(button=>button.addEventListener('click',()=>{\n        if(!callerCurrent()||state.busy||state.pendingReview||state.pendingApply)return;\n        let expected=state.preview;const row=expected?.paid_match_questions?.[Number(button.dataset.wsaPaidQuestion)];\n        if(!row||row.paid_match_question.state!=='READY')return;\n        openPaidMatch(row,{context:expected.review_context,current:()=>state.preview===expected,\n          adopt:response=>{const next=normaliseCorrectFinalPreview(response);state.preview=next;expected=next;\n            state.phase='reviewed';state.active_tab=next.blockers.length?'blocked':'changes';state.confirmed=false;\n            state.reason='';state.pendingReview=null;state.pendingApply=null;state.error='';}});\n      }));\n      host.querySelectorAll('[data-wsa-correction-tab]').forEach((button) => button.addEventListener('click', () => {\n        state.active_tab = button.dataset.wsaCorrectionTab === 'blocked' ? 'blocked' : 'changes';\n        rerender(kind);\n"
+        },
+        {
+          "oldStartLine": 1392,
+          "newStartLine": 1408,
+          "oldLineCount": 6,
+          "newLineCount": 56,
+          "before": "    return openChild({title:'New enquiry',kind,render,wire});\n  }\n\n  function openKeepAsPaid(detail){\n    const keep=root.CloudTMSKeptAsPaidV1,workspace=workspaceApi(),actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;\n    const stack=[...(root.__modalStack||[])],parent=stack.at(-1),context=root.modalCtx;\n",
+          "after": "    return openChild({title:'New enquiry',kind,render,wire});\n  }\n\n  function openPaidMatch(detail, correctionHost) {\n    const api=root.CloudTMSPaidMatchV1,workspace=workspaceApi(),user=typeof SESSION!=='undefined'?SESSION?.user:null;\n    const stack=[...(root.__modalStack||[])],parent=stack.at(-1),actor=user?.id;\n    if(!api||!actor||!parent||asText(user.role).toLowerCase()!=='admin'||user.is_active===false||user.active===false\n      ||typeof workspace?.paidMatchRequest!=='function'||typeof workspace?.capturePaidContext!=='function')return false;\n    const binding=workspace.capturePaidContext();if(!binding.current())return false;\n    if(correctionHost?parent.kind!=='weekly-source-correct-final-v1':parent.kind!=='weekly-source-imports-v1')return false;\n    const actorState=()=>{const now=typeof SESSION!=='undefined'?SESSION?.user:null;return JSON.stringify({id:now?.id,role:now?.role,is_active:now?.is_active,active:now?.active});};\n    const actorPin=actorState(),q=detail?.paid_match_question,scope=workspace._session?.workspace?.selected;\n    try{root.CloudTMSPaidMatchContractV1.decodePaidMatchQuestion(q);if(!correctionHost&&scope?.projection_publication_id&&scope.projection_publication_id!==q.projection_publication_id&&!detail.recovered) return false;}catch{return false;}\n    let child=null,controller,returned=false;\n    const parentCurrent=()=>binding.current()&&(!correctionHost||correctionHost.current())&&workspaceApi()===workspace&&(typeof SESSION!=='undefined'?SESSION?.user:null)===user&&actorState()===actorPin;\n    const current=()=>{const now=root.__modalStack||[];return !!child&&now.length===stack.length+1&&stack.every((f,i)=>now[i]===f)&&now.at(-1)===child&&parentCurrent();};\n    const parentReturned=()=>{const now=root.__modalStack||[];return now.length===stack.length&&stack.every((f,i)=>now[i]===f)&&parentCurrent();};\n    const onReturn=()=>{\n      if(returned||!parentReturned())return;returned=true;const accepted=controller.snapshot().confirmed;if(!accepted)return;\n      if(accepted.kind==='ORDINARY'){Promise.resolve(workspace.refresh?.()).catch(()=>{});return;}\n      if(correctionHost){rerender('weekly-source-correct-final-v1');return;}\n      // Recovery from an original Source scope adopts only the genuine returned\n      // native review context. It never opens a fabricated Ready/apply result.\n      const c=accepted.review.review_context;\n      openCorrectFinal({correction_payload:{source_cycle_id:c.source_cycle_id,authority_scope_kind:c.authority_scope_kind,\n        report_scope_id:c.report_scope_id,expected_current_final_revision_id:c.expected_current_final_revision_id,\n        expected_final_manifest_hash:c.expected_final_manifest_hash,idempotency_key:c.review_idempotency_key+':office-resume'},\n        source_label:'Reviewed replacement Source'},accepted.review);\n    };\n    try{controller=api.create({actorId:actor,scopeKey:binding.key,question:q,\n      display:Object.fromEntries(['candidate','client','shift','system_hours'].map(k=>[k,asText(detail[k])])),\n      correctionContext:correctionHost?.context||detail.correction_context||null,\n      request:options=>workspace.paidMatchRequest(options),isCurrent:current,\n      onConfirmed:accepted=>{if(current()&&correctionHost&&accepted.kind==='CORRECTION')correctionHost.adopt(accepted.review);}});}catch{return false;}\n    const kind='weekly-source-paid-match-v1';\n    const render=()=>'<div class=\"ws-child\" data-wsa-screen=\"paid-match\"><div data-paid-controls-host></div><div class=\"ws-child-actions\"><button type=\"button\" class=\"btn btn-outline\" data-paid-back>Back</button></div></div>';\n    const wire=()=>{\n      const host=root.document?.querySelector('[data-wsa-screen=\"paid-match\"]');if(!host||host.dataset.wsaWired==='1')return;\n      host.dataset.wsaWired='1';child=currentChild(kind);if(!current())return;\n      const dispose=controller.mount(host.querySelector('[data-paid-controls-host]')),previous=child._detachGlobal;\n      child._detachGlobal=function(...args){try{dispose();}finally{previous?.apply(this,args);setTimeout(onReturn,0);}};\n      host.querySelector('[data-paid-back]')?.addEventListener('click',()=>{if(!current())return;markCompletedChildClean();closeChild();onReturn();});\n    };\n    return openChild({title:'Confirm paid shift match',kind,render,wire});\n  }\n\n  function openPaidMatchRecovery(){\n    const actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;let r;\n    try{r=root.CloudTMSPaidMatchV1?.record(actor);}catch{return false;}\n    if(!r||workspaceApi()?.capturePaidContext?.().key!==r.scope_key)return false;\n    return openPaidMatch({...r.labels,paid_match_question:r.question,correction_context:r.correction_context,recovered:true});\n  }\n\n  function openKeepAsPaid(detail){\n    const keep=root.CloudTMSKeptAsPaidV1,workspace=workspaceApi(),actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;\n    const stack=[...(root.__modalStack||[])],parent=stack.at(-1),context=root.modalCtx;\n"
+        },
+        {
+          "oldStartLine": 1502,
+          "newStartLine": 1568,
+          "oldLineCount": 6,
+          "newLineCount": 7,
+          "before": "    if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) return openCommand(detail);\n    if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});\n    if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);\n    if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);\n    if (['Review protected pay', 'Review and reconcile'].includes(label)) return openProtectedReview(detail.payload);\n    if (['Protect pay', 'Add protected shift', 'Change protected shift'].includes(label)) {\n",
+          "after": "    if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) return openCommand(detail);\n    if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});\n    if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);\n    if (label === 'Confirm paid shift match') return openPaidMatch(detail.payload);\n    if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);\n    if (['Review protected pay', 'Review and reconcile'].includes(label)) return openProtectedReview(detail.payload);\n    if (['Protect pay', 'Add protected shift', 'Change protected shift'].includes(label)) {\n"
+        },
+        {
+          "oldStartLine": 1566,
+          "newStartLine": 1633,
+          "oldLineCount": 7,
+          "newLineCount": 7,
+          "before": "    CONTRACT, normalisePreview, renderPreview, buildUploadAcceptancePayload,\n    normaliseDetail, renderDetail, normaliseContractChooser, renderContractChooser,\n    normaliseCorrectFinal, normaliseCorrectFinalPreview, renderCorrectFinal, renderCommandConfirmation,\n    openPreview, openBatchPreview, openKeepAsPaid, openContactControls, openContactManualEnquiry, hasPendingContactManualEnquiry, handleAction, _plainMessage: plainMessage,\n    _test: Object.freeze({ commandAuthorityAvailable, isCandidateComparisonAmbiguity })\n  });\n});\n",
+          "after": "    CONTRACT, normalisePreview, renderPreview, buildUploadAcceptancePayload,\n    normaliseDetail, renderDetail, normaliseContractChooser, renderContractChooser,\n    normaliseCorrectFinal, normaliseCorrectFinalPreview, renderCorrectFinal, renderCommandConfirmation,\n    openPreview, openBatchPreview, openPaidMatch, openPaidMatchRecovery, openKeepAsPaid, openContactControls, openContactManualEnquiry, hasPendingContactManualEnquiry, handleAction, _plainMessage: plainMessage,\n    _test: Object.freeze({ commandAuthorityAvailable, isCandidateComparisonAmbiguity })\n  });\n});\n"
+        }
+      ]
+    },
+    {
+      "target": "js/weekly-source/import-workspace.js",
+      "inputSha256": "e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007",
+      "inputGitSha256": "e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007",
+      "inputCanonicalSha256": "e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007",
+      "outputSha256": "2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3",
+      "outputCanonicalSha256": "2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3",
+      "canonicalGitAllowed": false,
+      "hunks": [
+        {
+          "oldStartLine": 34,
+          "newStartLine": 34,
+          "oldLineCount": 7,
+          "newLineCount": 7,
+          "before": "    imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager', 'Continue daily check', 'View daily check']),\n    queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet', 'Retry recheck', 'Send reminder', 'Send reminder for selected', 'Send again', 'Correct this Timesheet', 'Cancel correction', 'Authorise both', 'Open Timesheet']),\n    shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay', 'Review and reconcile']),\n    finalise: new Set(['Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),\n    tracker: new Set(['No shifts to import', 'View'])\n  });\n  const TONES = new Set(['neutral', 'info', 'warning', 'positive', 'danger']);\n",
+          "after": "    imports: new Set(['Review', 'Review pricing', 'View', 'View final source', 'Correct final source', 'View Timesheet', 'Email manager', 'Continue daily check', 'View daily check']),\n    queries: new Set(['Open', 'View details', 'Remind candidate', 'Remind missing timesheet', 'Retry recheck', 'Send reminder', 'Send reminder for selected', 'Send again', 'Correct this Timesheet', 'Cancel correction', 'Authorise both', 'Open Timesheet']),\n    shifts: new Set(['Accept system hours', 'Accept current source hours', 'View details', 'Protect pay', 'Change protected shift', 'Review protected pay', 'Review and reconcile']),\n    finalise: new Set(['Confirm paid shift match', 'Confirm shift match', 'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band', 'Review overlapping shift', 'Open Banking Pay', 'Upload corrected source', 'Open charge details', 'Review source details', 'View query', 'Protect pay', 'View details', 'Send to Pay Queries', 'Send back to Queries']),\n    tracker: new Set(['No shifts to import', 'View'])\n  });\n  const TONES = new Set(['neutral', 'info', 'warning', 'positive', 'danger']);\n"
+        },
+        {
+          "oldStartLine": 58,
+          "newStartLine": 58,
+          "oldLineCount": 7,
+          "newLineCount": 7,
+          "before": "  const MUTATING_ACTIONS = new Set([\n    'Review', 'Review pricing', 'Correct final source', 'Remind candidate', 'Accept system hours',\n    'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band',\n    'Review overlapping shift', 'Upload corrected source', 'Protect pay', 'No shifts to import', 'Confirm shift match',\n    'Accept current source hours', 'Send to Pay Queries', 'Send back to Queries'\n  ]);\n  const asText = (value) => String(value == null ? '' : value).trim();\n",
+          "after": "  const MUTATING_ACTIONS = new Set([\n    'Review', 'Review pricing', 'Correct final source', 'Remind candidate', 'Accept system hours',\n    'Link candidate', 'Link client', 'Choose contract', 'Create contract', 'Create contract for this band',\n    'Review overlapping shift', 'Upload corrected source', 'Protect pay', 'No shifts to import', 'Confirm paid shift match', 'Confirm shift match',\n    'Accept current source hours', 'Send to Pay Queries', 'Send back to Queries'\n  ]);\n  const asText = (value) => String(value == null ? '' : value).trim();\n"
+        },
+        {
+          "oldStartLine": 949,
+          "newStartLine": 949,
+          "oldLineCount": 6,
+          "newLineCount": 7,
+          "before": "    const nextPayNotice = state.bankingOwnerClient?.peek()?.active_owner === 'NEXT'\n      ? `<div class=\"ws-notice ws-notice--info\" role=\"status\"><span>${escapeHtml(NEXT_PAY_NOTICE)}</span></div>` : '';\n    const kept = ['queries','finalise'].includes(tab) ? root.CloudTMSKeptAsPaidV1?.renderRows(workspace.kept_as_paid_contexts,'SOURCE_WORKSPACE') || '' : '';\n    const notices = workspace.notices.map((notice) => `<div class=\"ws-notice ws-notice--${escapeHtml(notice.tone)}\"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');\n    const visibleError = state.error === NEXT_PAY_NOTICE && !nextPayNotice\n      ? 'Weekly source information is temporarily unavailable. Recheck or try again shortly.' : state.error;\n",
+          "after": "    const nextPayNotice = state.bankingOwnerClient?.peek()?.active_owner === 'NEXT'\n      ? `<div class=\"ws-notice ws-notice--info\" role=\"status\"><span>${escapeHtml(NEXT_PAY_NOTICE)}</span></div>` : '';\n    const kept = ['queries','finalise'].includes(tab) ? root.CloudTMSKeptAsPaidV1?.renderRows(workspace.kept_as_paid_contexts,'SOURCE_WORKSPACE') || '' : '';\n    const paidRecovery=root.CloudTMSPaidMatchV1?.recovery(typeof SESSION!=='undefined'?SESSION?.user?.id:null,paidScopeKey(workspace,tab,session.sourceFilters))||'';\n    const notices = workspace.notices.map((notice) => `<div class=\"ws-notice ws-notice--${escapeHtml(notice.tone)}\"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');\n    const visibleError = state.error === NEXT_PAY_NOTICE && !nextPayNotice\n      ? 'Weekly source information is temporarily unavailable. Recheck or try again shortly.' : state.error;\n"
+        },
+        {
+          "oldStartLine": 956,
+          "newStartLine": 957,
+          "oldLineCount": 10,
+          "newLineCount": 10,
+          "before": "    const returnLink = state.checklistReturnLink && tab !== 'checklist' ? '<button type=\"button\" class=\"btn btn-outline\" data-ws-checklist-return>Back to Checklist</button>' : '';\n    const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;\n    const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;\n    if(review) return `<div class=\"ws-workspace\" data-ws-contract=\"${CONTRACT}\" data-ws-tab=\"${tab}\">${returnLink}${nextPayNotice}${error}${kept}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role=\"status\">Loading source work\u2026</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;\n    if (tab === 'checklist') return `<div class=\"ws-workspace\" data-ws-contract=\"${CONTRACT}\" data-ws-tab=\"checklist\">${renderContext(workspace)}${state.checklist?.render() || '<p role=\"status\">Checklist information is unavailable. Recheck shortly.</p>'}</div>`;\n    const body = state.loading === true ? '<div class=\"ws-loading\" role=\"status\">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);\n    return `<div class=\"ws-workspace\" data-ws-contract=\"${CONTRACT}\" data-ws-tab=\"${tab}\">${returnLink}${tab==='finalise'&&state.combined?.singleScope?'<button class=\"btn btn-outline\" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${kept}${body}</div>`;\n  }\n\n  const session = {\n",
+          "after": "    const returnLink = state.checklistReturnLink && tab !== 'checklist' ? '<button type=\"button\" class=\"btn btn-outline\" data-ws-checklist-return>Back to Checklist</button>' : '';\n    const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;\n    const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;\n    if(review) return `<div class=\"ws-workspace\" data-ws-contract=\"${CONTRACT}\" data-ws-tab=\"${tab}\">${returnLink}${nextPayNotice}${error}${paidRecovery}${kept}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role=\"status\">Loading source work\u2026</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;\n    if (tab === 'checklist') return `<div class=\"ws-workspace\" data-ws-contract=\"${CONTRACT}\" data-ws-tab=\"checklist\">${renderContext(workspace)}${state.checklist?.render() || '<p role=\"status\">Checklist information is unavailable. Recheck shortly.</p>'}</div>`;\n    const body = state.loading === true ? '<div class=\"ws-loading\" role=\"status\">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);\n    return `<div class=\"ws-workspace\" data-ws-contract=\"${CONTRACT}\" data-ws-tab=\"${tab}\">${returnLink}${tab==='finalise'&&state.combined?.singleScope?'<button class=\"btn btn-outline\" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${paidRecovery}${kept}${body}</div>`;\n  }\n\n  const session = {\n"
+        },
+        {
+          "oldStartLine": 2188,
+          "newStartLine": 2189,
+          "oldLineCount": 6,
+          "newLineCount": 12,
+          "before": "    return true;\n  }\n\n  return Object.freeze({\n    CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,\n    disposeChecklist: () => { session.checklist?.dispose(); session.checklist = null; clearChecklistNavigation(); },\n",
+          "after": "    return true;\n  }\n\n  function paidScopeKey(workspace,tab,filters){\n    const selected=workspace?.selected||{};\n    return JSON.stringify(['SOURCE_PAID_MATCH_V1',selected.source_group_id,selected.source_cycle_id,selected.client_id,\n      selected.report_scope_id,tab,Object.entries(filters||{}).sort(([a],[b])=>a.localeCompare(b)),endpoint(ENDPOINTS.command)]);\n  }\n\n  return Object.freeze({\n    CONTRACT, ENDPOINTS, normaliseWorkspace, tabDescriptors, renderWorkspace, selectionSpec,\n    disposeChecklist: () => { session.checklist?.dispose(); session.checklist = null; clearChecklistNavigation(); },\n"
+        },
+        {
+          "oldStartLine": 2198,
+          "newStartLine": 2205,
+          "oldLineCount": 6,
+          "newLineCount": 21,
+          "before": "    keepAsPaidRequest: options => {\n      if(typeof root.authFetch!=='function')throw new Error('Current authenticated Office access is required.');\n      return root.authFetch(endpoint(ENDPOINTS.command),options);\n    },\n    captureKeepContext: () => {\n      const frame=currentFrame(),generation=session.openGeneration,current=session.openCurrent,tab=session.activeTab;\n",
+          "after": "    keepAsPaidRequest: options => {\n      if(typeof root.authFetch!=='function')throw new Error('Current authenticated Office access is required.');\n      return root.authFetch(endpoint(ENDPOINTS.command),options);\n    },\n    paidMatchRequest: options => {\n      if(typeof root.authFetch!=='function')throw new Error('Current authenticated Office access is required.');\n      return root.authFetch(endpoint(ENDPOINTS.command),options);\n    },\n    capturePaidContext: () => {\n      const frames=(root.__modalStack||[]).filter(f=>f.kind==='weekly-source-imports-v1'&&f._ctxRef?.weeklySourceState===session);\n      const frame=frames.length===1?frames[0]:null,generation=session.openGeneration,current=session.openCurrent,tab=session.activeTab,workspace=session.workspace;\n      const selection=JSON.stringify(workspace?.selected),filters=JSON.stringify(session.sourceFilters),version=workspace?.workspace_version;\n      const authTransport=root.authFetch,commandEndpoint=endpoint(ENDPOINTS.command);\n      return {key:paidScopeKey(workspace,tab,session.sourceFilters),\n        current:()=>!!frame&&(root.__modalStack||[]).includes(frame)&&generation===session.openGeneration&&current===session.openCurrent\n          &&current?.()===true&&tab===session.activeTab&&workspace===session.workspace&&version===session.workspace?.workspace_version\n          &&selection===JSON.stringify(session.workspace?.selected)&&filters===JSON.stringify(session.sourceFilters)\n          &&authTransport===root.authFetch&&commandEndpoint===endpoint(ENDPOINTS.command)};\n    },\n    captureKeepContext: () => {\n      const frame=currentFrame(),generation=session.openGeneration,current=session.openCurrent,tab=session.activeTab;\n"
+        }
+      ]
+    },
+    {
+      "target": "index.html",
+      "inputSha256": "35717ef93c5eba8207c942cef60141ef79545d457891c9da1c32fd0196d0a0e9",
+      "inputGitSha256": "35717ef93c5eba8207c942cef60141ef79545d457891c9da1c32fd0196d0a0e9",
+      "inputCanonicalSha256": "746919def25e7758ff19a47facc0ecd4e48eec6396ff37405f6200429c9c4698",
+      "outputSha256": "eaf8678ba7461fbc2317fc87b6117df9fa979d0c2c727afba02613446683a183",
+      "outputCanonicalSha256": "acd3a95c4b09b3709794ddd74cabe97b0eb8723375e26bf22b33e943b958859a",
+      "canonicalGitAllowed": true,
+      "hunks": [
+        {
+          "oldStartLine": 11,
+          "newStartLine": 11,
+          "oldLineCount": 6,
+          "newLineCount": 7,
+          "before": "  <link rel=\"stylesheet\" href=\"./css/weekly-source-presentation-v1.css?v=20261012-sp10-r1\"/>\n  <link rel=\"stylesheet\" href=\"./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1\"/>\r\n  <link rel=\"stylesheet\" href=\"./css/kept-as-paid.css?v=6f4008916a7901ea7aeec66aa9811c1b935e9cacee67f52f60000e2c67af7c91\"/>\n  <link rel=\"stylesheet\" href=\"./css/invoice-batch-modal.css?v=20260729-invoice-v8-flat-table-r5\"/>\n  <link rel=\"stylesheet\" href=\"./css/candidate-office-v1.css?v=20261005-candidate-header-r2\"/>\n  <link rel=\"stylesheet\" href=\"./css/banking-pay-modal-v2.css?v=20260901-r13\"/>\n",
+          "after": "  <link rel=\"stylesheet\" href=\"./css/weekly-source-presentation-v1.css?v=20261012-sp10-r1\"/>\n  <link rel=\"stylesheet\" href=\"./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1\"/>\r\n  <link rel=\"stylesheet\" href=\"./css/kept-as-paid.css?v=6f4008916a7901ea7aeec66aa9811c1b935e9cacee67f52f60000e2c67af7c91\"/>\n  <link rel=\"stylesheet\" href=\"./css/paid-match.css?v=94fc1bef981b5716d2aae41bf877d9d222eb83be7b57d648173ec7495d6ad805\"/>\n  <link rel=\"stylesheet\" href=\"./css/invoice-batch-modal.css?v=20260729-invoice-v8-flat-table-r5\"/>\n  <link rel=\"stylesheet\" href=\"./css/candidate-office-v1.css?v=20261005-candidate-header-r2\"/>\n  <link rel=\"stylesheet\" href=\"./css/banking-pay-modal-v2.css?v=20260901-r13\"/>\n"
+        },
+        {
+          "oldStartLine": 3066,
+          "newStartLine": 3067,
+          "oldLineCount": 6,
+          "newLineCount": 8,
+          "before": "<script src=\"./js/summary-continuous-grid-v1.js?v=20260905-r8\"></script>\n<script src=\"./js/weekly-source/kept-as-paid-contract.js?v=71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c\"></script>\r\n<script src=\"./js/weekly-source/kept-as-paid-controls.js?v=b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200\"></script>\r\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n",
+          "after": "<script src=\"./js/summary-continuous-grid-v1.js?v=20260905-r8\"></script>\n<script src=\"./js/weekly-source/kept-as-paid-contract.js?v=71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c\"></script>\r\n<script src=\"./js/weekly-source/kept-as-paid-controls.js?v=b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200\"></script>\r\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n"
+        },
+        {
+          "oldStartLine": 3074,
+          "newStartLine": 3077,
+          "oldLineCount": 10,
+          "newLineCount": 10,
+          "before": "<script type=\"module\" src=\"./js/weekly-source/contact-manual-enquiry-controls.mjs?v=20261016-parent-r1\"></script>\n<script src=\"./js/weekly-source/combined-review.js?v=20261013-contact-policy-next-r1&healthroster=20261014-r1&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1\"></script>\n<script src=\"./js/weekly-source/checklist.js?v=20261014-checklist-r3\"></script>\n<script src=\"./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007\"></script>\n<script src=\"./js/weekly-source/office-notifications.js?v=20260923-r2\"></script>\n<script src=\"./js/weekly-source/protected-shift-editor.js?v=20261007-history-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n  <script src=\"./js/weekly-source/workspace-actions.js?v=20261009-contract-checkbox-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f\"></script>\n<script src=\"./js/weekly-source/rule-set-validation.js?v=20261013-r1&healthroster=20261014-r1\"></script>\n<script src=\"./js/weekly-source/rule-settings.js?v=20261013-r1&healthroster=20261014-r1\"></script>\n<script src=\"./js/weekly-source/settings.js?v=20261013-r1&healthroster=20261014-r1\"></script>\n",
+          "after": "<script type=\"module\" src=\"./js/weekly-source/contact-manual-enquiry-controls.mjs?v=20261016-parent-r1\"></script>\n<script src=\"./js/weekly-source/combined-review.js?v=20261013-contact-policy-next-r1&healthroster=20261014-r1&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1\"></script>\n<script src=\"./js/weekly-source/checklist.js?v=20261014-checklist-r3\"></script>\n<script src=\"./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3\"></script>\n<script src=\"./js/weekly-source/office-notifications.js?v=20260923-r2\"></script>\n<script src=\"./js/weekly-source/protected-shift-editor.js?v=20261007-history-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n  <script src=\"./js/weekly-source/workspace-actions.js?v=20261009-contract-checkbox-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447\"></script>\n<script src=\"./js/weekly-source/rule-set-validation.js?v=20261013-r1&healthroster=20261014-r1\"></script>\n<script src=\"./js/weekly-source/rule-settings.js?v=20261013-r1&healthroster=20261014-r1\"></script>\n<script src=\"./js/weekly-source/settings.js?v=20261013-r1&healthroster=20261014-r1\"></script>\n"
+        }
+      ]
+    },
+    {
+      "target": "tests/helpers/kept-office-parent-reverse.mjs",
+      "inputSha256": "9ba4dbcb8eb75c0d2cd3e1b28606f96ab66108b7e3f4a6742684e5967e0960a1",
+      "inputGitSha256": "9ba4dbcb8eb75c0d2cd3e1b28606f96ab66108b7e3f4a6742684e5967e0960a1",
+      "inputCanonicalSha256": "9ba4dbcb8eb75c0d2cd3e1b28606f96ab66108b7e3f4a6742684e5967e0960a1",
+      "outputSha256": "321965510c46a78dd4fe27ffd2f3a44f28aaa3d9a264c76b44c1cb1e31e70cac",
+      "outputCanonicalSha256": "321965510c46a78dd4fe27ffd2f3a44f28aaa3d9a264c76b44c1cb1e31e70cac",
+      "canonicalGitAllowed": false,
+      "hunks": [
+        {
+          "oldStartLine": 1,
+          "newStartLine": 1,
+          "oldLineCount": 9,
+          "newLineCount": 11,
+          "before": "import fs from 'node:fs';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex');\nconst bytes=fs.readFileSync('docs/healthroster-build/proposals/kept-as-paid-office-20261017/PARENT_EDITS.json');\nassert.equal(hash(bytes.toString().replaceAll('\\r\\n','\\n')),'ea6f9a1742f9f580644a270afb2bdb4768b86a2fbf63a0c8943298428882af16');\nexport const keepParents=JSON.parse(bytes);\nexport function reverseKeepParent(file,value){\n const edit=keepParents.edits.find(x=>x.target===file);if(!edit)return value;\n // The original presentation working file uses CRLF while its Git blob uses\n // LF. Both forms have complete independent hashes; no other drift is allowed.\n",
+          "after": "import {reversePaidMatchParent} from './paid-match-office-parent-reverse.mjs';\nimport fs from 'node:fs';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex');\nconst bytes=fs.readFileSync('docs/healthroster-build/proposals/kept-as-paid-office-20261017/PARENT_EDITS.json');\nassert.equal(hash(bytes.toString().replaceAll('\\r\\n','\\n')),'ea6f9a1742f9f580644a270afb2bdb4768b86a2fbf63a0c8943298428882af16');\nexport const keepParents=JSON.parse(bytes);\nexport function reverseKeepParent(file,value){\n value=reversePaidMatchParent(file,value);\n const edit=keepParents.edits.find(x=>x.target===file);if(!edit)return value;\n // The original presentation working file uses CRLF while its Git blob uses\n // LF. Both forms have complete independent hashes; no other drift is allowed.\n"
+        }
+      ]
+    }
+  ],
+  "protectedUnchanged": {
+    "js/main.js": {
+      "savedSha256": "ec01905facc35f501c1f6ccf08161c6f897eb5e3612a17d79e49134aa627e716",
+      "gitSha256": "ec01905facc35f501c1f6ccf08161c6f897eb5e3612a17d79e49134aa627e716",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "BANKING_PAY_BIBLE.md": {
+      "savedSha256": "523a134aea2c277fd8c49eb91bbfcae565f094558f48942f42ca231f47d7ec34",
+      "gitSha256": "df79fed5f84ae6a5352816a717cbf7d7181d5197a97dd505512e3c037f1a85d3",
+      "onlyCompleteCRLFLFTranslation": true
+    },
+    "js/weekly-source/kept-as-paid-controls.js": {
+      "savedSha256": "b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200",
+      "gitSha256": "b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source/kept-as-paid-contract.js": {
+      "savedSha256": "71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c",
+      "gitSha256": "71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source-presentation-v1.js": {
+      "savedSha256": "bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4",
+      "gitSha256": "153aed979d19a3eddb4e4d3b59d95bfa876bdd6b49da37d34f73470294b6e000",
+      "onlyCompleteCRLFLFTranslation": true
+    },
+    "js/timesheet-correction-entry-v1.js": {
+      "savedSha256": "43dd1f6fff00fde6bcff9cbd29bebfce6d321672072ddac15aac00ccf8241d4a",
+      "gitSha256": "43dd1f6fff00fde6bcff9cbd29bebfce6d321672072ddac15aac00ccf8241d4a",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/timesheet-correction-host-v3.js": {
+      "savedSha256": "c70af338ace918d767df26de79fd00aa3605fdc7bb0ff8645ff6ab281265cee5",
+      "gitSha256": "c70af338ace918d767df26de79fd00aa3605fdc7bb0ff8645ff6ab281265cee5",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source/contact-pause-controls.js": {
+      "savedSha256": "0c3050393c0375d51fa0f74a96dd124db45239e962cb7dbaa35b58ce7e9858ff",
+      "gitSha256": "0c3050393c0375d51fa0f74a96dd124db45239e962cb7dbaa35b58ce7e9858ff",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source/contact-manual-enquiry-controls.mjs": {
+      "savedSha256": "3032be0fc47d6c8967bbacc636e7500c06c2c0ca11f3a0657a013c8cf019d615",
+      "gitSha256": "3032be0fc47d6c8967bbacc636e7500c06c2c0ca11f3a0657a013c8cf019d615",
+      "onlyCompleteCRLFLFTranslation": false
+    }
+  },
+  "mainAndBibleUnchanged": true,
+  "sourceOnly": true,
+  "native": "NOT_RUN",
+  "API": "NOT_RUN"
+}

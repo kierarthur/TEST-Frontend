@@ -1,0 +1,815 @@
+{
+  "OfficeInput": "0840c9b0cf53d4f0152c83f0a34bca96ad3345da",
+  "branch": "codex/healthroster-v2-office-13102026",
+  "backend": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+  "currentBackendRoot": "84738fe4057d9d693ccd723eb1835106f1091f57",
+  "authorModel": "gpt-6.1-sol/xhigh",
+  "verdict": "SOURCE_IMPLEMENTED_INDEPENDENT_PEER_PENDING",
+  "targets": [
+    "index.html",
+    "js/weekly-source/workspace-actions.js",
+    "js/weekly-source/import-workspace.js",
+    "tests/helpers/kept-office-parent-reverse.mjs",
+    "js/weekly-source/paid-match-contract.js",
+    "js/weekly-source/paid-match-controls.js",
+    "css/paid-match.css",
+    "tests/helpers/paid-match-office-parent-reverse.mjs",
+    "tests/unit/paid-match-controls.test.mjs",
+    "tests/unit/paid-match-parent.test.mjs",
+    "tests/ui/paid-match-local-browser.mjs"
+  ],
+  "completeParents": 4,
+  "finiteHunks": 18,
+  "protectedUnchanged": {
+    "js/main.js": {
+      "savedSha256": "ec01905facc35f501c1f6ccf08161c6f897eb5e3612a17d79e49134aa627e716",
+      "gitSha256": "ec01905facc35f501c1f6ccf08161c6f897eb5e3612a17d79e49134aa627e716",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "BANKING_PAY_BIBLE.md": {
+      "savedSha256": "523a134aea2c277fd8c49eb91bbfcae565f094558f48942f42ca231f47d7ec34",
+      "gitSha256": "df79fed5f84ae6a5352816a717cbf7d7181d5197a97dd505512e3c037f1a85d3",
+      "onlyCompleteCRLFLFTranslation": true
+    },
+    "js/weekly-source/kept-as-paid-controls.js": {
+      "savedSha256": "b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200",
+      "gitSha256": "b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source/kept-as-paid-contract.js": {
+      "savedSha256": "71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c",
+      "gitSha256": "71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source-presentation-v1.js": {
+      "savedSha256": "bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4",
+      "gitSha256": "153aed979d19a3eddb4e4d3b59d95bfa876bdd6b49da37d34f73470294b6e000",
+      "onlyCompleteCRLFLFTranslation": true
+    },
+    "js/timesheet-correction-entry-v1.js": {
+      "savedSha256": "43dd1f6fff00fde6bcff9cbd29bebfce6d321672072ddac15aac00ccf8241d4a",
+      "gitSha256": "43dd1f6fff00fde6bcff9cbd29bebfce6d321672072ddac15aac00ccf8241d4a",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/timesheet-correction-host-v3.js": {
+      "savedSha256": "c70af338ace918d767df26de79fd00aa3605fdc7bb0ff8645ff6ab281265cee5",
+      "gitSha256": "c70af338ace918d767df26de79fd00aa3605fdc7bb0ff8645ff6ab281265cee5",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source/contact-pause-controls.js": {
+      "savedSha256": "0c3050393c0375d51fa0f74a96dd124db45239e962cb7dbaa35b58ce7e9858ff",
+      "gitSha256": "0c3050393c0375d51fa0f74a96dd124db45239e962cb7dbaa35b58ce7e9858ff",
+      "onlyCompleteCRLFLFTranslation": false
+    },
+    "js/weekly-source/contact-manual-enquiry-controls.mjs": {
+      "savedSha256": "3032be0fc47d6c8967bbacc636e7500c06c2c0ca11f3a0657a013c8cf019d615",
+      "gitSha256": "3032be0fc47d6c8967bbacc636e7500c06c2c0ca11f3a0657a013c8cf019d615",
+      "onlyCompleteCRLFLFTranslation": false
+    }
+  },
+  "validation": {
+    "tests": 192,
+    "originalTestsUnchanged": 170,
+    "newTests": 22,
+    "controlledBrowserCases": 6,
+    "externalRequests": 0,
+    "pageErrors": 0,
+    "credentialPatterns": [
+      "PRIVATE_KEY",
+      "GITHUB_TOKEN",
+      "AWS_ACCESS_KEY",
+      "JWT"
+    ],
+    "credentialFindings": 0,
+    "launcherFormerDevelopmentPaths": 0
+  },
+  "native": "NOT_RUN",
+  "API": "NOT_RUN",
+  "inApp": "NOT_RUN",
+  "release": "NOT_RUN",
+  "publication": "NOT_RUN",
+  "BankOwnedBodiesRead": 0,
+  "lineEndingPolicy": "Only the recorded exact full SAVED, LF or COMPLETE_CRLF bytes are admissible; no partial/content drift.",
+  "files": [
+    {
+      "path": "css/paid-match.css",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "94fc1bef981b5716d2aae41bf877d9d222eb83be7b57d648173ec7495d6ad805",
+          "bytes": 694
+        },
+        {
+          "form": "LF",
+          "sha256": "94fc1bef981b5716d2aae41bf877d9d222eb83be7b57d648173ec7495d6ad805",
+          "bytes": 694
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "26de689972989ba0d7987b9e564416d58722fc6b730596b2e5e28f3c46531fbd",
+          "bytes": 702
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/BACKEND_SOURCE_PINS.json",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "10c4c77b30b7032ced8df7368433d567f971c9975a1d2332993d97ff44282592",
+          "bytes": 8576
+        },
+        {
+          "form": "LF",
+          "sha256": "10c4c77b30b7032ced8df7368433d567f971c9975a1d2332993d97ff44282592",
+          "bytes": 8576
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "1089f623a6f9a640675a7c2747239128248c4457d515c3924f8417d650dbadf2",
+          "bytes": 8724
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/BROWSER_RESULTS.json",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "e560b67eebbe582786f4510431d36e141970cc23629f61d3a9d0821f04424682",
+          "bytes": 2688
+        },
+        {
+          "form": "LF",
+          "sha256": "e560b67eebbe582786f4510431d36e141970cc23629f61d3a9d0821f04424682",
+          "bytes": 2688
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "4cfefaf99d80dd1391f0bc745115d7c29f756404923354962f208e465f0d8a72",
+          "bytes": 2778
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/CONTRACT_DERIVATION.json",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "ad08f5656e65f5aa5dc8cb7980de45b2a94ea78c352248815bcb8da8c406a857",
+          "bytes": 1296
+        },
+        {
+          "form": "LF",
+          "sha256": "ad08f5656e65f5aa5dc8cb7980de45b2a94ea78c352248815bcb8da8c406a857",
+          "bytes": 1296
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "9ae94c23b49c5165ae09a11ae67ff0ac878975a1fb33a793d2670d6758e2d0e2",
+          "bytes": 1316
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/PARENT_EDITS.json",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "11a176b385062e4ead5684e7cb2c70d923d9da440e29eaefc093cf45ecfd3818",
+          "bytes": 45945
+        },
+        {
+          "form": "LF",
+          "sha256": "11a176b385062e4ead5684e7cb2c70d923d9da440e29eaefc093cf45ecfd3818",
+          "bytes": 45945
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "b0c793da04f1936093e95cd8c0507a7a3db1c5774f48b3c1307d85d910500003",
+          "bytes": 46193
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/README.md",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "f0a6474bfac1c306ec6baf43acb10d4c9b32ac5cbda9ff41a7d0ed2755320130",
+          "bytes": 9618
+        },
+        {
+          "form": "LF",
+          "sha256": "f0a6474bfac1c306ec6baf43acb10d4c9b32ac5cbda9ff41a7d0ed2755320130",
+          "bytes": 9618
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "171608c6e58ed8c257b97976e64ce6843a927a88cd1b21a318d81f39a0dc7834",
+          "bytes": 9669
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/SOURCE_EXPECTATIONS.json",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "a5d5802f14cc46410bd10fe41694828a4ac3f9d30aa8950e1e4482f0d14e0f58",
+          "bytes": 1542
+        },
+        {
+          "form": "LF",
+          "sha256": "a5d5802f14cc46410bd10fe41694828a4ac3f9d30aa8950e1e4482f0d14e0f58",
+          "bytes": 1542
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "738c59bed3016ca24b4c5503c93461534861b521eac4bc64bd22110ddf8cea27",
+          "bytes": 1578
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/UNIT_TEST_RESULTS.json",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "c0b2768be8598a893d94447d3080202376c4ab287f6693868b6c85aca26d9ed9",
+          "bytes": 2289
+        },
+        {
+          "form": "LF",
+          "sha256": "c0b2768be8598a893d94447d3080202376c4ab287f6693868b6c85aca26d9ed9",
+          "bytes": 2289
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "41911b8a11838ae14c2e46c87faae34ff78f7665df2d0e52b7a174be4d54d310",
+          "bytes": 2355
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/derive-contract.py",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "bd5ecf2184d4c470a8e835c42be27027a8be4f07c0e47d22364abe7b4c8b1f94",
+          "bytes": 2604
+        },
+        {
+          "form": "LF",
+          "sha256": "bd5ecf2184d4c470a8e835c42be27027a8be4f07c0e47d22364abe7b4c8b1f94",
+          "bytes": 2604
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "44c72d5a0e4da99b4998de90f9774126e976f01a7429c6dae9ee96c8d7288ccb",
+          "bytes": 2620
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/freeze.py",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "22e7ac6236cffbfc9656026551c81b01249c1426c58ffe1eeb273b463635873e",
+          "bytes": 7558
+        },
+        {
+          "form": "LF",
+          "sha256": "22e7ac6236cffbfc9656026551c81b01249c1426c58ffe1eeb273b463635873e",
+          "bytes": 7558
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "5a4f42ab7174e47b7e3957fb68076fa5d39f666c14be0ede476ce75a78874f23",
+          "bytes": 7695
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/inputs/index.html",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "35717ef93c5eba8207c942cef60141ef79545d457891c9da1c32fd0196d0a0e9",
+          "bytes": 99875
+        },
+        {
+          "form": "LF",
+          "sha256": "746919def25e7758ff19a47facc0ecd4e48eec6396ff37405f6200429c9c4698",
+          "bytes": 99871
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "fe738f6def11f8d417c8093d0362cfa68127438fffc0af776f9c97b1850c44d5",
+          "bytes": 102981
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/inputs/js__weekly-source__import-workspace.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007",
+          "bytes": 167927
+        },
+        {
+          "form": "LF",
+          "sha256": "e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007",
+          "bytes": 167927
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "672fee78c23558f6ff626dc0b36e74461593f199b216681bbac8f57e205b48fd",
+          "bytes": 170146
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/inputs/js__weekly-source__workspace-actions.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f",
+          "bytes": 119354
+        },
+        {
+          "form": "LF",
+          "sha256": "2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f",
+          "bytes": 119354
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "880db206d4350ce55e99d67404af1be0fcbd0fada8d548d086a41dcf16bae531",
+          "bytes": 120926
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/inputs/tests__helpers__kept-office-parent-reverse.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "9ba4dbcb8eb75c0d2cd3e1b28606f96ab66108b7e3f4a6742684e5967e0960a1",
+          "bytes": 1210
+        },
+        {
+          "form": "LF",
+          "sha256": "9ba4dbcb8eb75c0d2cd3e1b28606f96ab66108b7e3f4a6742684e5967e0960a1",
+          "bytes": 1210
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "1c4af4ef29bcf62b6acb5fae159fe6b3be424b262dcd1fa829d3aaea0376ec46",
+          "bytes": 1227
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/inputs/tests__unit__kept-as-paid-parent.test.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "a7fb61f3b14bcf9bd3c46949a60fc52ca88276e9ab6b92e5adab39e325433c00",
+          "bytes": 10058
+        },
+        {
+          "form": "LF",
+          "sha256": "a7fb61f3b14bcf9bd3c46949a60fc52ca88276e9ab6b92e5adab39e325433c00",
+          "bytes": 10058
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "13c9643539125b45d6dbe4f0f621aa67bd8c9050abed03793d4743a383bb738d",
+          "bytes": 10125
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/paid-match-host.jsinc",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "579307ba13e015a793065a6080badd80870ed3911048a6cb3ced667b25876a69",
+          "bytes": 4643
+        },
+        {
+          "form": "LF",
+          "sha256": "579307ba13e015a793065a6080badd80870ed3911048a6cb3ced667b25876a69",
+          "bytes": 4643
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "eb71987f6473bc64a8163bcba7dc77c3b1a58f27f500ca8e7b793c82cf3e6745",
+          "bytes": 4693
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/payload/css/paid-match.css",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "94fc1bef981b5716d2aae41bf877d9d222eb83be7b57d648173ec7495d6ad805",
+          "bytes": 694
+        },
+        {
+          "form": "LF",
+          "sha256": "94fc1bef981b5716d2aae41bf877d9d222eb83be7b57d648173ec7495d6ad805",
+          "bytes": 694
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "26de689972989ba0d7987b9e564416d58722fc6b730596b2e5e28f3c46531fbd",
+          "bytes": 702
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/payload/index.html",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "eaf8678ba7461fbc2317fc87b6117df9fa979d0c2c727afba02613446683a183",
+          "bytes": 100263
+        },
+        {
+          "form": "LF",
+          "sha256": "acd3a95c4b09b3709794ddd74cabe97b0eb8723375e26bf22b33e943b958859a",
+          "bytes": 100259
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "a8da1947d38d1df215548ed7d50f2e7621d3bcde05790f975cb9930288ac4334",
+          "bytes": 103372
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/payload/js/weekly-source/import-workspace.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3",
+          "bytes": 169859
+        },
+        {
+          "form": "LF",
+          "sha256": "2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3",
+          "bytes": 169859
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "3689a4d304b2f137ba2e1b16b6b1fe458627a8ff45a4dac6a5306121cad1a079",
+          "bytes": 172100
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/payload/js/weekly-source/paid-match-contract.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415",
+          "bytes": 6218
+        },
+        {
+          "form": "LF",
+          "sha256": "7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415",
+          "bytes": 6218
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "36fcdee57c178a5f02120779b280f0dda9da0ab1d7405e7be3759f1a65ab5b13",
+          "bytes": 6274
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/payload/js/weekly-source/paid-match-controls.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83",
+          "bytes": 19421
+        },
+        {
+          "form": "LF",
+          "sha256": "f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83",
+          "bytes": 19421
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "c924fbeff2df422d819d67a9e16479e02702d6466801ccd11a98dcc4cf0ad558",
+          "bytes": 19494
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/payload/js/weekly-source/workspace-actions.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447",
+          "bytes": 126091
+        },
+        {
+          "form": "LF",
+          "sha256": "3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447",
+          "bytes": 126091
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "5503f4fd86309fc7273888604620e964122b0c5004f4728bd60355afa98c75e9",
+          "bytes": 127730
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/payload/tests/helpers/kept-office-parent-reverse.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "321965510c46a78dd4fe27ffd2f3a44f28aaa3d9a264c76b44c1cb1e31e70cac",
+          "bytes": 1332
+        },
+        {
+          "form": "LF",
+          "sha256": "321965510c46a78dd4fe27ffd2f3a44f28aaa3d9a264c76b44c1cb1e31e70cac",
+          "bytes": 1332
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "e81ecbef6c7964fba586ecb2b821fb33fdd9c3a7a667b3df9ae5c9a62a26c6e0",
+          "bytes": 1351
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/screenshots/NONE-1366.png",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "9cc327f12b772fcc0587196ad2fd94f289aee2a2aa6a77f2588a3d81358af5ac",
+          "bytes": 25874
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/screenshots/NORMAL-390.png",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "4f13867e730cc8cd281c17674ee71a92d188d737498c315bc2a15ae582096c1c",
+          "bytes": 22245
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/seal.py",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "164fce220c98c362fe6c0280e33937dca1b9e74401fa7599df46526f0daf5166",
+          "bytes": 5244
+        },
+        {
+          "form": "LF",
+          "sha256": "164fce220c98c362fe6c0280e33937dca1b9e74401fa7599df46526f0daf5166",
+          "bytes": 5244
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "ce6d0e4b28ce8be93f0f965ac2c50e3abb275a35ee6ec7029ba0fd194c90a3d9",
+          "bytes": 5311
+        }
+      ]
+    },
+    {
+      "path": "docs/healthroster-build/proposals/paid-overlap-office-20261017/unit-tests.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "33ee3da0730d8e3e462156cea49e5015d3977854b7c582b70ec9cd68050dfe98",
+          "bytes": 1742
+        },
+        {
+          "form": "LF",
+          "sha256": "33ee3da0730d8e3e462156cea49e5015d3977854b7c582b70ec9cd68050dfe98",
+          "bytes": 1742
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "2154bd5f92b17cac08a3760868f0e2cb1d717b423641f2b4347d10f7e63aefdc",
+          "bytes": 1749
+        }
+      ]
+    },
+    {
+      "path": "index.html",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "eaf8678ba7461fbc2317fc87b6117df9fa979d0c2c727afba02613446683a183",
+          "bytes": 100263
+        },
+        {
+          "form": "LF",
+          "sha256": "acd3a95c4b09b3709794ddd74cabe97b0eb8723375e26bf22b33e943b958859a",
+          "bytes": 100259
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "a8da1947d38d1df215548ed7d50f2e7621d3bcde05790f975cb9930288ac4334",
+          "bytes": 103372
+        }
+      ]
+    },
+    {
+      "path": "js/weekly-source/import-workspace.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3",
+          "bytes": 169859
+        },
+        {
+          "form": "LF",
+          "sha256": "2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3",
+          "bytes": 169859
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "3689a4d304b2f137ba2e1b16b6b1fe458627a8ff45a4dac6a5306121cad1a079",
+          "bytes": 172100
+        }
+      ]
+    },
+    {
+      "path": "js/weekly-source/paid-match-contract.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415",
+          "bytes": 6218
+        },
+        {
+          "form": "LF",
+          "sha256": "7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415",
+          "bytes": 6218
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "36fcdee57c178a5f02120779b280f0dda9da0ab1d7405e7be3759f1a65ab5b13",
+          "bytes": 6274
+        }
+      ]
+    },
+    {
+      "path": "js/weekly-source/paid-match-controls.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83",
+          "bytes": 19421
+        },
+        {
+          "form": "LF",
+          "sha256": "f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83",
+          "bytes": 19421
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "c924fbeff2df422d819d67a9e16479e02702d6466801ccd11a98dcc4cf0ad558",
+          "bytes": 19494
+        }
+      ]
+    },
+    {
+      "path": "js/weekly-source/workspace-actions.js",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447",
+          "bytes": 126091
+        },
+        {
+          "form": "LF",
+          "sha256": "3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447",
+          "bytes": 126091
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "5503f4fd86309fc7273888604620e964122b0c5004f4728bd60355afa98c75e9",
+          "bytes": 127730
+        }
+      ]
+    },
+    {
+      "path": "tests/helpers/kept-office-parent-reverse.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "321965510c46a78dd4fe27ffd2f3a44f28aaa3d9a264c76b44c1cb1e31e70cac",
+          "bytes": 1332
+        },
+        {
+          "form": "LF",
+          "sha256": "321965510c46a78dd4fe27ffd2f3a44f28aaa3d9a264c76b44c1cb1e31e70cac",
+          "bytes": 1332
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "e81ecbef6c7964fba586ecb2b821fb33fdd9c3a7a667b3df9ae5c9a62a26c6e0",
+          "bytes": 1351
+        }
+      ]
+    },
+    {
+      "path": "tests/helpers/paid-match-office-parent-reverse.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "7cea48341e88bc4863a0c43c692c058774d1f6808e90891b47f8dca0afeb870c",
+          "bytes": 1339
+        },
+        {
+          "form": "LF",
+          "sha256": "7cea48341e88bc4863a0c43c692c058774d1f6808e90891b47f8dca0afeb870c",
+          "bytes": 1339
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "66336b78df9c92005be386819f9e8af0d6a73dd24cd05a817828c139f123d655",
+          "bytes": 1355
+        }
+      ]
+    },
+    {
+      "path": "tests/ui/paid-match-local-browser.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "8ba1d728022b822576ef3a69ee2181442ed9b114d1f7d9283cfb1a4d4723c0bd",
+          "bytes": 19248
+        },
+        {
+          "form": "LF",
+          "sha256": "8ba1d728022b822576ef3a69ee2181442ed9b114d1f7d9283cfb1a4d4723c0bd",
+          "bytes": 19248
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "4dd5f0b2999fb1bb757f1a19ebe698c7f50642988772a338f44c9a682c1a10b1",
+          "bytes": 19317
+        }
+      ]
+    },
+    {
+      "path": "tests/unit/paid-match-controls.test.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "c72de39395b9ea5c98a5d57b5aa7c644cf4a3a3e6f44700f3655ec8ad15b1742",
+          "bytes": 12556
+        },
+        {
+          "form": "LF",
+          "sha256": "c72de39395b9ea5c98a5d57b5aa7c644cf4a3a3e6f44700f3655ec8ad15b1742",
+          "bytes": 12556
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "da9f7e639d1cdb3fa47a0a56ba65899782cd13d97ea4d9984ce88d7d43eea4d7",
+          "bytes": 12602
+        }
+      ]
+    },
+    {
+      "path": "tests/unit/paid-match-parent.test.mjs",
+      "exactCheckoutForms": [
+        {
+          "form": "SAVED",
+          "sha256": "16795904b51b2ec298b12aeb12c55a6fa23c381a7c186b99cc4affaa34522551",
+          "bytes": 9923
+        },
+        {
+          "form": "LF",
+          "sha256": "16795904b51b2ec298b12aeb12c55a6fa23c381a7c186b99cc4affaa34522551",
+          "bytes": 9923
+        },
+        {
+          "form": "COMPLETE_CRLF",
+          "sha256": "0dda4a284336f9b3f9e23a3602ac83982da6a5c95c2e3b9da9617f0069a7e441",
+          "bytes": 9965
+        }
+      ]
+    }
+  ]
+}

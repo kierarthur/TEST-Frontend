@@ -1,0 +1,148 @@
+{
+  "OfficeInput": "0840c9b0cf53d4f0152c83f0a34bca96ad3345da",
+  "correctedBackend": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+  "correctedComposedSelectionSha256": "8b2c91e61a262f592d7ecae6b437f23d7277a5e565c7e4cc70076c0e21719c74",
+  "sources": [
+    {
+      "commit": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+      "path": "docs/healthroster-build/proposals/same-separate-counter-forward-20261017/payload/broker/src/weekly-source/correct-final-source-orchestrator.mjs",
+      "target": "broker/src/weekly-source/correct-final-source-orchestrator.mjs",
+      "sha256": "e7d251bb5a93cdab7f50c76d8cccf87635d0a2a39565459e2723a7bd7bfe2672",
+      "bytes": 47431
+    },
+    {
+      "commit": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+      "path": "docs/healthroster-build/proposals/same-separate-counter-forward-20261017/payload/broker/src/weekly-source/upload-publication-owner.mjs",
+      "target": "broker/src/weekly-source/upload-publication-owner.mjs",
+      "sha256": "6a086ab44449c9173c0b62e9c9e3a23bd63bf8bbd0bd39bf433e56cdf9bd5e33",
+      "bytes": 58068
+    },
+    {
+      "commit": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+      "path": "docs/healthroster-build/proposals/same-separate-counter-forward-20261017/payload/supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/006_public_weekly_source_office_recheck_begin_v1.sqlinc",
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/006_public_weekly_source_office_recheck_begin_v1.sqlinc",
+      "sha256": "2aa0ea9059b7226134f0778f37fa5dc90ace78ce5e80af6e6e08a1aafdc5ccbd",
+      "bytes": 21833
+    },
+    {
+      "commit": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+      "path": "docs/healthroster-build/proposals/same-separate-counter-forward-20261017/payload/supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/009_public_weekly_source_upload_context_v1.sqlinc",
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/009_public_weekly_source_upload_context_v1.sqlinc",
+      "sha256": "bca137c5d0f189082d0ea609f7410c7eb393b7db0106395b8898e708a739d633",
+      "bytes": 32181
+    },
+    {
+      "commit": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+      "path": "docs/healthroster-build/proposals/same-separate-counter-forward-20261017/payload/supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/026_private_weekly_source_paid_match_question_v1.sqlinc",
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/026_private_weekly_source_paid_match_question_v1.sqlinc",
+      "sha256": "9fc6cc1c6b34fe5f240766cf3987f83a25a1e8c67a5609bd8b13a61b1559caf2",
+      "bytes": 10449
+    },
+    {
+      "commit": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+      "path": "docs/healthroster-build/proposals/same-separate-counter-forward-20261017/payload/supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/039_private_weekly_source_correct_final_office_preview_v1.sqlinc",
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/039_private_weekly_source_correct_final_office_preview_v1.sqlinc",
+      "sha256": "c7dcd26f34a6472d7ebafd59bf03c8078cfffad2fde1182a3bbe1bf45c5549ae",
+      "bytes": 19905
+    },
+    {
+      "commit": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+      "path": "docs/healthroster-build/proposals/same-separate-counter-forward-20261017/payload/supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/04_complete_current_review.sqlinc",
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/04_complete_current_review.sqlinc",
+      "sha256": "4e5918839b4a0ab8f17ff026ea66773d1f91fa3bbf07c66d5c2c7693e41c2b85",
+      "bytes": 13723
+    },
+    {
+      "commit": "9c791fa971c97a198c09c4e3579c01b589486c14",
+      "path": "docs/healthroster-build/proposals/same-separate-health-current-successor-20261017/payload/broker/src/weekly-source/same-separate-command.mjs",
+      "sha256": "b2a67e74a311f3ae43f1f25053a2f5754f68b91df7ac7671b7693187afedd20e",
+      "bytes": 4978
+    },
+    {
+      "commit": "9c791fa971c97a198c09c4e3579c01b589486c14",
+      "path": "docs/healthroster-build/proposals/same-separate-health-current-successor-20261017/payload/broker/src/weekly-source/routes.js",
+      "sha256": "67a369464490aafe4035c06adb1c06d7e4e367d12dd93f05567a03b7bcf61786",
+      "bytes": 73120
+    },
+    {
+      "commit": "9c791fa971c97a198c09c4e3579c01b589486c14",
+      "path": "docs/healthroster-build/proposals/same-separate-health-current-successor-20261017/forward/037_public_weekly_source_office_workspace_v1.sqlinc",
+      "sha256": "93dc90bca45e476cde4a74073ab11bf8864ccdca294269a39d13cb56eba16a21",
+      "bytes": 131964
+    },
+    {
+      "commit": "ef3d20f4513a6f9fd1aa5e4cf6a69d258f6cd87c",
+      "path": "supabase/repeatable/16102026_1205_weekly_contact_20_producer_completion/39_native_submission_callers.sqlinc",
+      "physicalSha256": "1d1c587b17750260804553b16aa46cd6ec2ee0138fddb332a3a2ae44480c9074",
+      "selectedDeclaration": "public.weekly_source_projection_publish_atomic_v1(jsonb)",
+      "declarationSha256": "743c2b9cca40fdb4957e6b451d2d02116f546b1e8a259057e39b3f6f43470097",
+      "qualification": "Complete Health native wrapper read; its exact CURRENT/publish response shapes bind terminal result validation. No Banking implementation body selected."
+    }
+  ],
+  "policy": {
+    "path": "D:/Development/GitHub/cloudtms-backend/codex_outputs/claude-stage2-continuation-20260925/HEALTHROSTER_PLAN_V2_CONSOLIDATION_13102026/HEALTHROSTER_SELFBILL_IMPLEMENTATION_PLAN_V2/03_IMPLEMENTATION_PLAN.md",
+    "rawSha256": "b9f5b95393bf2f4c338da8110895dc7f80cb896f389aa0f27ea1c01468aef2d3",
+    "lines": [
+      267,
+      277,
+      752
+    ],
+    "approvedOptions": [
+      "Separate shift",
+      "Same shift (already billed)"
+    ],
+    "scope": "SOURCE_PAID_OVERLAP_NOT_PHYSICAL_CONTRACT_SAME_TIMESHEET"
+  },
+  "Bible": {
+    "freshMain": "8ea8c8af0435702d3bf032b3197fe0e0eda64d1c",
+    "savedSha256": "523a134aea2c277fd8c49eb91bbfcae565f094558f48942f42ca231f47d7ec34",
+    "GitSha256": "df79fed5f84ae6a5352816a717cbf7d7181d5197a97dd505512e3c037f1a85d3",
+    "completeOnlyCRLFLFTranslation": true,
+    "priorCompleteReadAuthorityUnchanged": true,
+    "currentControllingRulesReread": true
+  },
+  "native": "NOT_RUN",
+  "API": "NOT_RUN",
+  "inApp": "NOT_RUN",
+  "BankOwnedBodiesRead": 0,
+  "currentRootCommit": "84738fe4057d9d693ccd723eb1835106f1091f57",
+  "currentRootExactSelectedConsumers": [
+    {
+      "target": "broker/src/weekly-source/correct-final-source-orchestrator.mjs",
+      "sha256": "e7d251bb5a93cdab7f50c76d8cccf87635d0a2a39565459e2723a7bd7bfe2672"
+    },
+    {
+      "target": "broker/src/weekly-source/upload-publication-owner.mjs",
+      "sha256": "6a086ab44449c9173c0b62e9c9e3a23bd63bf8bbd0bd39bf433e56cdf9bd5e33"
+    },
+    {
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/006_public_weekly_source_office_recheck_begin_v1.sqlinc",
+      "sha256": "2aa0ea9059b7226134f0778f37fa5dc90ace78ce5e80af6e6e08a1aafdc5ccbd"
+    },
+    {
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/009_public_weekly_source_upload_context_v1.sqlinc",
+      "sha256": "bca137c5d0f189082d0ea609f7410c7eb393b7db0106395b8898e708a739d633"
+    },
+    {
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/026_private_weekly_source_paid_match_question_v1.sqlinc",
+      "sha256": "9fc6cc1c6b34fe5f240766cf3987f83a25a1e8c67a5609bd8b13a61b1559caf2"
+    },
+    {
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/039_private_weekly_source_correct_final_office_preview_v1.sqlinc",
+      "sha256": "c7dcd26f34a6472d7ebafd59bf03c8078cfffad2fde1182a3bbe1bf45c5549ae"
+    },
+    {
+      "target": "supabase/repeatable/17102026_0335_weekly_source_paid_match_correction_receipt/04_complete_current_review.sqlinc",
+      "sha256": "4e5918839b4a0ab8f17ff026ea66773d1f91fa3bbf07c66d5c2c7693e41c2b85"
+    },
+    {
+      "target": "broker/src/weekly-source/same-separate-command.mjs",
+      "sha256": "b2a67e74a311f3ae43f1f25053a2f5754f68b91df7ac7671b7693187afedd20e"
+    },
+    {
+      "target": "broker/src/weekly-source/routes.js",
+      "sha256": "67a369464490aafe4035c06adb1c06d7e4e367d12dd93f05567a03b7bcf61786"
+    }
+  ],
+  "rootNativeApiClaim": "NOT_RUN_BY_THIS_OFFICE_LANE"
+}

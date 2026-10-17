@@ -1,0 +1,50 @@
+  function openPaidMatch(detail, correctionHost) {
+    const api=root.CloudTMSPaidMatchV1,workspace=workspaceApi(),user=typeof SESSION!=='undefined'?SESSION?.user:null;
+    const stack=[...(root.__modalStack||[])],parent=stack.at(-1),actor=user?.id;
+    if(!api||!actor||!parent||asText(user.role).toLowerCase()!=='admin'||user.is_active===false||user.active===false
+      ||typeof workspace?.paidMatchRequest!=='function'||typeof workspace?.capturePaidContext!=='function')return false;
+    const binding=workspace.capturePaidContext();if(!binding.current())return false;
+    if(correctionHost?parent.kind!=='weekly-source-correct-final-v1':parent.kind!=='weekly-source-imports-v1')return false;
+    const actorState=()=>{const now=typeof SESSION!=='undefined'?SESSION?.user:null;return JSON.stringify({id:now?.id,role:now?.role,is_active:now?.is_active,active:now?.active});};
+    const actorPin=actorState(),q=detail?.paid_match_question,scope=workspace._session?.workspace?.selected;
+    try{root.CloudTMSPaidMatchContractV1.decodePaidMatchQuestion(q);if(!correctionHost&&scope?.projection_publication_id&&scope.projection_publication_id!==q.projection_publication_id&&!detail.recovered) return false;}catch{return false;}
+    let child=null,controller,returned=false;
+    const parentCurrent=()=>binding.current()&&(!correctionHost||correctionHost.current())&&workspaceApi()===workspace&&(typeof SESSION!=='undefined'?SESSION?.user:null)===user&&actorState()===actorPin;
+    const current=()=>{const now=root.__modalStack||[];return !!child&&now.length===stack.length+1&&stack.every((f,i)=>now[i]===f)&&now.at(-1)===child&&parentCurrent();};
+    const parentReturned=()=>{const now=root.__modalStack||[];return now.length===stack.length&&stack.every((f,i)=>now[i]===f)&&parentCurrent();};
+    const onReturn=()=>{
+      if(returned||!parentReturned())return;returned=true;const accepted=controller.snapshot().confirmed;if(!accepted)return;
+      if(accepted.kind==='ORDINARY'){Promise.resolve(workspace.refresh?.()).catch(()=>{});return;}
+      if(correctionHost){rerender('weekly-source-correct-final-v1');return;}
+      // Recovery from an original Source scope adopts only the genuine returned
+      // native review context. It never opens a fabricated Ready/apply result.
+      const c=accepted.review.review_context;
+      openCorrectFinal({correction_payload:{source_cycle_id:c.source_cycle_id,authority_scope_kind:c.authority_scope_kind,
+        report_scope_id:c.report_scope_id,expected_current_final_revision_id:c.expected_current_final_revision_id,
+        expected_final_manifest_hash:c.expected_final_manifest_hash,idempotency_key:c.review_idempotency_key+':office-resume'},
+        source_label:'Reviewed replacement Source'},accepted.review);
+    };
+    try{controller=api.create({actorId:actor,scopeKey:binding.key,question:q,
+      display:Object.fromEntries(['candidate','client','shift','system_hours'].map(k=>[k,asText(detail[k])])),
+      correctionContext:correctionHost?.context||detail.correction_context||null,
+      request:options=>workspace.paidMatchRequest(options),isCurrent:current,
+      onConfirmed:accepted=>{if(current()&&correctionHost&&accepted.kind==='CORRECTION')correctionHost.adopt(accepted.review);}});}catch{return false;}
+    const kind='weekly-source-paid-match-v1';
+    const render=()=>'<div class="ws-child" data-wsa-screen="paid-match"><div data-paid-controls-host></div><div class="ws-child-actions"><button type="button" class="btn btn-outline" data-paid-back>Back</button></div></div>';
+    const wire=()=>{
+      const host=root.document?.querySelector('[data-wsa-screen="paid-match"]');if(!host||host.dataset.wsaWired==='1')return;
+      host.dataset.wsaWired='1';child=currentChild(kind);if(!current())return;
+      const dispose=controller.mount(host.querySelector('[data-paid-controls-host]')),previous=child._detachGlobal;
+      child._detachGlobal=function(...args){try{dispose();}finally{previous?.apply(this,args);setTimeout(onReturn,0);}};
+      host.querySelector('[data-paid-back]')?.addEventListener('click',()=>{if(!current())return;markCompletedChildClean();closeChild();onReturn();});
+    };
+    return openChild({title:'Confirm paid shift match',kind,render,wire});
+  }
+
+  function openPaidMatchRecovery(){
+    const actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;let r;
+    try{r=root.CloudTMSPaidMatchV1?.record(actor);}catch{return false;}
+    if(!r||workspaceApi()?.capturePaidContext?.().key!==r.scope_key)return false;
+    return openPaidMatch({...r.labels,paid_match_question:r.question,correction_context:r.correction_context,recovered:true});
+  }
+

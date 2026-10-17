@@ -348,6 +348,9 @@
 
   function normaliseCorrectFinalPreview(payload) {
     const raw = asObject(payload);
+    const paidQuestions=raw.paid_match_questions===undefined?[]:root.CloudTMSPaidMatchV1.questions(raw.paid_match_questions);
+    if(paidQuestions.some(row=>row.paid_match_question.state!=='READY')||(paidQuestions.length&&raw.status!=='BLOCKED'))
+      throw new Error('The current paid-shift comparison could not be confirmed. Retry the original review.');
     const changes = asArray(raw.changes).map((rowValue) => {
       const row = asObject(rowValue);
       return {
@@ -374,14 +377,16 @@
       blockers,
       confirmation_text: plainMessage(raw.confirmation_text, 'I understand this will replace the current final version.'),
       review_context: asObject(raw.review_context),
-      apply_context: asObject(raw.apply_context)
+      apply_context: asObject(raw.apply_context),
+      paid_match_questions: paidQuestions
     };
   }
 
   function correctFinalTable(model, activeTab) {
     if (activeTab === 'blocked') {
       const rows = model.blockers.map((row) => `<tr><td>${escapeHtml(row.candidate)}</td><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.problem)}</td><td>${escapeHtml(row.action)}</td></tr>`).join('');
-      return `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Candidate</th><th>Day/date</th><th>Problem</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="ws-empty">Nothing is blocking this correction.</td></tr>'}</tbody></table></div>`;
+      const paid=(model.paid_match_questions||[]).map((row,index)=>`<div class="ws-notice"><strong>${escapeHtml(row.candidate)} · ${escapeHtml(row.client)} · ${escapeHtml(row.shift)}</strong><p>${escapeHtml(row.system_hours)}</p>${row.paid_match_question.state==='READY'?`<button type="button" class="btn btn-outline" data-wsa-paid-question="${index}">Confirm paid shift match</button>`:'<p>The current paid-shift comparison is unavailable. Recheck current Source and payment authority.</p>'}</div>`).join('');
+      return `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Candidate</th><th>Day/date</th><th>Problem</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="ws-empty">Nothing is blocking this correction.</td></tr>'}</tbody></table>${paid}</div>`;
     }
     const rows = model.changes.map((row) => `<tr><td>${escapeHtml(row.candidate)}</td><td>${escapeHtml(row.day_date)}</td><td>${escapeHtml(row.current_final)}</td><td>${escapeHtml(row.replacement)}</td><td>${escapeHtml(row.result)}</td></tr>`).join('');
     return `<div class="ws-child-scroll"><table class="grid mini ws-child-table"><thead><tr><th>Candidate</th><th>Day/date</th><th>Current final</th><th>Replacement</th><th>Result</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="ws-empty">No changed rows were found.</td></tr>'}</tbody></table></div>`;
@@ -745,12 +750,13 @@
       && (kind === 'NHSP_REPORT_SCOPE') === !!asText(raw.report_scope_id);
   }
 
-  function openCorrectFinal(payload) {
+  function openCorrectFinal(payload, resumedReview) {
     const model = normaliseCorrectFinal(payload);
     if (!correctFinalAuthorityReady(model.base_payload)) {
       return openDetail({ detail: { problem: 'This action is not available yet.', guidance: 'Recheck the Weekly source screen and try again.' } }, 'View details');
     }
     const state = { file: null, filename: '', phase: 'choose', preview: null, active_tab: 'changes', reason: '', confirmed: false, busy: false, error: '', recheck_count: 0, pendingReview: null, pendingApply: null };
+    if(resumedReview){state.preview=normaliseCorrectFinalPreview(resumedReview);state.phase='reviewed';state.active_tab=state.preview.blockers.length?'blocked':'changes';}
     const kind = 'weekly-source-correct-final-v1';
     const initiatingActor = typeof SESSION !== 'undefined' ? SESSION?.user?.id : null;
     let initiatingFrame = null;
@@ -788,8 +794,9 @@
           state.pendingReview = JSON.parse(JSON.stringify(request));
           const response = await workspaceApi()?.issueCommand?.('PREVIEW_CORRECT_FINAL_SOURCE', state.pendingReview);
           if (!callerCurrent()) return;
+          const acceptedPreview=normaliseCorrectFinalPreview(response);
           state.pendingReview = null; state.sourceAdmissionBusy = false;
-          state.preview = normaliseCorrectFinalPreview(response);
+          state.preview = acceptedPreview;
           state.phase = 'reviewed';
           state.active_tab = state.preview.blockers.length ? 'blocked' : 'changes';
           state.confirmed = false; state.reason = ''; state.busy = false; rerender(kind);
@@ -807,6 +814,15 @@
         rerender(kind);
       });
       host.querySelector('[data-wsa-review-correction]')?.addEventListener('click', review);
+      host.querySelectorAll('[data-wsa-paid-question]').forEach(button=>button.addEventListener('click',()=>{
+        if(!callerCurrent()||state.busy||state.pendingReview||state.pendingApply)return;
+        let expected=state.preview;const row=expected?.paid_match_questions?.[Number(button.dataset.wsaPaidQuestion)];
+        if(!row||row.paid_match_question.state!=='READY')return;
+        openPaidMatch(row,{context:expected.review_context,current:()=>state.preview===expected,
+          adopt:response=>{const next=normaliseCorrectFinalPreview(response);state.preview=next;expected=next;
+            state.phase='reviewed';state.active_tab=next.blockers.length?'blocked':'changes';state.confirmed=false;
+            state.reason='';state.pendingReview=null;state.pendingApply=null;state.error='';}});
+      }));
       host.querySelectorAll('[data-wsa-correction-tab]').forEach((button) => button.addEventListener('click', () => {
         state.active_tab = button.dataset.wsaCorrectionTab === 'blocked' ? 'blocked' : 'changes';
         rerender(kind);
@@ -1392,6 +1408,56 @@
     return openChild({title:'New enquiry',kind,render,wire});
   }
 
+  function openPaidMatch(detail, correctionHost) {
+    const api=root.CloudTMSPaidMatchV1,workspace=workspaceApi(),user=typeof SESSION!=='undefined'?SESSION?.user:null;
+    const stack=[...(root.__modalStack||[])],parent=stack.at(-1),actor=user?.id;
+    if(!api||!actor||!parent||asText(user.role).toLowerCase()!=='admin'||user.is_active===false||user.active===false
+      ||typeof workspace?.paidMatchRequest!=='function'||typeof workspace?.capturePaidContext!=='function')return false;
+    const binding=workspace.capturePaidContext();if(!binding.current())return false;
+    if(correctionHost?parent.kind!=='weekly-source-correct-final-v1':parent.kind!=='weekly-source-imports-v1')return false;
+    const actorState=()=>{const now=typeof SESSION!=='undefined'?SESSION?.user:null;return JSON.stringify({id:now?.id,role:now?.role,is_active:now?.is_active,active:now?.active});};
+    const actorPin=actorState(),q=detail?.paid_match_question,scope=workspace._session?.workspace?.selected;
+    try{root.CloudTMSPaidMatchContractV1.decodePaidMatchQuestion(q);if(!correctionHost&&scope?.projection_publication_id&&scope.projection_publication_id!==q.projection_publication_id&&!detail.recovered) return false;}catch{return false;}
+    let child=null,controller,returned=false;
+    const parentCurrent=()=>binding.current()&&(!correctionHost||correctionHost.current())&&workspaceApi()===workspace&&(typeof SESSION!=='undefined'?SESSION?.user:null)===user&&actorState()===actorPin;
+    const current=()=>{const now=root.__modalStack||[];return !!child&&now.length===stack.length+1&&stack.every((f,i)=>now[i]===f)&&now.at(-1)===child&&parentCurrent();};
+    const parentReturned=()=>{const now=root.__modalStack||[];return now.length===stack.length&&stack.every((f,i)=>now[i]===f)&&parentCurrent();};
+    const onReturn=()=>{
+      if(returned||!parentReturned())return;returned=true;const accepted=controller.snapshot().confirmed;if(!accepted)return;
+      if(accepted.kind==='ORDINARY'){Promise.resolve(workspace.refresh?.()).catch(()=>{});return;}
+      if(correctionHost){rerender('weekly-source-correct-final-v1');return;}
+      // Recovery from an original Source scope adopts only the genuine returned
+      // native review context. It never opens a fabricated Ready/apply result.
+      const c=accepted.review.review_context;
+      openCorrectFinal({correction_payload:{source_cycle_id:c.source_cycle_id,authority_scope_kind:c.authority_scope_kind,
+        report_scope_id:c.report_scope_id,expected_current_final_revision_id:c.expected_current_final_revision_id,
+        expected_final_manifest_hash:c.expected_final_manifest_hash,idempotency_key:c.review_idempotency_key+':office-resume'},
+        source_label:'Reviewed replacement Source'},accepted.review);
+    };
+    try{controller=api.create({actorId:actor,scopeKey:binding.key,question:q,
+      display:Object.fromEntries(['candidate','client','shift','system_hours'].map(k=>[k,asText(detail[k])])),
+      correctionContext:correctionHost?.context||detail.correction_context||null,
+      request:options=>workspace.paidMatchRequest(options),isCurrent:current,
+      onConfirmed:accepted=>{if(current()&&correctionHost&&accepted.kind==='CORRECTION')correctionHost.adopt(accepted.review);}});}catch{return false;}
+    const kind='weekly-source-paid-match-v1';
+    const render=()=>'<div class="ws-child" data-wsa-screen="paid-match"><div data-paid-controls-host></div><div class="ws-child-actions"><button type="button" class="btn btn-outline" data-paid-back>Back</button></div></div>';
+    const wire=()=>{
+      const host=root.document?.querySelector('[data-wsa-screen="paid-match"]');if(!host||host.dataset.wsaWired==='1')return;
+      host.dataset.wsaWired='1';child=currentChild(kind);if(!current())return;
+      const dispose=controller.mount(host.querySelector('[data-paid-controls-host]')),previous=child._detachGlobal;
+      child._detachGlobal=function(...args){try{dispose();}finally{previous?.apply(this,args);setTimeout(onReturn,0);}};
+      host.querySelector('[data-paid-back]')?.addEventListener('click',()=>{if(!current())return;markCompletedChildClean();closeChild();onReturn();});
+    };
+    return openChild({title:'Confirm paid shift match',kind,render,wire});
+  }
+
+  function openPaidMatchRecovery(){
+    const actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;let r;
+    try{r=root.CloudTMSPaidMatchV1?.record(actor);}catch{return false;}
+    if(!r||workspaceApi()?.capturePaidContext?.().key!==r.scope_key)return false;
+    return openPaidMatch({...r.labels,paid_match_question:r.question,correction_context:r.correction_context,recovered:true});
+  }
+
   function openKeepAsPaid(detail){
     const keep=root.CloudTMSKeptAsPaidV1,workspace=workspaceApi(),actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;
     const stack=[...(root.__modalStack||[])],parent=stack.at(-1),context=root.modalCtx;
@@ -1502,6 +1568,7 @@
     if (label === 'Retry recheck' && detail.command === 'RECHECK_SOURCE' && detail.payload?.request_id) return openCommand(detail);
     if(label==='Send to Pay Queries'||label==='Send back to Queries')return openManualReview({...asObject(detail.payload),...asObject(detail.context)});
     if(label==='View'&&detail.payload?.upload_id)return openUploadDetail(detail.payload);
+    if (label === 'Confirm paid shift match') return openPaidMatch(detail.payload);
     if (label === 'Confirm shift match') return openProtectedMatch(detail.payload);
     if (['Review protected pay', 'Review and reconcile'].includes(label)) return openProtectedReview(detail.payload);
     if (['Protect pay', 'Add protected shift', 'Change protected shift'].includes(label)) {
@@ -1566,7 +1633,7 @@
     CONTRACT, normalisePreview, renderPreview, buildUploadAcceptancePayload,
     normaliseDetail, renderDetail, normaliseContractChooser, renderContractChooser,
     normaliseCorrectFinal, normaliseCorrectFinalPreview, renderCorrectFinal, renderCommandConfirmation,
-    openPreview, openBatchPreview, openKeepAsPaid, openContactControls, openContactManualEnquiry, hasPendingContactManualEnquiry, handleAction, _plainMessage: plainMessage,
+    openPreview, openBatchPreview, openPaidMatch, openPaidMatchRecovery, openKeepAsPaid, openContactControls, openContactManualEnquiry, hasPendingContactManualEnquiry, handleAction, _plainMessage: plainMessage,
     _test: Object.freeze({ commandAuthorityAvailable, isCandidateComparisonAmbiguity })
   });
 });

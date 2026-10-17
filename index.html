@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="./css/weekly-source-presentation-v1.css?v=20261012-sp10-r1"/>
   <link rel="stylesheet" href="./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1"/>
   <link rel="stylesheet" href="./css/kept-as-paid.css?v=6f4008916a7901ea7aeec66aa9811c1b935e9cacee67f52f60000e2c67af7c91"/>
+  <link rel="stylesheet" href="./css/paid-match.css?v=94fc1bef981b5716d2aae41bf877d9d222eb83be7b57d648173ec7495d6ad805"/>
   <link rel="stylesheet" href="./css/invoice-batch-modal.css?v=20260729-invoice-v8-flat-table-r5"/>
   <link rel="stylesheet" href="./css/candidate-office-v1.css?v=20261005-candidate-header-r2"/>
   <link rel="stylesheet" href="./css/banking-pay-modal-v2.css?v=20260901-r13"/>
@@ -3066,6 +3067,8 @@ body{
 <script src="./js/summary-continuous-grid-v1.js?v=20260905-r8"></script>
 <script src="./js/weekly-source/kept-as-paid-contract.js?v=71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c"></script>
 <script src="./js/weekly-source/kept-as-paid-controls.js?v=b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200"></script>
+<script src="./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415"></script>
+<script src="./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83"></script>
 <script src="./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4"></script>
 <script src="./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2"></script>
 <script src="./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2"></script>
@@ -3074,10 +3077,10 @@ body{
 <script type="module" src="./js/weekly-source/contact-manual-enquiry-controls.mjs?v=20261016-parent-r1"></script>
 <script src="./js/weekly-source/combined-review.js?v=20261013-contact-policy-next-r1&healthroster=20261014-r1&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1"></script>
 <script src="./js/weekly-source/checklist.js?v=20261014-checklist-r3"></script>
-<script src="./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007"></script>
+<script src="./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=2d9a658b46745e58f56df6d6b5125a3aa4cdff4a4a5e5cf17199494795c435f3"></script>
 <script src="./js/weekly-source/office-notifications.js?v=20260923-r2"></script>
 <script src="./js/weekly-source/protected-shift-editor.js?v=20261007-history-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2"></script>
-  <script src="./js/weekly-source/workspace-actions.js?v=20261009-contract-checkbox-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f"></script>
+  <script src="./js/weekly-source/workspace-actions.js?v=20261009-contract-checkbox-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=3234d290927b108b2ac0f92621e65d556025327fd3c49de1a989ff85cc04a447"></script>
 <script src="./js/weekly-source/rule-set-validation.js?v=20261013-r1&healthroster=20261014-r1"></script>
 <script src="./js/weekly-source/rule-settings.js?v=20261013-r1&healthroster=20261014-r1"></script>
 <script src="./js/weekly-source/settings.js?v=20261013-r1&healthroster=20261014-r1"></script>

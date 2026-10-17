@@ -1,0 +1,20 @@
+{
+  "backendCommit": "9c791fa971c97a198c09c4e3579c01b589486c14",
+  "backendPath": "docs/healthroster-build/proposals/same-separate-health-current-successor-20261017/payload/broker/src/weekly-source/same-separate-command.mjs",
+  "backendSha256": "b2a67e74a311f3ae43f1f25053a2f5754f68b91df7ac7671b7693187afedd20e",
+  "parserParent": "ef3d20f4513a6f9fd1aa5e4cf6a69d258f6cd87c",
+  "parserPath": "broker/src/weekly-source/push-timing-office.mjs",
+  "parserPhysicalSha256": "afc586c62b4222a01361559b4d7ad2f8532651d8105cd1c3bba5e4bc58bc98aa",
+  "completeParserSha256": "e6ddf000d4973d0fd565a887af2e6c85bda56356d9318db9747c7ae064858a35",
+  "output": "js/weekly-source/paid-match-contract.js",
+  "outputSha256": "7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415",
+  "transforms": [
+    "Replace the exact parser import with its genuine complete current pure parser declaration.",
+    "Remove ES export keywords only; retain every closed question/choice/request/counter/calendar/clock/identity check.",
+    "Add isolated classic export wrapper and expose the same duplicate-key/depth parser at the HTTP boundary."
+  ],
+  "OfficeInput": "0840c9b0cf53d4f0152c83f0a34bca96ad3345da",
+  "correctedBackend": "a7e4522cb87ae6961cb40efcb83e4e69b12fbd6c",
+  "native": "NOT_RUN",
+  "API": "NOT_RUN"
+}
