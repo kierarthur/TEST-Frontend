@@ -42,9 +42,9 @@
     const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);
     return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'
       && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id
-      && (p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' ? response.retained===true && response.published===false && returned===reviewed
-        : p.decision==='APPROVE_UPDATED_HOURS' && response.retained===false && typeof response.published==='boolean'
-          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed));
+      && ((p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' && response.retained===true && response.published===false && returned===reviewed)
+        || (['APPROVE_UPDATED_HOURS','KEEP_CURRENTLY_APPROVED_HOURS'].includes(p.decision) && response.retained===false && typeof response.published==='boolean'
+          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed)));
   };
 
   const APPROVED_HOURS_ACTIONS = Object.freeze([

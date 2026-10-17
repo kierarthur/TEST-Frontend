@@ -1,0 +1,36 @@
+{
+  "version": "OFFICE_KEEP_SUCCESSOR_FORWARD_SOURCE_RESULTS_V1",
+  "startedAt": "2026-10-17T14:24:03.124Z",
+  "completedAt": "2026-10-17T14:24:08.480Z",
+  "command": [
+    "node",
+    "--test",
+    "tests/unit/missing-source-keep-successor.test.mjs",
+    "tests/unit/missing-source-review.test.mjs",
+    "tests/unit/missing-source-parent.test.mjs",
+    "tests/unit/missing-source-source-guards.test.mjs",
+    "tests/unit/missing-source-native-request-contract.test.mjs",
+    "tests/unit/kept-as-paid-controls.test.mjs",
+    "tests/unit/kept-as-paid-parent.test.mjs",
+    "tests/unit/paid-match-controls.test.mjs",
+    "tests/unit/paid-match-parent.test.mjs",
+    "tests/unit/weekly-source-presentation-v1.test.cjs"
+  ],
+  "tests": 107,
+  "failures": 0,
+  "original104Retained": true,
+  "grammar": [
+    "js/main.js",
+    "js/weekly-source-presentation-v1.js",
+    "js/weekly-source/kept-as-paid-controls.js",
+    "js/weekly-source/workspace-actions.js",
+    "js/weekly-source/missing-source-review.js"
+  ],
+  "completeParentFiles": 4,
+  "literalHunks": 4,
+  "wholeRawGitKnownCheckoutVariants": 16,
+  "nativeCalls": 0,
+  "apiCalls": 0,
+  "originalCad4Immutable": true,
+  "qualification": "SOURCE_ONLY_NOT_NATIVE_OR_INSTALLED"
+}

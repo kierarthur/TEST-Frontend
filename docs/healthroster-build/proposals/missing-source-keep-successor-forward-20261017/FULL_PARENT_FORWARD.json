@@ -1,0 +1,302 @@
+{
+  "version": "OFFICE_MISSING_KEEP_SUCCESSOR_COMPLETE_FORWARD_V1",
+  "parentCommit": "cad4fd975dbe2e9d3bfecdd90b81c32408fb28ec",
+  "finding": "Native0141 KEEP LOCKED_FINAL_SOURCE can publish the exact successor; preserve both original enum outcome arms",
+  "edits": [
+    {
+      "target": "js/weekly-source-presentation-v1.js",
+      "variants": [
+        {
+          "kind": "saved",
+          "inputBytes": 138305,
+          "inputSha256": "df296eb0e983dddc244fdce318d8c12cc3c7960f72c18083622212ac10c65364",
+          "outputBytes": 138353,
+          "outputSha256": "dd1f265dc78b135b98969055e025fd7145178de2a91fbec2c7deb67b78a23c42",
+          "hunks": [
+            {
+              "oldStartLine": 42,
+              "oldLineCount": 9,
+              "newStartLine": 42,
+              "newLineCount": 9,
+              "before": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\r\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\r\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\r\n      && (p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' ? response.retained===true && response.published===false && returned===reviewed\r\n        : p.decision==='APPROVE_UPDATED_HOURS' && response.retained===false && typeof response.published==='boolean'\r\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed));\r\n  };\r\n\r\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\r\n",
+              "after": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\r\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\r\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\r\n      && ((p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' && response.retained===true && response.published===false && returned===reviewed)\r\n        || (['APPROVE_UPDATED_HOURS','KEEP_CURRENTLY_APPROVED_HOURS'].includes(p.decision) && response.retained===false && typeof response.published==='boolean'\r\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed)));\r\n  };\r\n\r\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\r\n"
+            }
+          ]
+        },
+        {
+          "kind": "git",
+          "inputBytes": 135811,
+          "inputSha256": "5a1be0334989ef55e08dedfcb3f402c8f151641915009eb847891d70268b7ca6",
+          "outputBytes": 135859,
+          "outputSha256": "d68e2a0522f4b4812a43db42c0214bdb19e927c7ada32cda7c9ddf19d728e7be",
+          "hunks": [
+            {
+              "oldStartLine": 42,
+              "oldLineCount": 9,
+              "newStartLine": 42,
+              "newLineCount": 9,
+              "before": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\n      && (p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' ? response.retained===true && response.published===false && returned===reviewed\n        : p.decision==='APPROVE_UPDATED_HOURS' && response.retained===false && typeof response.published==='boolean'\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed));\n  };\n\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\n",
+              "after": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\n      && ((p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' && response.retained===true && response.published===false && returned===reviewed)\n        || (['APPROVE_UPDATED_HOURS','KEEP_CURRENTLY_APPROVED_HOURS'].includes(p.decision) && response.retained===false && typeof response.published==='boolean'\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed)));\n  };\n\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeLF",
+          "inputBytes": 135811,
+          "inputSha256": "5a1be0334989ef55e08dedfcb3f402c8f151641915009eb847891d70268b7ca6",
+          "outputBytes": 135859,
+          "outputSha256": "d68e2a0522f4b4812a43db42c0214bdb19e927c7ada32cda7c9ddf19d728e7be",
+          "hunks": [
+            {
+              "oldStartLine": 42,
+              "oldLineCount": 9,
+              "newStartLine": 42,
+              "newLineCount": 9,
+              "before": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\n      && (p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' ? response.retained===true && response.published===false && returned===reviewed\n        : p.decision==='APPROVE_UPDATED_HOURS' && response.retained===false && typeof response.published==='boolean'\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed));\n  };\n\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\n",
+              "after": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\n      && ((p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' && response.retained===true && response.published===false && returned===reviewed)\n        || (['APPROVE_UPDATED_HOURS','KEEP_CURRENTLY_APPROVED_HOURS'].includes(p.decision) && response.retained===false && typeof response.published==='boolean'\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed)));\n  };\n\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeCRLF",
+          "inputBytes": 138305,
+          "inputSha256": "df296eb0e983dddc244fdce318d8c12cc3c7960f72c18083622212ac10c65364",
+          "outputBytes": 138353,
+          "outputSha256": "dd1f265dc78b135b98969055e025fd7145178de2a91fbec2c7deb67b78a23c42",
+          "hunks": [
+            {
+              "oldStartLine": 42,
+              "oldLineCount": 9,
+              "newStartLine": 42,
+              "newLineCount": 9,
+              "before": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\r\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\r\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\r\n      && (p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' ? response.retained===true && response.published===false && returned===reviewed\r\n        : p.decision==='APPROVE_UPDATED_HOURS' && response.retained===false && typeof response.published==='boolean'\r\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed));\r\n  };\r\n\r\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\r\n",
+              "after": "    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);\r\n    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'\r\n      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id\r\n      && ((p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' && response.retained===true && response.published===false && returned===reviewed)\r\n        || (['APPROVE_UPDATED_HOURS','KEEP_CURRENTLY_APPROVED_HOURS'].includes(p.decision) && response.retained===false && typeof response.published==='boolean'\r\n          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed)));\r\n  };\r\n\r\n  const APPROVED_HOURS_ACTIONS = Object.freeze([\r\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "target": "index.html",
+      "variants": [
+        {
+          "kind": "saved",
+          "inputBytes": 100746,
+          "inputSha256": "d7c8d02dbcd247a41f534492846e3cd3f817fab3374eec207d38fcd62cd1f52b",
+          "outputBytes": 100746,
+          "outputSha256": "aa7086967c8318935b109f08dfe94b28172ddfefa3a3919312cfbf8f1fe1047a",
+          "hunks": [
+            {
+              "oldStartLine": 3070,
+              "oldLineCount": 7,
+              "newStartLine": 3070,
+              "newLineCount": 7,
+              "before": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=df296eb0e983dddc244fdce318d8c12cc3c7960f72c18083622212ac10c65364\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\n",
+              "after": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=dd1f265dc78b135b98969055e025fd7145178de2a91fbec2c7deb67b78a23c42\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\n"
+            }
+          ]
+        },
+        {
+          "kind": "git",
+          "inputBytes": 100746,
+          "inputSha256": "d7c8d02dbcd247a41f534492846e3cd3f817fab3374eec207d38fcd62cd1f52b",
+          "outputBytes": 100746,
+          "outputSha256": "aa7086967c8318935b109f08dfe94b28172ddfefa3a3919312cfbf8f1fe1047a",
+          "hunks": [
+            {
+              "oldStartLine": 3070,
+              "oldLineCount": 7,
+              "newStartLine": 3070,
+              "newLineCount": 7,
+              "before": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=df296eb0e983dddc244fdce318d8c12cc3c7960f72c18083622212ac10c65364\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\n",
+              "after": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=dd1f265dc78b135b98969055e025fd7145178de2a91fbec2c7deb67b78a23c42\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeLF",
+          "inputBytes": 100742,
+          "inputSha256": "374a1e8d2cce057c264dc8c91c188a6f4e5da30b1de02fd11d09dcb089660027",
+          "outputBytes": 100742,
+          "outputSha256": "aa0cf015a7d5aa2769325e370fa9f374c1eec60ea62d5fdd56997086429b6192",
+          "hunks": [
+            {
+              "oldStartLine": 3070,
+              "oldLineCount": 7,
+              "newStartLine": 3070,
+              "newLineCount": 7,
+              "before": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=df296eb0e983dddc244fdce318d8c12cc3c7960f72c18083622212ac10c65364\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\n",
+              "after": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=dd1f265dc78b135b98969055e025fd7145178de2a91fbec2c7deb67b78a23c42\"></script>\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeCRLF",
+          "inputBytes": 103856,
+          "inputSha256": "8a46b8a6acb49a9b826c4fcf1efda7f21358cdc87ca3beb8dcebcc1b4d05b4df",
+          "outputBytes": 103856,
+          "outputSha256": "6173e4cae9272a5af7242162e9da60eb668f02a47572ad0ef0ce1f78b45e5d13",
+          "hunks": [
+            {
+              "oldStartLine": 3070,
+              "oldLineCount": 7,
+              "newStartLine": 3070,
+              "newLineCount": 7,
+              "before": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\r\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\r\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\r\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=df296eb0e983dddc244fdce318d8c12cc3c7960f72c18083622212ac10c65364\"></script>\r\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\r\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\r\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\r\n",
+              "after": "<script src=\"./js/weekly-source/missing-source-review.js?v=2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2\"></script>\r\n<script src=\"./js/weekly-source/paid-match-contract.js?v=7a6285fafe348519be2edfdbbf0800af744569ae3516903c63099a51a78b8415\"></script>\r\n<script src=\"./js/weekly-source/paid-match-controls.js?v=f53644112ae3f240e3da399189bda5d9e5a6d164d0f90e210759a2fa201eeb83\"></script>\r\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4&missing-source-review=dd1f265dc78b135b98969055e025fd7145178de2a91fbec2c7deb67b78a23c42\"></script>\r\n<script src=\"./js/weekly-source/finalise-batch.js?v=20261001-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\r\n<script src=\"./js/weekly-source/combined-finalise.js?v=20261009-status-colours-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2\"></script>\r\n<script src=\"./js/weekly-source/contact-pause-contract.js?v=20261016-contact-r1\"></script>\r\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "target": "tests/helpers/missing-source-office-parent-reverse.mjs",
+      "variants": [
+        {
+          "kind": "saved",
+          "inputBytes": 1134,
+          "inputSha256": "fefd8a6a0b9d5bce18abd80931f2550117896e944ba4edb290960f374cce278f",
+          "outputBytes": 1273,
+          "outputSha256": "96d5dd287e964084713444c966b61a8f743fb015a880d28e824676190b26b128",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 9,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\nexport function reverseMissingSourceParent(file,value){\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\n",
+              "after": "import{reverseKeepSuccessorParent}from'./missing-source-keep-successor-parent-reverse.mjs';\nimport fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\nexport function reverseMissingSourceParent(file,value){\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\n value=reverseKeepSuccessorParent(file,value);\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\n"
+            }
+          ]
+        },
+        {
+          "kind": "git",
+          "inputBytes": 1134,
+          "inputSha256": "fefd8a6a0b9d5bce18abd80931f2550117896e944ba4edb290960f374cce278f",
+          "outputBytes": 1273,
+          "outputSha256": "96d5dd287e964084713444c966b61a8f743fb015a880d28e824676190b26b128",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 9,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\nexport function reverseMissingSourceParent(file,value){\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\n",
+              "after": "import{reverseKeepSuccessorParent}from'./missing-source-keep-successor-parent-reverse.mjs';\nimport fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\nexport function reverseMissingSourceParent(file,value){\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\n value=reverseKeepSuccessorParent(file,value);\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeLF",
+          "inputBytes": 1134,
+          "inputSha256": "fefd8a6a0b9d5bce18abd80931f2550117896e944ba4edb290960f374cce278f",
+          "outputBytes": 1273,
+          "outputSha256": "96d5dd287e964084713444c966b61a8f743fb015a880d28e824676190b26b128",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 9,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\nexport function reverseMissingSourceParent(file,value){\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\n",
+              "after": "import{reverseKeepSuccessorParent}from'./missing-source-keep-successor-parent-reverse.mjs';\nimport fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\nexport function reverseMissingSourceParent(file,value){\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\n value=reverseKeepSuccessorParent(file,value);\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeCRLF",
+          "inputBytes": 1144,
+          "inputSha256": "794676fd263857dabb38f865506f8151e63bb62e7662fd1fe6d2312f0a81baef",
+          "outputBytes": 1285,
+          "outputSha256": "8dcc0612541d78bb34256336909ee22abb66be35d3a90feb7e329b70e8704e37",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 9,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\r\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\r\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\r\nexport function reverseMissingSourceParent(file,value){\r\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\r\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\r\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\r\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\r\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\r\n",
+              "after": "import{reverseKeepSuccessorParent}from'./missing-source-keep-successor-parent-reverse.mjs';\r\nimport fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';\r\nconst hash=v=>createHash('sha256').update(v).digest('hex'),bytes=fs.readFileSync(new URL('../../docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json',import.meta.url));\r\nassert.equal(hash(bytes),'99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04');const proof=JSON.parse(bytes);\r\nexport function reverseMissingSourceParent(file,value){\r\n const e=proof.edits.find(e=>e.target===file);if(!e)return value;\r\n if(e.variants.some(v=>hash(value)===v.inputSha256))return value;\r\n value=reverseKeepSuccessorParent(file,value);\r\n const v=e.variants.find(v=>hash(value)===v.outputSha256);assert(v,'Exact complete current source required: '+file);\r\n const lines=value.match(/[^\\n]*\\n|[^\\n]+$/g)||[];for(const h of [...v.hunks].reverse()){const at=h.newStartLine-1;assert.equal(lines.slice(at,at+h.newLineCount).join(''),h.after);lines.splice(at,h.newLineCount,...(h.before.match(/[^\\n]*\\n|[^\\n]+$/g)||[]));}\r\n value=lines.join('');assert.equal(Buffer.byteLength(value),v.inputBytes);assert.equal(hash(value),v.inputSha256);return value;\r\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "target": "tests/unit/missing-source-source-guards.test.mjs",
+      "variants": [
+        {
+          "kind": "saved",
+          "inputBytes": 2589,
+          "inputSha256": "65e4c4b479b5e861e8f0d6bf8972c07bd26bbc413e4aca0d86caeea76ee4d5ef",
+          "outputBytes": 2801,
+          "outputSha256": "67e61574457f4176ab77b6c389a591a3cbf23e69ce5ea28a049552331ff1abeb",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 10,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=fs.readFileSync(e.target,'utf8'),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString():v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\n }\n});\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=fs.readFileSync(e.target,'utf8'),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\n",
+              "after": "import{reverseKeepSuccessorParent}from'../helpers/missing-source-keep-successor-parent-reverse.mjs';\nimport test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?reverseKeepSuccessorParent(e.target,execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString()):v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\n }\n});\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\n"
+            }
+          ]
+        },
+        {
+          "kind": "git",
+          "inputBytes": 2589,
+          "inputSha256": "65e4c4b479b5e861e8f0d6bf8972c07bd26bbc413e4aca0d86caeea76ee4d5ef",
+          "outputBytes": 2801,
+          "outputSha256": "67e61574457f4176ab77b6c389a591a3cbf23e69ce5ea28a049552331ff1abeb",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 10,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=fs.readFileSync(e.target,'utf8'),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString():v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\n }\n});\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=fs.readFileSync(e.target,'utf8'),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\n",
+              "after": "import{reverseKeepSuccessorParent}from'../helpers/missing-source-keep-successor-parent-reverse.mjs';\nimport test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?reverseKeepSuccessorParent(e.target,execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString()):v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\n }\n});\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeLF",
+          "inputBytes": 2589,
+          "inputSha256": "65e4c4b479b5e861e8f0d6bf8972c07bd26bbc413e4aca0d86caeea76ee4d5ef",
+          "outputBytes": 2801,
+          "outputSha256": "67e61574457f4176ab77b6c389a591a3cbf23e69ce5ea28a049552331ff1abeb",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 10,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=fs.readFileSync(e.target,'utf8'),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString():v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\n }\n});\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=fs.readFileSync(e.target,'utf8'),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\n",
+              "after": "import{reverseKeepSuccessorParent}from'../helpers/missing-source-keep-successor-parent-reverse.mjs';\nimport test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?reverseKeepSuccessorParent(e.target,execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString()):v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\n }\n});\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\n"
+            }
+          ]
+        },
+        {
+          "kind": "completeCRLF",
+          "inputBytes": 2599,
+          "inputSha256": "4fab6a8003cdf57dca11f6977f7075641f74781897ee8b9efe5b47e615e204ae",
+          "outputBytes": 2812,
+          "outputSha256": "5defd6b8ea011b96d690bc02e6d5b686b9b8b8b5443481a7e9e4e062836f6857",
+          "hunks": [
+            {
+              "oldStartLine": 1,
+              "oldLineCount": 10,
+              "newStartLine": 1,
+              "newLineCount": 11,
+              "before": "import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\r\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\r\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\r\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\r\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=fs.readFileSync(e.target,'utf8'),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\r\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString():v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\r\n }\r\n});\r\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=fs.readFileSync(e.target,'utf8'),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\r\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\r\n",
+              "after": "import{reverseKeepSuccessorParent}from'../helpers/missing-source-keep-successor-parent-reverse.mjs';\r\nimport test from'node:test';import assert from'node:assert/strict';import fs from'node:fs';import{execFileSync}from'node:child_process';import{createHash}from'node:crypto';\r\nimport{reverseMissingSourceParent}from'../helpers/missing-source-office-parent-reverse.mjs';\r\nconst hash=v=>createHash('sha256').update(v).digest('hex'),proof=JSON.parse(fs.readFileSync('docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json'));\r\ntest('all nine complete current sources reverse to the exact ac112 Git parent, retaining mixed/raw checkout forms',()=>{\r\n for(const e of proof.edits){const original=execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',proof.parentCommit+':'+e.target],{maxBuffer:32*1024*1024}).toString(),value=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),before=reverseMissingSourceParent(e.target,value);assert.equal(before.replaceAll('\\r\\n','\\n'),original.replaceAll('\\r\\n','\\n'));assert.equal(hash(original),e.variants.find(v=>v.kind==='git').inputSha256);\r\n  for(const v of e.variants){let lines=(v.kind==='saved'?value:v.kind==='git'?reverseKeepSuccessorParent(e.target,execFileSync('git',['-c','gc.auto=0','-c','maintenance.auto=false','show',':'+e.target],{maxBuffer:32*1024*1024}).toString()):v.kind==='completeLF'?value.replaceAll('\\r\\n','\\n'):value.replaceAll('\\r\\n','\\n').replaceAll('\\n','\\r\\n')).match(/[^\\n]*\\n|[^\\n]+$/g)||[];const after=lines.join('');assert.equal(hash(after),v.outputSha256);assert.equal(hash(reverseMissingSourceParent(e.target,after)),v.inputSha256);}\r\n }\r\n});\r\ntest('current complete source drift/missing and duplicate new hunks refuse before historical proof translation',()=>{for(const e of proof.edits){const s=reverseKeepSuccessorParent(e.target,fs.readFileSync(e.target,'utf8')),v=e.variants.find(v=>v.outputSha256===hash(s));assert(v);const h=v.hunks[0];for(const bad of[s+'\\n// unrelated drift',s.replace(h.after,''),s+h.after]){assert.notEqual(bad,s);assert.throws(()=>reverseMissingSourceParent(e.target,bad));}}});\r\ntest('all five current consumer assets have one exact source hash and the new module loads before its actual host',()=>{const html=fs.readFileSync('index.html','utf8');for(const f of['js/weekly-source/missing-source-review.js','js/weekly-source/kept-as-paid-controls.js','js/weekly-source/workspace-actions.js','js/weekly-source-presentation-v1.js','js/main.js']){const line=html.split('\\n').filter(l=>l.includes('src=\"./'+f+'?'));assert.equal(line.length,1);assert(line[0].includes(hash(fs.readFileSync(f))));}assert(html.indexOf('src=\"./js/weekly-source/missing-source-review.js?')<html.indexOf('src=\"./js/weekly-source/workspace-actions.js?'));});\r\n"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "originalCad4PacketUnchanged": true,
+  "runtimeChanges": 2,
+  "requestJournalOrNativeChanges": 0
+}

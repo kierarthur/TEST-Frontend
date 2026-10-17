@@ -1,0 +1,89 @@
+{
+  "version": "OFFICE_KEEP_SUCCESSOR_FINITE_SOURCE_FORWARD_V1",
+  "parentCommit": "cad4fd975dbe2e9d3bfecdd90b81c32408fb28ec",
+  "files": [
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-keep-successor-forward-20261017/FULL_PARENT_FORWARD.json",
+      "savedBytes": 57315,
+      "savedSha256": "6583feebdeff991678ee1fd4d0bc996711ef0721b362219cf9effdc8a6189ab8",
+      "gitBytes": 57315,
+      "gitSha256": "6583feebdeff991678ee1fd4d0bc996711ef0721b362219cf9effdc8a6189ab8"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-keep-successor-forward-20261017/README.md",
+      "savedBytes": 3038,
+      "savedSha256": "02bda24a92d9fc96fc3b19a86879c8b1b7adfe45547a985a667bf6d38d01f0b9",
+      "gitBytes": 3038,
+      "gitSha256": "02bda24a92d9fc96fc3b19a86879c8b1b7adfe45547a985a667bf6d38d01f0b9"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-keep-successor-forward-20261017/RESULTS.json",
+      "savedBytes": 1228,
+      "savedSha256": "060a85a16d43a2bd2300644d5754b6a9243556a34322d48e6cdd90df96975ca0",
+      "gitBytes": 1228,
+      "gitSha256": "060a85a16d43a2bd2300644d5754b6a9243556a34322d48e6cdd90df96975ca0"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-keep-successor-forward-20261017/TEST_OUTPUT.txt",
+      "savedBytes": 11233,
+      "savedSha256": "04496952e2baec16eff73cc051e7ac1d09ed2874ab0c20c296b67e35366681f2",
+      "gitBytes": 11233,
+      "gitSha256": "04496952e2baec16eff73cc051e7ac1d09ed2874ab0c20c296b67e35366681f2"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-keep-successor-forward-20261017/verify.mjs",
+      "savedBytes": 2758,
+      "savedSha256": "6d5c2d1505c1d93d43d3931abca5deae74982da9ff9e3fe12167c9843afb9c97",
+      "gitBytes": 2758,
+      "gitSha256": "6d5c2d1505c1d93d43d3931abca5deae74982da9ff9e3fe12167c9843afb9c97"
+    },
+    {
+      "path": "index.html",
+      "savedBytes": 100746,
+      "savedSha256": "aa7086967c8318935b109f08dfe94b28172ddfefa3a3919312cfbf8f1fe1047a",
+      "gitBytes": 100746,
+      "gitSha256": "aa7086967c8318935b109f08dfe94b28172ddfefa3a3919312cfbf8f1fe1047a"
+    },
+    {
+      "path": "js/weekly-source-presentation-v1.js",
+      "savedBytes": 138353,
+      "savedSha256": "dd1f265dc78b135b98969055e025fd7145178de2a91fbec2c7deb67b78a23c42",
+      "gitBytes": 135859,
+      "gitSha256": "d68e2a0522f4b4812a43db42c0214bdb19e927c7ada32cda7c9ddf19d728e7be"
+    },
+    {
+      "path": "tests/helpers/missing-source-keep-successor-parent-reverse.mjs",
+      "savedBytes": 1140,
+      "savedSha256": "9e332a2ffe630447fc43a36c928acd80f3a536bb839d9532b483e151185f12ad",
+      "gitBytes": 1140,
+      "gitSha256": "9e332a2ffe630447fc43a36c928acd80f3a536bb839d9532b483e151185f12ad"
+    },
+    {
+      "path": "tests/helpers/missing-source-office-parent-reverse.mjs",
+      "savedBytes": 1273,
+      "savedSha256": "96d5dd287e964084713444c966b61a8f743fb015a880d28e824676190b26b128",
+      "gitBytes": 1273,
+      "gitSha256": "96d5dd287e964084713444c966b61a8f743fb015a880d28e824676190b26b128"
+    },
+    {
+      "path": "tests/unit/missing-source-keep-successor.test.mjs",
+      "savedBytes": 3774,
+      "savedSha256": "8a51b9d1c821355e36e7df8dda16bf7047d676541e8f536c3884f23951181825",
+      "gitBytes": 3774,
+      "gitSha256": "8a51b9d1c821355e36e7df8dda16bf7047d676541e8f536c3884f23951181825"
+    },
+    {
+      "path": "tests/unit/missing-source-source-guards.test.mjs",
+      "savedBytes": 2801,
+      "savedSha256": "67e61574457f4176ab77b6c389a591a3cbf23e69ce5ea28a049552331ff1abeb",
+      "gitBytes": 2801,
+      "gitSha256": "67e61574457f4176ab77b6c389a591a3cbf23e69ce5ea28a049552331ff1abeb"
+    }
+  ],
+  "manifestExcludesItself": true,
+  "runtimeTargets": [
+    "js/weekly-source-presentation-v1.js",
+    "index.html"
+  ],
+  "sourceOnly": true
+}
