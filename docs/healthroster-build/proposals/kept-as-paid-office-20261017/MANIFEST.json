@@ -1,0 +1,71 @@
+{
+  "version": "HEALTH_KEEP_OFFICE_SOURCE_PACKET_V1",
+  "sourceComplete": true,
+  "peer": "REQUIRED",
+  "unitTestsPassed": 162,
+  "controlledBrowserCasesPassed": 2,
+  "nativeApiJoin": "NOT_RUN",
+  "release": "NOT_RUN",
+  "files": [
+    {
+      "file": "BACKEND_SOURCE_PINS.json",
+      "sha256": "f4cbaa4c753763c7303c037a310554da897bb4bfdcb3f150f996632705eb125b",
+      "bytes": 504
+    },
+    {
+      "file": "BROWSER_RESULTS.json",
+      "sha256": "c8fc189b92d537d9289ec196e4262447089bdf1fe3e96cdae13b35bb9a4ec248",
+      "bytes": 853
+    },
+    {
+      "file": "build-contract.py",
+      "sha256": "893d61c6a05d53c8d21a91cdbe51fab707fff59778fdca817ea9b0537da3e254",
+      "bytes": 3007
+    },
+    {
+      "file": "CONTRACT_DERIVATION.json",
+      "sha256": "cd085369dbee77a03d81c89cdaf49b04a9c1f72ea13c14d5826290cb238b5bb5",
+      "bytes": 1678
+    },
+    {
+      "file": "keep-host.jsinc",
+      "sha256": "c70ac5530654f8c87593f2969a43a097809e09f763d7f0e5d02d94b632530e80",
+      "bytes": 5188
+    },
+    {
+      "file": "mount-parents.py",
+      "sha256": "111fa8a43227b0f88176c938be407713e87c470e5c092195387c100fc6471563",
+      "bytes": 5690
+    },
+    {
+      "file": "PARENT_EDITS.json",
+      "sha256": "cf959d80385eb665c61dfffc8e62d3ced954285af2716fa145820f3feb654862",
+      "bytes": 13954
+    },
+    {
+      "file": "PUBLIC_CONTEXT.schema.json",
+      "sha256": "a36e0204e001eab05b927d4d2908731ec9fb265019d981a28cf40a0c02d90924",
+      "bytes": 9488
+    },
+    {
+      "file": "PUBLIC_CONTEXT_CONTRACT.json",
+      "sha256": "b4b7c4b3469ca67f1e24834aebe23d19934b4e095790b825a7faeb41885f4772",
+      "bytes": 5042
+    },
+    {
+      "file": "README.md",
+      "sha256": "236719eccfc3d7f9bb507cd5671fafda2c8d89a2d41fb5c6b95d2c4f5d3bbeb1",
+      "bytes": 6647
+    },
+    {
+      "file": "SOURCE_PINS.json",
+      "sha256": "fb965e8dda74295698b32f9d37dab3b7ab1c4648bd5109f28885d43ed7b8c377",
+      "bytes": 3759
+    },
+    {
+      "file": "UNIT_TEST_RESULTS.json",
+      "sha256": "4ed504fb179e80c508a561165625f9c834cccde73cc1c9efdc306d36e64bb4cb",
+      "bytes": 16987
+    }
+  ]
+}

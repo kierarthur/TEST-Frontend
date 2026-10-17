@@ -1,0 +1,104 @@
+{
+  "version": "HEALTH_KEEP_OFFICE_FINITE_PARENTS_V1",
+  "base": "6d3d7210ac02fa2d1741f20e52461eaa75158350",
+  "edits": [
+    {
+      "target": "js/weekly-source/workspace-actions.js",
+      "inputSha256": "80128cb485d8e72ba52595c9d78a16bbe924fe1aed8fbaee87868581b54b93ee",
+      "inputCanonicalSha256": "80128cb485d8e72ba52595c9d78a16bbe924fe1aed8fbaee87868581b54b93ee",
+      "gitInputSha256": "80128cb485d8e72ba52595c9d78a16bbe924fe1aed8fbaee87868581b54b93ee",
+      "hunks": [
+        {
+          "before": "  const contactControllersByParent=new WeakMap();",
+          "after": "  function openKeepAsPaid(detail){\n    const keep=root.CloudTMSKeptAsPaidV1,workspace=workspaceApi(),actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;\n    const stack=[...(root.__modalStack||[])],parent=stack.at(-1),context=root.modalCtx;\n    if(!keep||!actor||!parent||typeof workspace?.keepAsPaidRequest!=='function')return false;\n    const eventId=detail?.workEventId,surface=detail?.surface,kind='weekly-source-keep-as-paid';\n    let rows,parentKey,parentCurrent;\n    if(surface==='SOURCE_WORKSPACE'){\n      if(parent.kind!=='weekly-source-imports-v1'||typeof workspace.captureKeepContext!=='function')return false;\n      rows=workspace._session?.workspace?.kept_as_paid_contexts;\n      const binding=workspace.captureKeepContext();parentKey=binding.key;parentCurrent=binding.current;\n    }else if(surface==='SIMPLE_TIMESHEET'){\n      if(parent.kind!=='timesheets'||parent.mode!=='view'||parent._ctxRef!==context||context?.entity!=='timesheets')return false;\n      const native=context.timesheetDetails?.timesheet,subject=context.data?.current_timesheet_id||context.data?.timesheet_id;\n      if(!native||native.timesheet_id!==subject||native.is_current!==true||native.archived_at_utc!==null)return false;\n      const presentation=root.CloudTMSWeeklySourcePresentationV1,host=presentation?.findHostPayload?.([context.timesheetDetails,context.data]);\n      const vm=host&&presentation.buildViewModel(host);if(vm?.mount!==true)return false;\n      rows=vm.kept_as_paid_contexts;parentKey='TIMESHEET:'+subject;\n      const token=parent._token,openToken=context.openToken,revision=vm.record_version,generation=context.__timesheetLatestLifecycleMutationSeq;\n      parentCurrent=()=>{\n        const nextHost=presentation.findHostPayload([context.timesheetDetails,context.data]);\n        return parent._ctxRef===context&&parent._token===token&&context.openToken===openToken\n          &&context.__timesheetLatestLifecycleMutationSeq===generation\n          &&(context.data?.current_timesheet_id||context.data?.timesheet_id)===subject\n          &&context.timesheetDetails?.timesheet?.timesheet_id===subject\n          &&context.timesheetDetails.timesheet.is_current===true&&context.timesheetDetails.timesheet.archived_at_utc===null\n          &&nextHost&&presentation.buildViewModel(nextHost).record_version===revision;\n      };\n    }else return false;\n    let row;try{row=keep.discovery(rows).find(item=>item.work_event_id===eventId);}catch{return false;}\n    if(!row?.context||!parentKey||!parentCurrent())return false;\n    let child=null;\n    const current=()=>{\n      const now=root.__modalStack||[];\n      return child&&now.length===stack.length+1&&stack.every((entry,i)=>now[i]===entry)&&now.at(-1)===child\n        &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor&&workspaceApi()===workspace&&parentCurrent();\n    };\n    const scope=Object.fromEntries(['candidate_id','client_id','contract_id','source_group_id','source_cycle_id'].map(key=>[key,row.context[key]]));\n    let controller;try{controller=keep.create({actorId:actor,workEventId:eventId,parentKey,expectedScope:scope,\n      ...(detail.creditInvoiceLineId!==undefined?{selectedCredit:detail.creditInvoiceLineId}:{}),\n      request:options=>workspace.keepAsPaidRequest(options),isCurrent:current});}catch{return false;}\n    const render=()=>'<div class=\"ws-child\" data-wsa-screen=\"keep-as-paid\"><div data-kept-controls-host></div><div class=\"ws-child-actions\"><button type=\"button\" class=\"btn btn-outline\" data-kept-back>Back</button></div></div>';\n    const wire=()=>{\n      const host=root.document?.querySelector('[data-wsa-screen=\"keep-as-paid\"]');if(!host||host.dataset.wsaWired==='1')return;\n      host.dataset.wsaWired='1';child=currentChild(kind);if(!current())return;\n      const dispose=controller.mount(host.querySelector('[data-kept-controls-host]')),previous=child._detachGlobal;\n      child._detachGlobal=function(...args){try{dispose();}finally{previous?.apply(this,args);}};\n      host.querySelector('[data-kept-back]')?.addEventListener('click',()=>{\n        if(!current())return;const saved=controller.snapshot().receipt!==null&&!controller.snapshot().pending;\n        closeChild();if(!saved)return;\n        const stillParent=()=>{\n          const now=root.__modalStack||[];\n          return now.length===stack.length&&stack.every((entry,i)=>now[i]===entry)\n            &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor&&workspaceApi()===workspace\n            &&(surface==='SOURCE_WORKSPACE'?parentCurrent():parent._ctxRef===context\n              &&(context.data?.current_timesheet_id||context.data?.timesheet_id)===parentKey.slice(10));\n        };\n        if(!stillParent())return;\n        const refresh=surface==='SOURCE_WORKSPACE'?()=>workspace.refresh?.():\n          typeof refreshSimpleWeeklySourcePresentation==='function'?()=>refreshSimpleWeeklySourcePresentation(stillParent):null;\n        if(refresh)Promise.resolve().then(()=>stillParent()&&refresh()).catch(()=>{});\n      });\n      if(!controller.snapshot().pending&&!controller.snapshot().journalBlocked)void controller.load().catch(()=>{});\n    };\n    return openChild({title:'Keep as paid',kind,render,wire});\n  }\n\n  const contactControllersByParent=new WeakMap();"
+        },
+        {
+          "before": "openPreview, openBatchPreview, openContactControls,",
+          "after": "openPreview, openBatchPreview, openKeepAsPaid, openContactControls,"
+        }
+      ],
+      "outputSha256": "2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f",
+      "outputCanonicalSha256": "2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f"
+    },
+    {
+      "target": "js/weekly-source/import-workspace.js",
+      "inputSha256": "1064233f1ffb870c76d7a5788717b2b6f67e7bebe1d7150a23b42f0cd65b8b5b",
+      "inputCanonicalSha256": "1064233f1ffb870c76d7a5788717b2b6f67e7bebe1d7150a23b42f0cd65b8b5b",
+      "gitInputSha256": "1064233f1ffb870c76d7a5788717b2b6f67e7bebe1d7150a23b42f0cd65b8b5b",
+      "hunks": [
+        {
+          "before": "      combined_source_workspace: source.combined_source_workspace === true,",
+          "after": "      kept_as_paid_contexts: Array.isArray(source.kept_as_paid_contexts) ? source.kept_as_paid_contexts : [],\n      combined_source_workspace: source.combined_source_workspace === true,"
+        },
+        {
+          "before": "    const notices = workspace.notices.map",
+          "after": "    const kept = ['queries','finalise'].includes(tab) ? root.CloudTMSKeptAsPaidV1?.renderRows(workspace.kept_as_paid_contexts,'SOURCE_WORKSPACE') || '' : '';\n    const notices = workspace.notices.map"
+        },
+        {
+          "before": "${returnLink}${nextPayNotice}${error}${tab==='imports'?renderImports",
+          "after": "${returnLink}${nextPayNotice}${error}${kept}${tab==='imports'?renderImports"
+        },
+        {
+          "before": "${nextPayNotice}${notices}${error}${body}</div>`;",
+          "after": "${nextPayNotice}${notices}${error}${kept}${body}</div>`;"
+        },
+        {
+          "before": "    captureContactContext: () => {",
+          "after": "    keepAsPaidRequest: options => {\n      if(typeof root.authFetch!=='function')throw new Error('Current authenticated Office access is required.');\n      return root.authFetch(endpoint(ENDPOINTS.command),options);\n    },\n    captureKeepContext: () => {\n      const frame=currentFrame(),generation=session.openGeneration,current=session.openCurrent,tab=session.activeTab;\n      const scope=()=>JSON.stringify({tab:session.activeTab,selected:session.workspace?.selected,\n        filters:Object.entries(session.sourceFilters).sort(([a],[b])=>a.localeCompare(b))});\n      const captured=scope();\n      return {key:'SOURCE:'+captured,current:()=>!!frame&&(root.__modalStack||[]).includes(frame)\n        &&generation===session.openGeneration&&tab===session.activeTab&&session.openCurrent===current&&scope()===captured&&current?.()===true};\n    },\n    captureContactContext: () => {"
+        }
+      ],
+      "outputSha256": "e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007",
+      "outputCanonicalSha256": "e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007"
+    },
+    {
+      "target": "js/weekly-source-presentation-v1.js",
+      "inputSha256": "df01d69e1f55f20a28c29bf7a1698cbbd9a7041525bf31f5ae9e7039d306d7b6",
+      "inputCanonicalSha256": "f7f4064cab82d47b91bec7fe32be6c81f3ae949917d6ca6a910570aa31fabbfa",
+      "gitInputSha256": "f7f4064cab82d47b91bec7fe32be6c81f3ae949917d6ca6a910570aa31fabbfa",
+      "hunks": [
+        {
+          "before": "      record_version: recordVersion,",
+          "after": "      kept_as_paid_contexts: Array.isArray(presentation.kept_as_paid_contexts) ? presentation.kept_as_paid_contexts : [],\r\n      record_version: recordVersion,"
+        },
+        {
+          "before": "if (vm.lifecycle_ok !== true) return renderNextInformation(vm, { surface: 'SIMPLE_TIMESHEET' }) || renderLifecycleError(vm);",
+          "after": "if (vm.lifecycle_ok !== true) return (globalThis.CloudTMSKeptAsPaidV1?.renderRows(vm.kept_as_paid_contexts,'SIMPLE_TIMESHEET') || '') + (renderNextInformation(vm, { surface: 'SIMPLE_TIMESHEET' }) || renderLifecycleError(vm));"
+        },
+        {
+          "before": "        ${protectedMarkup}\r\n        ${renderPrimaryLifecycleBlock",
+          "after": "        ${globalThis.CloudTMSKeptAsPaidV1?.renderRows(vm.kept_as_paid_contexts,'SIMPLE_TIMESHEET') || ''}\r\n        ${protectedMarkup}\r\n        ${renderPrimaryLifecycleBlock"
+        }
+      ],
+      "outputSha256": "bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4",
+      "outputCanonicalSha256": "153aed979d19a3eddb4e4d3b59d95bfa876bdd6b49da37d34f73470294b6e000"
+    },
+    {
+      "target": "index.html",
+      "inputSha256": "1d5587fe3f64468961f1d38c9df21a29e60ec19bd592da51ebeabde441ad79b1",
+      "inputCanonicalSha256": "29d1018ac584155036bd3b8b55e711cf67dbf8824906ce81c55a65ca5b8d1b3c",
+      "gitInputSha256": "1d5587fe3f64468961f1d38c9df21a29e60ec19bd592da51ebeabde441ad79b1",
+      "hunks": [
+        {
+          "before": "  <link rel=\"stylesheet\" href=\"./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1\"/>",
+          "after": "  <link rel=\"stylesheet\" href=\"./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1\"/>\r\n  <link rel=\"stylesheet\" href=\"./css/kept-as-paid.css?v=67f0a098f5499f5c66258577791fbb6c969df8201112d55e5acf0afb653d1250\"/>"
+        },
+        {
+          "before": "<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1\"></script>",
+          "after": "<script src=\"./js/weekly-source/kept-as-paid-contract.js?v=71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c\"></script>\r\n<script src=\"./js/weekly-source/kept-as-paid-controls.js?v=b34e4b21b159883b4733965abc98efd42369e527595b187652143216425c62af\"></script>\r\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4\"></script>"
+        },
+        {
+          "before": "<script src=\"./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1\"></script>",
+          "after": "<script src=\"./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=e300075d92c64e62746ad1689ae9bd0839fd99c8cc3e8523ef07662b76d3a007\"></script>"
+        },
+        {
+          "before": "  <script src=\"./js/weekly-source/workspace-actions.js?v=20261009-contract-checkbox-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1\"></script>",
+          "after": "  <script src=\"./js/weekly-source/workspace-actions.js?v=20261009-contract-checkbox-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f\"></script>"
+        }
+      ],
+      "outputSha256": "44be60a0a3fd9b2c7abf96167f07b5a184cd47e954498101abf11c3fe6a4ed84",
+      "outputCanonicalSha256": "eb22d191d1e7e25f0c8c3fabfde3cdad204c0b3d920c92a5e9e94f7387b12580"
+    }
+  ],
+  "mainUnchangedSha256": "ec01905facc35f501c1f6ccf08161c6f897eb5e3612a17d79e49134aa627e716",
+  "native": "NOT_RUN"
+}

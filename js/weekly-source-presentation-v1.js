@@ -1106,6 +1106,7 @@
       mount: true,
       render_mode: 'WEEKLY_SOURCE',
       is_weekly_source: true,
+      kept_as_paid_contexts: Array.isArray(presentation.kept_as_paid_contexts) ? presentation.kept_as_paid_contexts : [],
       record_version: recordVersion,
       lifecycle,
       lifecycle_ok: lifecycle.ok === true,
@@ -2139,7 +2140,7 @@
 
     // No inferred phase or action. Independently qualified NEXT information
     // and an exact existing Source decision retain their separate contracts.
-    if (vm.lifecycle_ok !== true) return renderNextInformation(vm, { surface: 'SIMPLE_TIMESHEET' }) || renderLifecycleError(vm);
+    if (vm.lifecycle_ok !== true) return (globalThis.CloudTMSKeptAsPaidV1?.renderRows(vm.kept_as_paid_contexts,'SIMPLE_TIMESHEET') || '') + (renderNextInformation(vm, { surface: 'SIMPLE_TIMESHEET' }) || renderLifecycleError(vm));
 
     const principalRows = vm.approved_rows.length > 0
       ? vm.approved_rows
@@ -2153,6 +2154,7 @@
 
     return `
       <div class="weekly-source-v1 weekly-source-v1__simple-lines" data-weekly-source-simple-lines="1" data-weekly-source-ui-state="${escapeHtml(vm.ui_state || '')}" data-weekly-source-server-phase="${escapeHtml(vm.server_phase || '')}">
+        ${globalThis.CloudTMSKeptAsPaidV1?.renderRows(vm.kept_as_paid_contexts,'SIMPLE_TIMESHEET') || ''}
         ${protectedMarkup}
         ${renderPrimaryLifecycleBlock(vm, { badge: principalBadge })}
         ${renderWithdrawalState(vm)}

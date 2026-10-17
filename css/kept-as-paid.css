@@ -1,0 +1,12 @@
+.ws-kept-controls { max-height: min(75dvh, 760px); overflow: auto; padding: 8px; }
+.ws-kept-controls dl { display: grid; grid-template-columns: minmax(100px,1fr) minmax(100px,2fr); gap: 8px 16px; }
+.ws-kept-controls dd { margin: 0; overflow-wrap: anywhere; }
+.ws-kept-controls p, .ws-kept-work p { overflow-wrap: anywhere; }
+.ws-kept-controls .ws-toolbar, .ws-kept-work .ws-notice { display: flex; flex-wrap: wrap; gap: 12px; }
+.ws-kept-work .ws-notice { flex-direction: column; }
+.ws-kept-controls button, .ws-kept-work button { min-height: 44px; white-space: normal; }
+[data-wsa-screen="keep-as-paid"] .ws-child-actions { position: sticky; bottom: 0; padding: 8px; }
+@media (max-width: 600px) {
+ .ws-kept-controls { max-height: 65dvh; }
+ .ws-kept-controls .ws-toolbar button { width: 100%; }
+}

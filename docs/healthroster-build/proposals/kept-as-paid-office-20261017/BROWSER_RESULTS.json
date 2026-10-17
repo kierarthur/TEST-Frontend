@@ -1,0 +1,31 @@
+{
+  "scope": "ACTUAL_SAVED_HEALTH_MODULES_CONTROLLED_RESPONSES_REAL_DOM_NOT_NATIVE_OR_INSTALLED",
+  "cases": 2,
+  "results": [
+    {
+      "surface": "SOURCE_WORKSPACE",
+      "viewport": {
+        "width": 1366,
+        "height": 900
+      },
+      "exactLostReplyJournal": true,
+      "currentAcknowledgement": true,
+      "parentRefresh": true,
+      "externalRequests": 0
+    },
+    {
+      "surface": "SIMPLE_TIMESHEET",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "exactLostReplyJournal": true,
+      "currentAcknowledgement": true,
+      "parentRefresh": true,
+      "externalRequests": 0
+    }
+  ],
+  "childTemporaryDirectory": "PHYSICALLY_D_EMPTY_REMOVED",
+  "nativeApiJoin": "NOT_RUN",
+  "testSourceSha256": "647231a3518b981e1b89895bb857227797d5b32185a444212566cfbc7c67d17a"
+}

@@ -306,6 +306,7 @@
         can_upload: false, can_finalise: false, can_manage_settings: false,
         checklist: { available: payChecklist, read_only: true, pay_only: true, action_links: false }
       } : null,
+      kept_as_paid_contexts: Array.isArray(source.kept_as_paid_contexts) ? source.kept_as_paid_contexts : [],
       combined_source_workspace: source.combined_source_workspace === true,
       workspace_version: asText(source.workspace_version || source.record_version),
       recheck_payload: asObject(source.recheck_payload),
@@ -947,6 +948,7 @@
     const tab = availableTab(workspace, tabKey);
     const nextPayNotice = state.bankingOwnerClient?.peek()?.active_owner === 'NEXT'
       ? `<div class="ws-notice ws-notice--info" role="status"><span>${escapeHtml(NEXT_PAY_NOTICE)}</span></div>` : '';
+    const kept = ['queries','finalise'].includes(tab) ? root.CloudTMSKeptAsPaidV1?.renderRows(workspace.kept_as_paid_contexts,'SOURCE_WORKSPACE') || '' : '';
     const notices = workspace.notices.map((notice) => `<div class="ws-notice ws-notice--${escapeHtml(notice.tone)}"><strong>${escapeHtml(notice.title)}</strong>${notice.body ? `<span>${escapeHtml(notice.body)}</span>` : ''}</div>`).join('');
     const visibleError = state.error === NEXT_PAY_NOTICE && !nextPayNotice
       ? 'Weekly source information is temporarily unavailable. Recheck or try again shortly.' : state.error;
@@ -954,10 +956,10 @@
     const returnLink = state.checklistReturnLink && tab !== 'checklist' ? '<button type="button" class="btn btn-outline" data-ws-checklist-return>Back to Checklist</button>' : '';
     const combined = tab === 'finalise' && workspace.combined_source_workspace && root.CloudTMSCombinedFinaliseV1;
     const review = ['imports','queries','history'].includes(tab) && workspace.combined_source_workspace && !state.reviewSingleScope && root.CloudTMSCombinedReviewV1;
-    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${nextPayNotice}${error}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
+    if(review) return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${nextPayNotice}${error}${kept}${tab==='imports'?renderImports(workspace,{...state,toolbarOnly:true}):''}${state.loading?'<p role="status">Loading source work…</p>':root.CloudTMSCombinedReviewV1.render(state.reviews?.[tab]?.model,state.reviews?.[tab])}</div>`;
     if (tab === 'checklist') return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="checklist">${renderContext(workspace)}${state.checklist?.render() || '<p role="status">Checklist information is unavailable. Recheck shortly.</p>'}</div>`;
     const body = state.loading === true ? '<div class="ws-loading" role="status">Loading weekly source information...</div>' : combined ? root.CloudTMSCombinedFinaliseV1.render(state.combined?.model,state.combined) : tab === 'imports' ? renderImports(workspace, state) : tab === 'queries' ? renderQueries(workspace, state) : tab === 'finalise' ? renderFinalise(workspace, state) : renderHistory(workspace, state);
-    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${body}</div>`;
+    return `<div class="ws-workspace" data-ws-contract="${CONTRACT}" data-ws-tab="${tab}">${returnLink}${tab==='finalise'&&state.combined?.singleScope?'<button class="btn btn-outline" data-wsc-back>Back to all reports</button>':''}${combined?'':renderContext(workspace)}${nextPayNotice}${notices}${error}${kept}${body}</div>`;
   }
 
   const session = {
@@ -2193,6 +2195,18 @@
     isSourceAdmissionBusy, SOURCE_ADMISSION_BUSY_MESSAGE, open, requestJson, issueCommand, acceptUpload, uploadSource, uploadSources, selectAcceptedScope,
     acceptSystemShiftSelectionPayload,
     refresh: (tab = session.activeTab) => tab === 'checklist' ? session.checklist?.refresh() : loadWorkspace(tab), navigateToExistingShift,
+    keepAsPaidRequest: options => {
+      if(typeof root.authFetch!=='function')throw new Error('Current authenticated Office access is required.');
+      return root.authFetch(endpoint(ENDPOINTS.command),options);
+    },
+    captureKeepContext: () => {
+      const frame=currentFrame(),generation=session.openGeneration,current=session.openCurrent,tab=session.activeTab;
+      const scope=()=>JSON.stringify({tab:session.activeTab,selected:session.workspace?.selected,
+        filters:Object.entries(session.sourceFilters).sort(([a],[b])=>a.localeCompare(b))});
+      const captured=scope();
+      return {key:'SOURCE:'+captured,current:()=>!!frame&&(root.__modalStack||[]).includes(frame)
+        &&generation===session.openGeneration&&tab===session.activeTab&&session.openCurrent===current&&scope()===captured&&current?.()===true};
+    },
     captureContactContext: () => {
       const frame=currentFrame(),generation=session.openGeneration,filters=JSON.stringify(session.sourceFilters),tab=session.activeTab,current=session.openCurrent;
       return () => !!frame&&(root.__modalStack||[]).includes(frame)&&generation===session.openGeneration

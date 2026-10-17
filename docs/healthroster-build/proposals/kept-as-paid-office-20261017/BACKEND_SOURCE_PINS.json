@@ -1,0 +1,15 @@
+{
+  "inputs": [
+    {
+      "commit": "ef64f43909db9811efaf1021d19f2fddc4bd44e6",
+      "file": "broker/src/weekly-source/kept-pay-context.mjs",
+      "sha256": "2c7afe36e931e556624fdd2fba2c2b8379c903941dbd03b88475b255bcbd73dd"
+    },
+    {
+      "commit": "ef64f43909db9811efaf1021d19f2fddc4bd44e6",
+      "file": "broker/src/weekly-source/kept-pay-command.mjs",
+      "sha256": "0460915380ef38aeff9437164ae93562b924712af996d89c8d880456c4d8c273"
+    }
+  ],
+  "nativeApiJoin": "NOT_RUN"
+}

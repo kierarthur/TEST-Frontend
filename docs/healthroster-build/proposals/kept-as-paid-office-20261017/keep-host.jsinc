@@ -1,0 +1,65 @@
+  function openKeepAsPaid(detail){
+    const keep=root.CloudTMSKeptAsPaidV1,workspace=workspaceApi(),actor=typeof SESSION!=='undefined'?SESSION?.user?.id:null;
+    const stack=[...(root.__modalStack||[])],parent=stack.at(-1),context=root.modalCtx;
+    if(!keep||!actor||!parent||typeof workspace?.keepAsPaidRequest!=='function')return false;
+    const eventId=detail?.workEventId,surface=detail?.surface,kind='weekly-source-keep-as-paid';
+    let rows,parentKey,parentCurrent;
+    if(surface==='SOURCE_WORKSPACE'){
+      if(parent.kind!=='weekly-source-imports-v1'||typeof workspace.captureKeepContext!=='function')return false;
+      rows=workspace._session?.workspace?.kept_as_paid_contexts;
+      const binding=workspace.captureKeepContext();parentKey=binding.key;parentCurrent=binding.current;
+    }else if(surface==='SIMPLE_TIMESHEET'){
+      if(parent.kind!=='timesheets'||parent.mode!=='view'||parent._ctxRef!==context||context?.entity!=='timesheets')return false;
+      const native=context.timesheetDetails?.timesheet,subject=context.data?.current_timesheet_id||context.data?.timesheet_id;
+      if(!native||native.timesheet_id!==subject||native.is_current!==true||native.archived_at_utc!==null)return false;
+      const presentation=root.CloudTMSWeeklySourcePresentationV1,host=presentation?.findHostPayload?.([context.timesheetDetails,context.data]);
+      const vm=host&&presentation.buildViewModel(host);if(vm?.mount!==true)return false;
+      rows=vm.kept_as_paid_contexts;parentKey='TIMESHEET:'+subject;
+      const token=parent._token,openToken=context.openToken,revision=vm.record_version,generation=context.__timesheetLatestLifecycleMutationSeq;
+      parentCurrent=()=>{
+        const nextHost=presentation.findHostPayload([context.timesheetDetails,context.data]);
+        return parent._ctxRef===context&&parent._token===token&&context.openToken===openToken
+          &&context.__timesheetLatestLifecycleMutationSeq===generation
+          &&(context.data?.current_timesheet_id||context.data?.timesheet_id)===subject
+          &&context.timesheetDetails?.timesheet?.timesheet_id===subject
+          &&context.timesheetDetails.timesheet.is_current===true&&context.timesheetDetails.timesheet.archived_at_utc===null
+          &&nextHost&&presentation.buildViewModel(nextHost).record_version===revision;
+      };
+    }else return false;
+    let row;try{row=keep.discovery(rows).find(item=>item.work_event_id===eventId);}catch{return false;}
+    if(!row?.context||!parentKey||!parentCurrent())return false;
+    let child=null;
+    const current=()=>{
+      const now=root.__modalStack||[];
+      return child&&now.length===stack.length+1&&stack.every((entry,i)=>now[i]===entry)&&now.at(-1)===child
+        &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor&&workspaceApi()===workspace&&parentCurrent();
+    };
+    const scope=Object.fromEntries(['candidate_id','client_id','contract_id','source_group_id','source_cycle_id'].map(key=>[key,row.context[key]]));
+    let controller;try{controller=keep.create({actorId:actor,workEventId:eventId,parentKey,expectedScope:scope,
+      ...(detail.creditInvoiceLineId!==undefined?{selectedCredit:detail.creditInvoiceLineId}:{}),
+      request:options=>workspace.keepAsPaidRequest(options),isCurrent:current});}catch{return false;}
+    const render=()=>'<div class="ws-child" data-wsa-screen="keep-as-paid"><div data-kept-controls-host></div><div class="ws-child-actions"><button type="button" class="btn btn-outline" data-kept-back>Back</button></div></div>';
+    const wire=()=>{
+      const host=root.document?.querySelector('[data-wsa-screen="keep-as-paid"]');if(!host||host.dataset.wsaWired==='1')return;
+      host.dataset.wsaWired='1';child=currentChild(kind);if(!current())return;
+      const dispose=controller.mount(host.querySelector('[data-kept-controls-host]')),previous=child._detachGlobal;
+      child._detachGlobal=function(...args){try{dispose();}finally{previous?.apply(this,args);}};
+      host.querySelector('[data-kept-back]')?.addEventListener('click',()=>{
+        if(!current())return;const saved=controller.snapshot().receipt!==null&&!controller.snapshot().pending;
+        closeChild();if(!saved)return;
+        const stillParent=()=>{
+          const now=root.__modalStack||[];
+          return now.length===stack.length&&stack.every((entry,i)=>now[i]===entry)
+            &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor&&workspaceApi()===workspace
+            &&(surface==='SOURCE_WORKSPACE'?parentCurrent():parent._ctxRef===context
+              &&(context.data?.current_timesheet_id||context.data?.timesheet_id)===parentKey.slice(10));
+        };
+        if(!stillParent())return;
+        const refresh=surface==='SOURCE_WORKSPACE'?()=>workspace.refresh?.():
+          typeof refreshSimpleWeeklySourcePresentation==='function'?()=>refreshSimpleWeeklySourcePresentation(stillParent):null;
+        if(refresh)Promise.resolve().then(()=>stillParent()&&refresh()).catch(()=>{});
+      });
+      if(!controller.snapshot().pending&&!controller.snapshot().journalBlocked)void controller.load().catch(()=>{});
+    };
+    return openChild({title:'Keep as paid',kind,render,wire});
+  }

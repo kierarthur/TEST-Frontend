@@ -1,0 +1,32 @@
+{
+  "inputs": [
+    {
+      "commit": "eb0aa9633fa284c088da6e7c12196974619cd48b",
+      "file": "docs/healthroster-build/proposals/kept-current-public-read-successor-20261017/PUBLIC_CONTEXT.schema.json",
+      "sha256": "a36e0204e001eab05b927d4d2908731ec9fb265019d981a28cf40a0c02d90924"
+    },
+    {
+      "commit": "eb0aa9633fa284c088da6e7c12196974619cd48b",
+      "file": "docs/healthroster-build/proposals/kept-current-public-read-successor-20261017/PUBLIC_CONTEXT_CONTRACT.json",
+      "sha256": "b4b7c4b3469ca67f1e24834aebe23d19934b4e095790b825a7faeb41885f4772"
+    },
+    {
+      "commit": "4224f7aa21aacf103d5e15fc180d88de2046e22a",
+      "file": "docs/healthroster-build/proposals/keep-public-read-utc-calendar-forward-20261017/payload/broker/src/weekly-source/kept-pay-context.mjs",
+      "sha256": "2c7afe36e931e556624fdd2fba2c2b8379c903941dbd03b88475b255bcbd73dd"
+    },
+    {
+      "commit": "a34cd60f2c75580a9e37aabfaf26f7dab680cb37",
+      "file": "docs/healthroster-build/proposals/kept-pay-rekey-current-root-successor-20261016/runtime/kept-pay-command.mjs",
+      "sha256": "0460915380ef38aeff9437164ae93562b924712af996d89c8d880456c4d8c273"
+    }
+  ],
+  "output": "js/weekly-source/kept-as-paid-contract.js",
+  "outputSha256": "71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c",
+  "transforms": [
+    "Remove sole backend JSON-parser import and its one-line command parser",
+    "Writer: retain complete validator/ack decoder and their unchanged helpers; omit unrelated failure/HTTP helpers",
+    "Remove ES export keywords and wrap two unchanged decoder scopes in classic namespace"
+  ],
+  "native": "NOT_RUN"
+}
