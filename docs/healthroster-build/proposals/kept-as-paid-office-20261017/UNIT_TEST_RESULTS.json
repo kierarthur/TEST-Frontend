@@ -1,19 +1,19 @@
 {
   "scope": "ACTUAL_SAVED_HEALTH_SOURCE_UNIT_AND_PARENT_TESTS",
   "counts": {
-    "tests": 162,
-    "pass": 162,
+    "tests": 170,
+    "pass": 170,
     "fail": 0,
     "skipped": 0
   },
   "files": [
     {
       "file": "tests/unit/kept-as-paid-controls.test.mjs",
-      "sha256": "79f8a4a51dab21d7f516def82c7473e9a7d7ace582c37020570e75184f57a2ae"
+      "sha256": "0448570c86a6d9afe5c6841fdc7d3c61e86e3da2eb229251222dca8279330ba5"
     },
     {
       "file": "tests/unit/kept-as-paid-parent.test.mjs",
-      "sha256": "f5d5814c13afc62a381579d2ea505e6d9956a16f7f4112d21638885206537c42"
+      "sha256": "a7fb61f3b14bcf9bd3c46949a60fc52ca88276e9ab6b92e5adab39e325433c00"
     },
     {
       "file": "tests/unit/health-correction-host-v3.test.mjs",
@@ -98,7 +98,7 @@
     "actor/event/parent mismatch cannot reuse or bypass a pending journal",
     "late parent/actor drift cannot adopt or erase the pending request after a valid reply",
     "one actor cannot dispatch another save while its original network call is in flight",
-    "only exact typed transactional refusal clears an unsuccessful intent and requires fresh facts",
+    "only exact typed post-replay refusal clears an unsuccessful intent and requires fresh facts",
     "one genuine credit is admitted unchanged; multiple credits require a genuine selected native member",
     "latest genuine ACK displays separately even when decision no longer applies; hostile labels are text",
     "London presentation respects winter/DST without changing UTC or decimal fields",
@@ -106,6 +106,14 @@
     "unknown, duplicate-key, oversized or wrong-actor ACK retains the original request",
     "discovery uses exact genuine current rows and never manufactures an available action from absence",
     "fresh response scope drift refuses before any journal or save",
+    "two independent JS realms share an exclusive lock before journal acquisition; lost reply survives the competing tab",
+    "another realm cannot clear or replace the journal while the original reply is in flight or its parent closes",
+    "missing or denied Web Locks fail closed before network or journal allocation",
+    "a competing realm that observed the pending request needs a fresh context after the owner confirms it",
+    "lost committed ACK then each pre-replay refusal retains the exact journal across independent realms until restored replay",
+    "explicit multi-credit selection uses genuine member, fresh selected-ID read and frozen fingerprint before writer",
+    "pending request or native membership drift refuses credit replacement without altering the original journal",
+    "an earlier confirmed receipt cannot authorize parent refresh for a later uncertain request",
     "actual Source and Work child dispatcher retain the same pending seven-field request across Back/reopen",
     "actual Work parent actor/token/open/generation/root/currentness/record changes refuse before save",
     "actual Source parent scope and actor changes refuse before native request",

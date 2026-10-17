@@ -10,3 +10,6 @@
  .ws-kept-controls { max-height: 65dvh; }
  .ws-kept-controls .ws-toolbar button { width: 100%; }
 }
+
+.ws-kept-credit { display: grid; gap: 8px; }
+.ws-kept-credit select { width: 100%; min-width: 0; min-height: 44px; }

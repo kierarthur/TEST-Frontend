@@ -2,30 +2,35 @@
   "version": "HEALTH_KEEP_OFFICE_SOURCE_PACKET_V1",
   "sourceComplete": true,
   "peer": "REQUIRED",
-  "unitTestsPassed": 162,
-  "controlledBrowserCasesPassed": 2,
+  "unitTestsPassed": 170,
+  "controlledBrowserCasesPassed": 5,
   "nativeApiJoin": "NOT_RUN",
   "release": "NOT_RUN",
   "files": [
     {
+      "file": "audit-refusals.py",
+      "sha256": "9c676aa865b9226f768a64e5f9f26f6b2f7d16d6f93446b70dea07d7242b926d",
+      "bytes": 4750
+    },
+    {
       "file": "BACKEND_SOURCE_PINS.json",
-      "sha256": "f4cbaa4c753763c7303c037a310554da897bb4bfdcb3f150f996632705eb125b",
-      "bytes": 504
+      "sha256": "cfae7354f820b5493a4214d23b975c5e98186332513854198ed6661c2a8c599b",
+      "bytes": 489
     },
     {
       "file": "BROWSER_RESULTS.json",
-      "sha256": "c8fc189b92d537d9289ec196e4262447089bdf1fe3e96cdae13b35bb9a4ec248",
-      "bytes": 853
+      "sha256": "e2ab098db1239d3e96e9ac41dd34cd61cfa54feed2c7842c29e723f702db180b",
+      "bytes": 1849
     },
     {
       "file": "build-contract.py",
-      "sha256": "893d61c6a05d53c8d21a91cdbe51fab707fff59778fdca817ea9b0537da3e254",
-      "bytes": 3007
+      "sha256": "18e71ae9144b8e422652dd6074bd43ad701964cf090c2142b90fca58df0c42f9",
+      "bytes": 3002
     },
     {
       "file": "CONTRACT_DERIVATION.json",
-      "sha256": "cd085369dbee77a03d81c89cdaf49b04a9c1f72ea13c14d5826290cb238b5bb5",
-      "bytes": 1678
+      "sha256": "a29a4278ca54165dd49e1c14187ad6c2995308287f5e94550988311f0430dc5c",
+      "bytes": 1646
     },
     {
       "file": "keep-host.jsinc",
@@ -34,13 +39,13 @@
     },
     {
       "file": "mount-parents.py",
-      "sha256": "111fa8a43227b0f88176c938be407713e87c470e5c092195387c100fc6471563",
-      "bytes": 5690
+      "sha256": "a2614a41d8fac3afde0c7364b870364cadd35cac6e354d921cc49ef456f4b440",
+      "bytes": 5685
     },
     {
       "file": "PARENT_EDITS.json",
-      "sha256": "cf959d80385eb665c61dfffc8e62d3ced954285af2716fa145820f3feb654862",
-      "bytes": 13954
+      "sha256": "ea6f9a1742f9f580644a270afb2bdb4768b86a2fbf63a0c8943298428882af16",
+      "bytes": 13850
     },
     {
       "file": "PUBLIC_CONTEXT.schema.json",
@@ -54,18 +59,29 @@
     },
     {
       "file": "README.md",
-      "sha256": "236719eccfc3d7f9bb507cd5671fafda2c8d89a2d41fb5c6b95d2c4f5d3bbeb1",
-      "bytes": 6647
+      "sha256": "bb029972b4c84cbafe51148044ea01564e9a44da62fe188e939c17e7f0370f49",
+      "bytes": 8647
+    },
+    {
+      "file": "REFUSAL_AUDIT.json",
+      "sha256": "6e0044d9ec0d49f588ae4ddb0915f231d1abe538b3ae67c51a50864ec0d4be11",
+      "bytes": 4462
     },
     {
       "file": "SOURCE_PINS.json",
-      "sha256": "fb965e8dda74295698b32f9d37dab3b7ab1c4648bd5109f28885d43ed7b8c377",
-      "bytes": 3759
+      "sha256": "efe2ced071c807a71445c120bbd3140eaca103f1b7b684c3b3fde2b63a00b661",
+      "bytes": 3678
     },
     {
       "file": "UNIT_TEST_RESULTS.json",
-      "sha256": "4ed504fb179e80c508a561165625f9c834cccde73cc1c9efdc306d36e64bb4cb",
-      "bytes": 16987
+      "sha256": "0643d7997b7759534c116d09dd25411c852a48fbba2533a7f9e9fb4b003d6cef",
+      "bytes": 17662
     }
+  ],
+  "refusalAudit": "PASS_SOURCE_ONLY",
+  "reviewFindingsFixed": [
+    "CROSS_TAB_JOURNAL_ACQUISITION",
+    "PRE_REPLAY_AUTH_REFUSAL_RECOVERY",
+    "REACHABLE_EXPLICIT_NATIVE_CREDIT_SELECTION"
   ]
 }

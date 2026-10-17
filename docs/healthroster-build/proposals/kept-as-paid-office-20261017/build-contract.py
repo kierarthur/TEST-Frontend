@@ -30,7 +30,7 @@ for name in ['PUBLIC_CONTEXT.schema.json','PUBLIC_CONTEXT_CONTRACT.json']:
  pins.append({'commit':'eb0aa9633fa284c088da6e7c12196974619cd48b','file':base+name,'sha256':sha(b)})
 pins.extend([{'commit':'4224f7aa21aacf103d5e15fc180d88de2046e22a','file':cp,'sha256':sha(context)},
  {'commit':'a34cd60f2c75580a9e37aabfaf26f7dab680cb37','file':wp,'sha256':sha(writer)}])
-(HERE/'CONTRACT_DERIVATION.json').write_text(json.dumps({'inputs':pins,'output':'js/weekly-source/kept-as-paid-contract.js','outputSha256':sha(output),
+(HERE/'CONTRACT_DERIVATION.json').write_bytes((json.dumps({'inputs':pins,'output':'js/weekly-source/kept-as-paid-contract.js','outputSha256':sha(output),
  'transforms':['Remove sole backend JSON-parser import and its one-line command parser','Writer: retain complete validator/ack decoder and their unchanged helpers; omit unrelated failure/HTTP helpers','Remove ES export keywords and wrap two unchanged decoder scopes in classic namespace'],
- 'native':'NOT_RUN'},indent=2)+'\n',encoding='utf-8')
+ 'native':'NOT_RUN'},indent=2)+'\n').encode())
 print('Generated exact Health decoders',sha(output))

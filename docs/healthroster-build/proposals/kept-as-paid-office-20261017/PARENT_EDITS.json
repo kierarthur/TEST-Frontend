@@ -80,11 +80,11 @@
       "hunks": [
         {
           "before": "  <link rel=\"stylesheet\" href=\"./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1\"/>",
-          "after": "  <link rel=\"stylesheet\" href=\"./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1\"/>\r\n  <link rel=\"stylesheet\" href=\"./css/kept-as-paid.css?v=67f0a098f5499f5c66258577791fbb6c969df8201112d55e5acf0afb653d1250\"/>"
+          "after": "  <link rel=\"stylesheet\" href=\"./css/weekly-source.css?v=20261010-contact-policy-r2&healthroster=20261014-checklist-r2&manual-enquiry=20261016-parent-r1\"/>\r\n  <link rel=\"stylesheet\" href=\"./css/kept-as-paid.css?v=6f4008916a7901ea7aeec66aa9811c1b935e9cacee67f52f60000e2c67af7c91\"/>"
         },
         {
           "before": "<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1\"></script>",
-          "after": "<script src=\"./js/weekly-source/kept-as-paid-contract.js?v=71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c\"></script>\r\n<script src=\"./js/weekly-source/kept-as-paid-controls.js?v=b34e4b21b159883b4733965abc98efd42369e527595b187652143216425c62af\"></script>\r\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4\"></script>"
+          "after": "<script src=\"./js/weekly-source/kept-as-paid-contract.js?v=71909ba418326ef938d49f3a7b9d09ec2e56f9877c939e77f838bf0ac979d89c\"></script>\r\n<script src=\"./js/weekly-source/kept-as-paid-controls.js?v=b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200\"></script>\r\n<script src=\"./js/weekly-source-presentation-v1.js?v=20260924-r3&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&later-change-decision=20261012-r1&kept-as-paid=bbc83262df266b7aaca58cdbccf6f81c62aa4b03ec698b2ed0caac4fca0b5dd4\"></script>"
         },
         {
           "before": "<script src=\"./js/weekly-source/import-workspace.js?v=20261013-contact-policy-next-r1&healthroster=20261014-checklist-r3&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1\"></script>",
@@ -95,8 +95,8 @@
           "after": "  <script src=\"./js/weekly-source/workspace-actions.js?v=20261009-contract-checkbox-r1&protected-next-receipts=20261010-r1&source-pay-query-admission=20261010-r1&bpay-next-standard-window=20261010-r2&contact-controls=20261016-r1&manual-enquiry=20261016-parent-r1&kept-as-paid=2907e9f516e9b461f9a02759faf8ef2d6fb443c0f87262d4d1456ed04f31c17f\"></script>"
         }
       ],
-      "outputSha256": "44be60a0a3fd9b2c7abf96167f07b5a184cd47e954498101abf11c3fe6a4ed84",
-      "outputCanonicalSha256": "eb22d191d1e7e25f0c8c3fabfde3cdad204c0b3d920c92a5e9e94f7387b12580"
+      "outputSha256": "35717ef93c5eba8207c942cef60141ef79545d457891c9da1c32fd0196d0a0e9",
+      "outputCanonicalSha256": "746919def25e7758ff19a47facc0ecd4e48eec6396ff37405f6200429c9c4698"
     }
   ],
   "mainUnchangedSha256": "ec01905facc35f501c1f6ccf08161c6f897eb5e3612a17d79e49134aa627e716",

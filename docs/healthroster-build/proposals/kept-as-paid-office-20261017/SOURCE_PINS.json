@@ -7,9 +7,9 @@
   "files": [
     {
       "file": "css/kept-as-paid.css",
-      "bytes": 796,
-      "sha256": "67f0a098f5499f5c66258577791fbb6c969df8201112d55e5acf0afb653d1250",
-      "canonicalLfSha256": "67f0a098f5499f5c66258577791fbb6c969df8201112d55e5acf0afb653d1250"
+      "bytes": 914,
+      "sha256": "6f4008916a7901ea7aeec66aa9811c1b935e9cacee67f52f60000e2c67af7c91",
+      "canonicalLfSha256": "6f4008916a7901ea7aeec66aa9811c1b935e9cacee67f52f60000e2c67af7c91"
     },
     {
       "file": "js/weekly-source/kept-as-paid-contract.js",
@@ -19,9 +19,9 @@
     },
     {
       "file": "js/weekly-source/kept-as-paid-controls.js",
-      "bytes": 14514,
-      "sha256": "b34e4b21b159883b4733965abc98efd42369e527595b187652143216425c62af",
-      "canonicalLfSha256": "b34e4b21b159883b4733965abc98efd42369e527595b187652143216425c62af"
+      "bytes": 17161,
+      "sha256": "b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200",
+      "canonicalLfSha256": "b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200"
     },
     {
       "file": "js/weekly-source/workspace-actions.js",
@@ -44,26 +44,26 @@
     {
       "file": "index.html",
       "bytes": 99875,
-      "sha256": "44be60a0a3fd9b2c7abf96167f07b5a184cd47e954498101abf11c3fe6a4ed84",
-      "canonicalLfSha256": "eb22d191d1e7e25f0c8c3fabfde3cdad204c0b3d920c92a5e9e94f7387b12580"
+      "sha256": "35717ef93c5eba8207c942cef60141ef79545d457891c9da1c32fd0196d0a0e9",
+      "canonicalLfSha256": "746919def25e7758ff19a47facc0ecd4e48eec6396ff37405f6200429c9c4698"
     },
     {
       "file": "tests/helpers/kept-office-parent-reverse.mjs",
-      "bytes": 1175,
-      "sha256": "3661d49714ef2f39c9c4acb9740be9536b842b1765881d25337268c7b6666fbe",
-      "canonicalLfSha256": "3661d49714ef2f39c9c4acb9740be9536b842b1765881d25337268c7b6666fbe"
+      "bytes": 1210,
+      "sha256": "9ba4dbcb8eb75c0d2cd3e1b28606f96ab66108b7e3f4a6742684e5967e0960a1",
+      "canonicalLfSha256": "9ba4dbcb8eb75c0d2cd3e1b28606f96ab66108b7e3f4a6742684e5967e0960a1"
     },
     {
       "file": "tests/unit/kept-as-paid-controls.test.mjs",
-      "bytes": 12186,
-      "sha256": "79f8a4a51dab21d7f516def82c7473e9a7d7ace582c37020570e75184f57a2ae",
-      "canonicalLfSha256": "79f8a4a51dab21d7f516def82c7473e9a7d7ace582c37020570e75184f57a2ae"
+      "bytes": 21032,
+      "sha256": "0448570c86a6d9afe5c6841fdc7d3c61e86e3da2eb229251222dca8279330ba5",
+      "canonicalLfSha256": "0448570c86a6d9afe5c6841fdc7d3c61e86e3da2eb229251222dca8279330ba5"
     },
     {
       "file": "tests/unit/kept-as-paid-parent.test.mjs",
-      "bytes": 9835,
-      "sha256": "f5d5814c13afc62a381579d2ea505e6d9956a16f7f4112d21638885206537c42",
-      "canonicalLfSha256": "f5d5814c13afc62a381579d2ea505e6d9956a16f7f4112d21638885206537c42"
+      "bytes": 10058,
+      "sha256": "a7fb61f3b14bcf9bd3c46949a60fc52ca88276e9ab6b92e5adab39e325433c00",
+      "canonicalLfSha256": "a7fb61f3b14bcf9bd3c46949a60fc52ca88276e9ab6b92e5adab39e325433c00"
     },
     {
       "file": "tests/unit/health-correction-host-v3.test.mjs",
@@ -73,9 +73,9 @@
     },
     {
       "file": "tests/ui/kept-as-paid-local-browser.mjs",
-      "bytes": 8917,
-      "sha256": "647231a3518b981e1b89895bb857227797d5b32185a444212566cfbc7c67d17a",
-      "canonicalLfSha256": "647231a3518b981e1b89895bb857227797d5b32185a444212566cfbc7c67d17a"
+      "bytes": 15403,
+      "sha256": "5e0cc30fd644ad55362ebc7ec6c84b8508379acd2055a000f884e43f7b61d6fc",
+      "canonicalLfSha256": "5e0cc30fd644ad55362ebc7ec6c84b8508379acd2055a000f884e43f7b61d6fc"
     }
   ],
   "nativeApiJoin": "NOT_RUN",

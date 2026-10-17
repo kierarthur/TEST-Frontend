@@ -1,11 +1,12 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
 const id=n=>'10000000-0000-0000-0000-'+String(n).padStart(12,'0'),clone=x=>JSON.parse(JSON.stringify(x));
 const storage=()=>{const values=new Map();return {values,getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};};
+const lockManager=()=>{const held=new Set();return {held,async request(name,options,fn){assert.equal(options.mode,'exclusive');assert.equal(options.ifAvailable,true);if(held.has(name))return fn(null);held.add(name);try{return await fn({name});}finally{held.delete(name);}}};};
 function context(extra={}){return {schema_version:'WEEKLY_SOURCE_KEPT_AS_PAID_CONTEXT_READ_V1',work_event_id:id(1),candidate_id:id(2),client_id:id(3),contract_id:id(4),source_group_id:id(5),source_cycle_id:id(6),finalisation_week_ending:'2026-10-18',projection_publication_id:id(7),upload_id:id(8),source_present:false,invoiced:false,paid:null,paid_evidence_state:'UNKNOWN',root_timesheet_ids:[id(9)],credit_lines:[],reason:'NOT_INVOICED_DISAPPEARED',kept_by_default:true,decision_available:true,decision_needed:true,facts_fingerprint:'a'.repeat(64),decision_applies:false,latest_acknowledgement:null,holds_pay:null,holds_invoice:null,accepted_source_removed:false,disabled_reason:null,...extra};}
 function receipt(p,extra={}){return {ok:true,decision:'KEEP_AS_PAID',decision_id:id(20),work_event_id:p.work_event_id,reason:p.reason,credit_invoice_line_id:p.credit_invoice_line_id,facts_fingerprint:p.expected_facts_fingerprint,actor_user_id:id(10),acknowledged_at_utc:'2026-10-17T12:34:56Z',acknowledgement_sequence:'9007199254740993',idempotent_replay:false,pay_changed:false,invoice_changed:false,...extra};}
-function fixture({saved=storage(),ctx=context(),send,selectedCredit,parentKey='TIMESHEET:'+id(9),event=id(1)}={}){
- let current=true,next=100;const calls=[];
- const sandbox={module:{exports:{}},Intl,Date,Response,AbortController,TextDecoder,Uint8Array,setTimeout,clearTimeout,crypto:{randomUUID:()=>id(next++)}};
+function fixture({saved=storage(),ctx=context(),send,selectedCredit,parentKey='TIMESHEET:'+id(9),event=id(1),locks=lockManager(),nextStart=100}={}){
+ let current=true,next=nextStart;const calls=[];
+ const sandbox={module:{exports:{}},Intl,Date,Response,AbortController,TextDecoder,Uint8Array,setTimeout,clearTimeout,navigator:{locks},crypto:{randomUUID:()=>id(next++)}};
  for(const file of ['kept-as-paid-contract.js','kept-as-paid-controls.js'])vm.runInNewContext(fs.readFileSync('js/weekly-source/'+file,'utf8'),sandbox);
  const api=sandbox.module.exports;
  const request=async options=>{const body=JSON.parse(options.body);calls.push(clone(body));if(body.action==='KEEP_AS_PAID')assert(saved.getItem(api.journalKey(id(10))),'journal must exist before network');
@@ -39,10 +40,12 @@ test('late parent/actor drift cannot adopt or erase the pending request after a 
 });
 test('one actor cannot dispatch another save while its original network call is in flight',async()=>{
  let release;const f=fixture({send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):new Promise(resolve=>{release=()=>resolve(Response.json(receipt(body.payload)));})}),c=f.create();await c.load();const first=c.save();
- await assert.rejects(f.create().retry(),/still being checked/);await assert.rejects(c.save(),/still being checked/);assert.equal(f.calls.length,2);release();await first;assert.equal(f.saved.values.size,0);
+ await assert.rejects(f.create().retry(),/KEEP_ANOTHER_WINDOW_ACTIVE/);await assert.rejects(c.save(),/KEEP_ANOTHER_WINDOW_ACTIVE/);assert.equal(f.calls.length,2);release();await first;assert.equal(f.saved.values.size,0);
 });
-test('only exact typed transactional refusal clears an unsuccessful intent and requires fresh facts',async()=>{
- const f=fixture({send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):Response.json({error_code:'WEEKLY_SOURCE_KEEP_AS_PAID_FACTS_CHANGED'},{status:409})}),c=f.create();await c.load();await assert.rejects(c.save());assert.equal(f.saved.values.size,0);await assert.rejects(c.save(),/Refresh/);assert.equal(f.calls.length,2);
+test('only exact typed post-replay refusal clears an unsuccessful intent and requires fresh facts',async()=>{
+ for(const code of ['WEEKLY_SOURCE_KEEP_AS_PAID_FACTS_CHANGED','WEEKLY_SOURCE_KEEP_AS_PAID_SCOPE_CHANGED','WEEKLY_SOURCE_KEEP_AS_PAID_NOT_ELIGIBLE']){
+ const f=fixture({send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):Response.json({error_code:code},{status:409})}),c=f.create();await c.load();await assert.rejects(c.save());assert.equal(f.saved.values.size,0);await assert.rejects(c.save(),/Refresh/);assert.equal(f.calls.length,2);
+ }
  for(const [code,status]of [['WEEKLY_SOURCE_KEEP_AS_PAID_FACTS_CHANGED',400],['UNEXPECTED',409]]){const x=fixture({send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):Response.json({error_code:code},{status})}),v=x.create();await v.load();await assert.rejects(v.save());assert.equal(x.saved.values.size,1);}
 });
 test('one genuine credit is admitted unchanged; multiple credits require a genuine selected native member',async()=>{
@@ -69,9 +72,68 @@ test('unknown, duplicate-key, oversized or wrong-actor ACK retains the original 
 });
 test('discovery uses exact genuine current rows and never manufactures an available action from absence',()=>{
  const f=fixture(),row={work_event_id:id(1),candidate:'<b>worker</b>',work_date:'2026-10-17',start:'09:00',end:'17:00',break_minutes:30,context:context(),unavailable_reason:null};
- assert.match(f.api.renderRows([row],'SIMPLE_TIMESHEET'),/&lt;b&gt;worker&lt;\/b&gt;/);assert.match(f.api.renderRows([row],'SOURCE_WORKSPACE'),/data-kept-work-event/);assert.equal(f.api.renderRows([],'SOURCE_WORKSPACE'),'');assert.equal(f.api.renderRows([row],'BANKING'),'');
+ assert.match(f.api.renderRows([row],'SIMPLE_TIMESHEET'),/&lt;b&gt;worker&lt;\/b&gt;/);assert(f.api.renderRows([row],'SIMPLE_TIMESHEET').includes(' \u00b7 '));assert(f.api.renderRows([row],'SIMPLE_TIMESHEET').includes('09:00\u201317:00'));assert.match(f.api.renderRows([row],'SOURCE_WORKSPACE'),/data-kept-work-event/);assert.equal(f.api.renderRows([],'SOURCE_WORKSPACE'),'');assert.equal(f.api.renderRows([row],'BANKING'),'');
  assert.throws(()=>f.api.discovery([row,row]));assert.throws(()=>f.api.discovery([{...row,context:null}]));assert.doesNotMatch(f.api.renderRows([{...row,context:null,unavailable_reason:{code:'CURRENT_SOURCE_CONTEXT_UNAVAILABLE',message:'The current Source context is not yet available. Refresh this shift before deciding.'}}],'SOURCE_WORKSPACE'),/data-kept-work-event/);
 });
 test('fresh response scope drift refuses before any journal or save',async()=>{
  const f=fixture({ctx:context({contract_id:id(99)})}),c=f.create();await assert.rejects(c.load());await assert.rejects(c.save());assert.equal(f.saved.values.size,0);assert.equal(f.calls.length,1);
+});
+test('two independent JS realms share an exclusive lock before journal acquisition; lost reply survives the competing tab',async()=>{
+ const saved=storage(),locks=lockManager();let lose;
+ const a=fixture({saved,locks,nextStart:100,send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):new Promise((resolve,reject)=>{lose=()=>reject(Error('lost reply'));})});
+ const b=fixture({saved,locks,nextStart:200});const first=a.create(),other=b.create();await first.load();await other.load();
+ const pending=first.save();await Promise.resolve();await new Promise(resolve=>setImmediate(resolve));const original=saved.getItem(a.api.journalKey(id(10)));
+ await assert.rejects(other.save(),/KEEP_ANOTHER_WINDOW_ACTIVE/);assert.equal(b.calls.length,1);assert.equal(saved.getItem(a.api.journalKey(id(10))),original);assert.equal(locks.held.size,1);
+ lose();await assert.rejects(pending);assert.equal(locks.held.size,0);await assert.rejects(other.save(),/original/);assert.equal(saved.getItem(a.api.journalKey(id(10))),original);
+ await other.retry();assert.deepEqual(a.calls[1],b.calls[1]);assert.equal(b.calls[1].payload.idempotency_key,id(100));assert.equal(saved.values.size,0);
+});
+test('another realm cannot clear or replace the journal while the original reply is in flight or its parent closes',async()=>{
+ const saved=storage(),locks=lockManager();let complete;const a=fixture({saved,locks,nextStart:100,send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):new Promise(resolve=>{complete=()=>resolve(Response.json(receipt(body.payload)));})});const first=a.create();await first.load();const pending=first.save();await new Promise(resolve=>setImmediate(resolve));
+ const original=saved.getItem(a.api.journalKey(id(10))),b=fixture({saved,locks,nextStart:200}),other=b.create();await assert.rejects(other.retry(),/KEEP_ANOTHER_WINDOW_ACTIVE/);assert.equal(b.calls.length,0);
+ a.setCurrent(false);complete();await assert.rejects(pending);assert.equal(saved.getItem(a.api.journalKey(id(10))),original);await other.retry();assert.deepEqual(a.calls[1],b.calls[0]);assert.equal(saved.values.size,0);
+});
+test('missing or denied Web Locks fail closed before network or journal allocation',async()=>{
+ for(const locks of [null,{}, {request(){throw Error('lock service unavailable');}}]){const f=fixture({locks}),c=f.create();await assert.rejects(c.load());await assert.rejects(c.save());assert.equal(f.calls.length,0);assert.equal(f.saved.values.size,0);}
+ const f=fixture({locks:null}),c=f.create();await assert.rejects(c.load());assert.match(c.html(),/current supported browser/);
+});
+test('a competing realm that observed the pending request needs a fresh context after the owner confirms it',async()=>{
+ const saved=storage(),locks=lockManager();let complete;const a=fixture({saved,locks,send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):new Promise(resolve=>{complete=()=>resolve(Response.json(receipt(body.payload)));})}),b=fixture({saved,locks,nextStart:200});
+ const first=a.create(),other=b.create();await first.load();await other.load();const pending=first.save();await new Promise(resolve=>setImmediate(resolve));await assert.rejects(other.save(),/KEEP_ANOTHER_WINDOW_ACTIVE/);
+ complete();await pending;await assert.rejects(other.retry(),/original/);assert.equal(other.snapshot().stale,true);await assert.rejects(other.save(),/Refresh/);assert.equal(b.calls.length,1);assert.equal(saved.values.size,0);
+});
+
+test('lost committed ACK then each pre-replay refusal retains the exact journal across independent realms until restored replay',async()=>{
+ for(const [code,status]of [
+  ['WEEKLY_SOURCE_KEEP_AS_PAID_REQUEST_INVALID',400],['WEEKLY_SOURCE_KEEP_AS_PAID_IDEMPOTENCY_COLLISION',409],
+  ['WEEKLY_SOURCE_PAYMENT_AUTHORISER_REQUIRED',403],['WEEKLY_SOURCE_OFFICE_ACTOR_INACTIVE',403],
+  ['WEEKLY_SOURCE_CLIENT_NOT_IN_GROUP',403],['WEEKLY_SOURCE_GROUP_NOT_ACTIVE',403],
+  ['PAYMENT_PERMISSION_REQUIRED',403],['WEEKLY_SOURCE_AUTHENTICATION_REQUIRED',401],['WEEKLY_SOURCE_OFFICE_ADMIN_REQUIRED',403],
+  ['WEEKLY_SOURCE_KEEP_AS_PAID_DEPENDENCY_REQUIRED',503],['WEEKLY_SOURCE_KEEP_AS_PAID_RESULT_INVALID',502]
+ ]){
+  const saved=storage(),locks=lockManager();let committed;
+  const first=fixture({saved,locks,send:body=>{if(body.action==='KEEP_AS_PAID_CONTEXT')return Response.json(context());committed=receipt(body.payload);throw Error('committed reply lost');}}),a=first.create();
+  await a.load();await assert.rejects(a.save());assert(committed);const original=saved.getItem(first.api.journalKey(id(10)));
+  let restored=false;const reopened=fixture({saved,locks,nextStart:200,send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):restored?Response.json({...committed,idempotent_replay:true}):Response.json({error_code:code},{status})}),b=reopened.create();
+  await assert.rejects(b.retry());assert.equal(saved.getItem(first.api.journalKey(id(10))),original);assert.match(b.html(),/save result is uncertain/);assert.doesNotMatch(b.html(),/was not saved/);
+  await assert.rejects(b.save(),/original/);restored=true;await b.retry();assert.deepEqual(reopened.calls[0],first.calls[1]);assert.deepEqual(reopened.calls[1],first.calls[1]);assert.equal(saved.values.size,0);assert.equal(b.snapshot().receipt.idempotent_replay,true);
+ }
+});
+test('explicit multi-credit selection uses genuine member, fresh selected-ID read and frozen fingerprint before writer',async()=>{
+ const credits=[{invoice_line_id:id(40)},{invoice_line_id:id(41)}];let selectedRead=false;
+ const f=fixture({send:body=>{
+  if(body.action==='KEEP_AS_PAID_CONTEXT'){selectedRead=body.payload.credit_invoice_line_id===id(41);return Response.json(context({invoiced:true,reason:'CREDITED',credit_lines:credits,disabled_reason:selectedRead?null:{code:'CREDIT_SELECTION_REQUIRED',message:'Open the credited Source line before recording Keep as paid.'}}));}
+  assert(selectedRead);return Response.json(receipt(body.payload));
+ }}),c=f.create();await c.load();assert.match(c.html(),/data-kept-credit/);assert.match(c.html(),/Choose the exact credit line/);assert.doesNotMatch(c.html(),/value="10000000-0000-0000-0000-000000000040" selected/);
+ await assert.rejects(c.save());await assert.rejects(c.chooseCredit(id(42)),/credited Source lines/);assert.equal(f.calls.length,1);
+ await c.chooseCredit(id(41));assert.equal(f.calls[1].payload.credit_invoice_line_id,id(41));assert.equal(c.snapshot().selectedCredit,id(41));await c.save();assert.equal(f.calls[2].payload.credit_invoice_line_id,id(41));assert.equal(f.calls[2].payload.expected_facts_fingerprint,'a'.repeat(64));
+});
+test('pending request or native membership drift refuses credit replacement without altering the original journal',async()=>{
+ const credits=[{invoice_line_id:id(40)},{invoice_line_id:id(41)}];const f=fixture({selectedCredit:id(40),send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context({invoiced:true,reason:'CREDITED',credit_lines:credits})):Promise.reject(Error('lost'))}),c=f.create();await c.load();await assert.rejects(c.save());const original=f.saved.getItem(f.api.journalKey(id(10)));
+ await assert.rejects(c.chooseCredit(id(41)),/original/);assert.equal(f.saved.getItem(f.api.journalKey(id(10))),original);assert.equal(f.calls.length,2);
+ const drift=fixture({send:body=>Response.json(context({invoiced:true,reason:'CREDITED',credit_lines:body.payload.credit_invoice_line_id?[credits[0]]:credits,disabled_reason:{code:'CREDIT_SELECTION_REQUIRED',message:'Open the credited Source line before recording Keep as paid.'}}))}),d=drift.create();await d.load();await assert.rejects(d.chooseCredit(id(41)));await assert.rejects(d.save());assert.equal(drift.saved.values.size,0);
+});
+
+test('an earlier confirmed receipt cannot authorize parent refresh for a later uncertain request',async()=>{
+ let writes=0;const f=fixture({send:body=>body.action==='KEEP_AS_PAID_CONTEXT'?Response.json(context()):++writes===1?Response.json(receipt(body.payload)):Promise.reject(Error('later response lost'))}),c=f.create();
+ await c.load();await c.save();assert(c.snapshot().receipt);await assert.rejects(c.save());assert.equal(c.snapshot().receipt,null);assert.equal(f.saved.values.size,1);assert(c.snapshot().pending);
 });

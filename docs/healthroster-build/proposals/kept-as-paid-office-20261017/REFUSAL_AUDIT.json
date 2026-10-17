@@ -1,0 +1,104 @@
+{
+  "scope": "COMPLETE_FROZEN_HEALTH_NATIVE_WRITER_AND_ACTUAL_WORKER_OFFLINE_SOURCE_ONLY",
+  "sources": [
+    {
+      "commit": "ef64f43909db9811efaf1021d19f2fddc4bd44e6",
+      "file": "supabase/repeatable/17102026_0113_weekly_source_kept_pay_rekey/07_keep_as_paid_decide.sqlinc",
+      "gitSha256": "2532ae8f82630d66230712c966a7913c1011c3f8f4ae7f5e74e5f2aa9e4f1922",
+      "savedSha256": "2532ae8f82630d66230712c966a7913c1011c3f8f4ae7f5e74e5f2aa9e4f1922"
+    },
+    {
+      "commit": "ef64f43909db9811efaf1021d19f2fddc4bd44e6",
+      "file": "supabase/repeatable/17102026_0113_weekly_source_kept_pay_rekey/04_kept_read_admission.sqlinc",
+      "gitSha256": "cdcac4c2c2053194bc3bc68c28d701c5bbb334e82bda3e8e41b79ca59e53a9aa",
+      "savedSha256": "cdcac4c2c2053194bc3bc68c28d701c5bbb334e82bda3e8e41b79ca59e53a9aa"
+    },
+    {
+      "commit": "ef64f43909db9811efaf1021d19f2fddc4bd44e6",
+      "file": "broker/src/weekly-source/kept-pay-command.mjs",
+      "gitSha256": "0460915380ef38aeff9437164ae93562b924712af996d89c8d880456c4d8c273",
+      "savedSha256": "0460915380ef38aeff9437164ae93562b924712af996d89c8d880456c4d8c273"
+    },
+    {
+      "commit": "ef64f43909db9811efaf1021d19f2fddc4bd44e6",
+      "file": "broker/src/weekly-source/routes.js",
+      "gitSha256": "91b1a323e74114490c2c15455e3c9a9db20675e8ad35a695c8061bc43d37eb1d",
+      "savedSha256": "91b1a323e74114490c2c15455e3c9a9db20675e8ad35a695c8061bc43d37eb1d"
+    }
+  ],
+  "controllerSha256": "b80a1262eec48056564581f80b2cfb0965382f2b55313c293ab38ddcb6d32200",
+  "nativeRefusals": [
+    {
+      "code": "WEEKLY_SOURCE_KEEP_AS_PAID_REQUEST_INVALID",
+      "sqlstate": "22023",
+      "httpStatus": 400,
+      "stage": "PRE_REPLAY_OR_COLLISION_NO_PRIOR_NONCOMMIT_PROOF",
+      "disposition": "RETAIN_EXACT_ORIGINAL_JOURNAL_UNRESOLVED"
+    },
+    {
+      "code": "WEEKLY_SOURCE_KEEP_AS_PAID_IDEMPOTENCY_COLLISION",
+      "sqlstate": "22023",
+      "httpStatus": 409,
+      "stage": "PRE_REPLAY_OR_COLLISION_NO_PRIOR_NONCOMMIT_PROOF",
+      "disposition": "RETAIN_EXACT_ORIGINAL_JOURNAL_UNRESOLVED"
+    },
+    {
+      "code": "WEEKLY_SOURCE_KEEP_AS_PAID_FACTS_CHANGED",
+      "sqlstate": "40001",
+      "httpStatus": 409,
+      "stage": "AFTER_BOTH_EXACT_REPLAY_LOOKUPS_UNDER_REQUEST_EVENT_LOCKS",
+      "disposition": "CLEAR_ONLY_MATCHING_JOURNAL_REQUIRE_FRESH_FACTS"
+    },
+    {
+      "code": "WEEKLY_SOURCE_KEEP_AS_PAID_SCOPE_CHANGED",
+      "sqlstate": "40001",
+      "httpStatus": 409,
+      "stage": "AFTER_BOTH_EXACT_REPLAY_LOOKUPS_UNDER_REQUEST_EVENT_LOCKS",
+      "disposition": "CLEAR_ONLY_MATCHING_JOURNAL_REQUIRE_FRESH_FACTS"
+    },
+    {
+      "code": "WEEKLY_SOURCE_KEEP_AS_PAID_NOT_ELIGIBLE",
+      "sqlstate": "55000",
+      "httpStatus": 409,
+      "stage": "AFTER_BOTH_EXACT_REPLAY_LOOKUPS_UNDER_REQUEST_EVENT_LOCKS",
+      "disposition": "CLEAR_ONLY_MATCHING_JOURNAL_REQUIRE_FRESH_FACTS"
+    },
+    {
+      "code": "WEEKLY_SOURCE_PAYMENT_AUTHORISER_REQUIRED",
+      "sqlstate": "42501",
+      "httpStatus": 403,
+      "stage": "PRE_REPLAY_OR_COLLISION_NO_PRIOR_NONCOMMIT_PROOF",
+      "disposition": "RETAIN_EXACT_ORIGINAL_JOURNAL_UNRESOLVED"
+    },
+    {
+      "code": "WEEKLY_SOURCE_OFFICE_ACTOR_INACTIVE",
+      "sqlstate": "42501",
+      "httpStatus": 403,
+      "stage": "PRE_REPLAY_OR_COLLISION_NO_PRIOR_NONCOMMIT_PROOF",
+      "disposition": "RETAIN_EXACT_ORIGINAL_JOURNAL_UNRESOLVED"
+    },
+    {
+      "code": "WEEKLY_SOURCE_CLIENT_NOT_IN_GROUP",
+      "sqlstate": "22023",
+      "httpStatus": 403,
+      "stage": "PRE_REPLAY_OR_COLLISION_NO_PRIOR_NONCOMMIT_PROOF",
+      "disposition": "RETAIN_EXACT_ORIGINAL_JOURNAL_UNRESOLVED"
+    },
+    {
+      "code": "WEEKLY_SOURCE_GROUP_NOT_ACTIVE",
+      "sqlstate": "22023",
+      "httpStatus": 403,
+      "stage": "PRE_REPLAY_OR_COLLISION_NO_PRIOR_NONCOMMIT_PROOF",
+      "disposition": "RETAIN_EXACT_ORIGINAL_JOURNAL_UNRESOLVED"
+    }
+  ],
+  "outerWorkerCurrentAuth": [
+    "WEEKLY_SOURCE_AUTHENTICATION_REQUIRED",
+    "PAYMENT_PERMISSION_REQUIRED",
+    "WEEKLY_SOURCE_OFFICE_ADMIN_REQUIRED"
+  ],
+  "otherResponses": "Retain exact original journal, including 401/403, dependency/transport/decoder errors, malformed replies and unknown codes/status pairs.",
+  "priorCommitRule": "Current-attempt refusal or rollback alone does not prove an earlier attempt did not commit. Only matching exact ACK or the three source-proved post-replay noncommit refusals permit clearing.",
+  "checksPassed": true,
+  "nativeApiJoin": "NOT_RUN"
+}

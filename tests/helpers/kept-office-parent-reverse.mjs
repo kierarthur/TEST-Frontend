@@ -1,7 +1,7 @@
 import fs from 'node:fs';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 const bytes=fs.readFileSync('docs/healthroster-build/proposals/kept-as-paid-office-20261017/PARENT_EDITS.json');
-assert.equal(hash(bytes),'cf959d80385eb665c61dfffc8e62d3ced954285af2716fa145820f3feb654862');
+assert.equal(hash(bytes.toString().replaceAll('\r\n','\n')),'ea6f9a1742f9f580644a270afb2bdb4768b86a2fbf63a0c8943298428882af16');
 export const keepParents=JSON.parse(bytes);
 export function reverseKeepParent(file,value){
  const edit=keepParents.edits.find(x=>x.target===file);if(!edit)return value;

@@ -49,5 +49,5 @@ for file,value in values.items():
  assert result.encode()==saved[file];changes[file]['outputSha256']=sha(value.encode());changes[file]['outputCanonicalSha256']=sha(value.replace('\r\n','\n').encode())
 for file,value in values.items():(ROOT/file).write_bytes(value.encode())
 receipt={'version':'HEALTH_KEEP_OFFICE_FINITE_PARENTS_V1','base':BASE,'edits':list(changes.values()),'mainUnchangedSha256':sha((ROOT/'js/main.js').read_bytes()),'native':'NOT_RUN'}
-(HERE/'PARENT_EDITS.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
+(HERE/'PARENT_EDITS.json').write_bytes((json.dumps(receipt,indent=2)+'\n').encode())
 print('Mounted',len(changes),'complete parents; all reverse byte-for-byte')

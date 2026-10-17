@@ -8,7 +8,9 @@ function fixture(source=false){
  const native={timesheet_id:id(9),sheet_scope:'WEEKLY',is_current:true,archived_at_utc:null};
  const ctx={entity:'timesheets',openToken:'open',data:{timesheet_id:id(9)},timesheetDetails:{timesheet:native},vm:{mount:true,record_version:'current',kept_as_paid_contexts:[row()]}};
  const parent={kind:source?'weekly-source-imports-v1':'timesheets',mode:'view',_ctxRef:ctx,_token:'token'};
+ const held=new Set();
  const root={module:{exports:{}},SESSION:{user:{id:id(10),role:'payment_authoriser'}},modalCtx:ctx,__modalStack:[parent],Intl,Date,Response,AbortController,TextDecoder,Uint8Array,
+  navigator:{locks:{async request(name,options,fn){assert.equal(options.ifAvailable,true);if(held.has(name))return fn(null);held.add(name);try{return await fn({name});}finally{held.delete(name);}}}},
   crypto:{randomUUID:()=>id(100)},localStorage:{getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)},
   setTimeout:(fn,ms)=>{if(ms===45000)return 0;timers.push(fn);return 1;},clearTimeout(){},document:{addEventListener(){},querySelector:()=>host,getElementById:()=>null},
   CloudTMSWeeklySourcePresentationV1:{findHostPayload:()=>ctx,buildViewModel:()=>ctx.vm},

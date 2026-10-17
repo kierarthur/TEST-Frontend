@@ -1,6 +1,6 @@
 {
   "scope": "ACTUAL_SAVED_HEALTH_MODULES_CONTROLLED_RESPONSES_REAL_DOM_NOT_NATIVE_OR_INSTALLED",
-  "cases": 2,
+  "cases": 5,
   "results": [
     {
       "surface": "SOURCE_WORKSPACE",
@@ -8,6 +8,7 @@
         "width": 1366,
         "height": 900
       },
+      "explicitGenuineMultiCreditSelection": false,
       "exactLostReplyJournal": true,
       "currentAcknowledgement": true,
       "parentRefresh": true,
@@ -19,13 +20,47 @@
         "width": 390,
         "height": 844
       },
+      "explicitGenuineMultiCreditSelection": false,
       "exactLostReplyJournal": true,
       "currentAcknowledgement": true,
       "parentRefresh": true,
       "externalRequests": 0
+    },
+    {
+      "surface": "SOURCE_WORKSPACE",
+      "viewport": {
+        "width": 1366,
+        "height": 900
+      },
+      "explicitGenuineMultiCreditSelection": true,
+      "exactLostReplyJournal": true,
+      "currentAcknowledgement": true,
+      "parentRefresh": true,
+      "externalRequests": 0
+    },
+    {
+      "surface": "SIMPLE_TIMESHEET",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "explicitGenuineMultiCreditSelection": true,
+      "exactLostReplyJournal": true,
+      "currentAcknowledgement": true,
+      "parentRefresh": true,
+      "externalRequests": 0
+    },
+    {
+      "surface": "TWO_REAL_TABS_SHARED_ORIGIN",
+      "exclusiveWebLock": true,
+      "competingFreshRequestRefused": true,
+      "closedParentLostReplyRetainsOriginalJournal": true,
+      "authorityRevocationRetainsCommittedLostAckJournal": true,
+      "restoredAuthorityIdenticalReplay": true,
+      "identicalCrossTabRetry": true,
+      "externalRequests": 0
     }
   ],
-  "childTemporaryDirectory": "PHYSICALLY_D_EMPTY_REMOVED",
-  "nativeApiJoin": "NOT_RUN",
-  "testSourceSha256": "647231a3518b981e1b89895bb857227797d5b32185a444212566cfbc7c67d17a"
+  "testSha256": "5e0cc30fd644ad55362ebc7ec6c84b8508379acd2055a000f884e43f7b61d6fc",
+  "nativeApiJoin": "NOT_RUN"
 }
