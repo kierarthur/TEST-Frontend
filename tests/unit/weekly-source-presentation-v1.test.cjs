@@ -152,7 +152,7 @@ test('NEXT activity unknown retains only an independently verified existing sing
       idempotency_key: 'next-independent-decision-1' });
   assert.equal(command.endpoint, source.proposal.decision.endpoint);
   assert.deepEqual(command.body, { action: 'LATER_CHANGE_DECISION', payload: {
-    ...source.proposal.decision.command_payload, decision: 'APPROVE_UPDATED_HOURS',
+    ...source.proposal.decision.command_payload, bundle_revision: '1', decision: 'APPROVE_UPDATED_HOURS',
     idempotency_key: 'next-independent-decision-1' } });
 });
 

@@ -1,0 +1,88 @@
+{
+  "version": "OFFICE_MISSING_CURRENT_HEALTH_CONTRACT_PINS_V1",
+  "officeParent": "ac112422e529aefbcba0fc0147d2b28123751823",
+  "backend": {
+    "path": "D:/Development/GitHub/.codex-worktrees/healthroster-install2-14102026",
+    "commit": "b8bdd9914724999598876c6b2b3d6359ee784775",
+    "files": [
+      {
+        "path": "broker/src/weekly-source/routes.js",
+        "savedBytes": 73121,
+        "savedSha256": "196fefff89b45583c46ddea1cae5d4d22ea4f02d2f5089899a95e39e2601d9fe",
+        "gitBytes": 73121,
+        "gitSha256": "196fefff89b45583c46ddea1cae5d4d22ea4f02d2f5089899a95e39e2601d9fe",
+        "savedForm": "RAW_EQUAL_GIT"
+      },
+      {
+        "path": "broker/src/weekly-source/missing-accept.mjs",
+        "savedBytes": 2377,
+        "savedSha256": "47860ad7622ec1181501835517c5753f6cf6dd6fd8c73e206d90f9e9e746625d",
+        "gitBytes": 2377,
+        "gitSha256": "47860ad7622ec1181501835517c5753f6cf6dd6fd8c73e206d90f9e9e746625d",
+        "savedForm": "RAW_EQUAL_GIT"
+      },
+      {
+        "path": "supabase/repeatable/17102026_0141_weekly_source_later_accept_health/03_inventory_inputs.sqlinc",
+        "savedBytes": 10913,
+        "savedSha256": "e1b9fbad59ca6a781e4bf42fe06a32e30f7da88eb75d999f3c4510cb2a34184c",
+        "gitBytes": 10913,
+        "gitSha256": "e1b9fbad59ca6a781e4bf42fe06a32e30f7da88eb75d999f3c4510cb2a34184c",
+        "savedForm": "RAW_EQUAL_GIT"
+      },
+      {
+        "path": "supabase/repeatable/17102026_0141_weekly_source_later_accept_health/05_prepare.sqlinc",
+        "savedBytes": 12059,
+        "savedSha256": "ef34b837d4bc7d15b2a4e19e3d181d6cac610e07d571bc711295b0d8066ab96b",
+        "gitBytes": 12059,
+        "gitSha256": "ef34b837d4bc7d15b2a4e19e3d181d6cac610e07d571bc711295b0d8066ab96b",
+        "savedForm": "RAW_EQUAL_GIT"
+      },
+      {
+        "path": "supabase/repeatable/17102026_0141_weekly_source_later_accept_health/08_context_entry.sqlinc",
+        "savedBytes": 2046,
+        "savedSha256": "94007a04a43d762aab6c42fe2759795075132fb5314bde0db4266865c59c018f",
+        "gitBytes": 2046,
+        "gitSha256": "94007a04a43d762aab6c42fe2759795075132fb5314bde0db4266865c59c018f",
+        "savedForm": "RAW_EQUAL_GIT"
+      },
+      {
+        "path": "supabase/repeatable/17102026_0141_weekly_source_later_accept_health/10_complete_later_change_decide.sqlinc",
+        "savedBytes": 24352,
+        "savedSha256": "46d1a546f9ec985e6eec27d032f52f04a6518e2ce7bdc15005621042c1bda7d1",
+        "gitBytes": 24352,
+        "gitSha256": "46d1a546f9ec985e6eec27d032f52f04a6518e2ce7bdc15005621042c1bda7d1",
+        "savedForm": "RAW_EQUAL_GIT"
+      }
+    ]
+  },
+  "authority": [
+    {
+      "path": "D:/Development/GitHub/cloudtms-backend/codex_outputs/claude-stage2-continuation-20260925/SEND_5_TO_HEALTHROSTER_BUILD_STAGE_NONSTOP.md",
+      "bytes": 7802,
+      "sha256": "62174e646395f01c199558ebc8f5bb1e04839c0127ab182e08fb207edd9bed91"
+    },
+    {
+      "path": "D:/Development/Legacy-Work/C-tmp/healthroster-handover/HealthRoster_Builder_Pack_16102026/NHSP_AUTHORISATION_AUDIT_15102026_HANDOFF_V6/TASK_BRIEF.md",
+      "bytes": 13498,
+      "sha256": "c0d279e79596a29c733bb6f7665f50cd2a3b15c1e3fd7ea7206636dfac354076"
+    },
+    {
+      "path": "D:/Development/Legacy-Work/C-tmp/healthroster-handover/HealthRoster_Builder_Pack_16102026/NHSP_AUTHORISATION_AUDIT_15102026_HANDOFF_V6/UI_POLICY_AND_COPY.md",
+      "bytes": 76926,
+      "sha256": "23d5e17da5b8783f34c7ba760a004833a73edfde8c9e21e55f6766d6671dfb87"
+    },
+    {
+      "path": "D:/Development/Legacy-Work/C-tmp/healthroster-handover/HealthRoster_Builder_Pack_16102026/NHSP_AUTHORISATION_AUDIT_15102026_HANDOFF_V6/FINAL_REVIEW_RECORD.md",
+      "bytes": 9859,
+      "sha256": "f294c37445b6736d88421e3c83c050d73ec4774f53cac1e796c702ea9787f668"
+    }
+  ],
+  "separatelyUnintegratedBackendReplyForward": {
+    "commit": "3e728640408e3bd7e62edeac0715fb5da9c115f5",
+    "folder": "later-reply-int63-current-owner-forward-20261017",
+    "manifestSha256": "1d8c1068d6161245410f3bbb37583fe0345c927775abce81faafeb6226b213fe",
+    "scope": "seven output/audit/detail text emissions; original request/replay bytes untouched"
+  },
+  "bankingSemanticBodiesRead": 0,
+  "nativeOrApiCalls": 0
+}

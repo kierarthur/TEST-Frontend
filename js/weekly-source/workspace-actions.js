@@ -1488,22 +1488,37 @@
     }else return false;
     let row;try{row=keep.discovery(rows).find(item=>item.work_event_id===eventId);}catch{return false;}
     if(!row?.context||!parentKey||!parentCurrent())return false;
+    const actorState=()=>{const u=typeof SESSION!=='undefined'?SESSION?.user:null;return JSON.stringify([u?.id,u?.role,u?.is_active,u?.active,u?.payment_authoriser,u?.payment_golden_key]);};
+    const actorPin=actorState();
     let child=null;
     const current=()=>{
       const now=root.__modalStack||[];
       return child&&now.length===stack.length+1&&stack.every((entry,i)=>now[i]===entry)&&now.at(-1)===child
-        &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor&&workspaceApi()===workspace&&parentCurrent();
+        &&(typeof SESSION!=='undefined'?SESSION?.user?.id:null)===actor&&actorState()===actorPin&&workspaceApi()===workspace&&parentCurrent();
     };
     const scope=Object.fromEntries(['candidate_id','client_id','contract_id','source_group_id','source_cycle_id'].map(key=>[key,row.context[key]]));
-    let controller;try{controller=keep.create({actorId:actor,workEventId:eventId,parentKey,expectedScope:scope,
+    let missing=null,controller;try{controller=keep.create({actorId:actor,workEventId:eventId,parentKey,expectedScope:scope,
+      isOtherPending:()=>missing?.blocksOther()===true,onActivity:()=>missing?.repaint(),
       ...(detail.creditInvoiceLineId!==undefined?{selectedCredit:detail.creditInvoiceLineId}:{}),
       request:options=>workspace.keepAsPaidRequest(options),isCurrent:current});}catch{return false;}
-    const render=()=>'<div class="ws-child" data-wsa-screen="keep-as-paid"><div data-kept-controls-host></div><div class="ws-child-actions"><button type="button" class="btn btn-outline" data-kept-back>Back</button></div></div>';
+    if(root.CloudTMSMissingSourceReviewV1){try{missing=root.CloudTMSMissingSourceReviewV1.create({actorId:actor,workEventId:eventId,parentKey,
+      rootTimesheetId:surface==='SIMPLE_TIMESHEET'&&row.context.root_timesheet_ids.includes(parentKey.slice(10))?parentKey.slice(10):null,
+      getContext:()=>controller.snapshot().context,getSelectedCredit:()=>controller.snapshot().selectedCredit,isCurrent:current,isOtherPending:()=>{const s=controller.snapshot();return s.busy||s.pending!==null||s.journalBlocked;},
+      request:options=>workspace.keepAsPaidRequest(options),onActivity:()=>controller.repaint(),onReview:prepared=>{
+        if(!current())return;closeChild();setTimeout(()=>{
+          const now=root.__modalStack||[];if(now.length!==stack.length||!stack.every((f,i)=>now[i]===f)
+            ||(typeof SESSION!=='undefined'?SESSION?.user?.id:null)!==actor||workspaceApi()!==workspace||!parentCurrent())return;
+          if(surface==='SIMPLE_TIMESHEET'&&typeof refreshSimpleWeeklySourcePresentation==='function'){void Promise.resolve(refreshSimpleWeeklySourcePresentation(parentCurrent)).catch(()=>{});}
+          else if(surface==='SOURCE_WORKSPACE'&&typeof root.openTimesheet==='function'){root.openTimesheet({timesheet_id:prepared.root_timesheet_id});}
+        },0);
+      }});}catch{return false;}}
+    const render=()=>'<div class="ws-child" data-wsa-screen="keep-as-paid"><div data-kept-controls-host></div><div data-missing-controls-host></div><div class="ws-child-actions"><button type="button" class="btn btn-outline" data-kept-back>Back</button></div></div>';
     const wire=()=>{
       const host=root.document?.querySelector('[data-wsa-screen="keep-as-paid"]');if(!host||host.dataset.wsaWired==='1')return;
       host.dataset.wsaWired='1';child=currentChild(kind);if(!current())return;
-      const dispose=controller.mount(host.querySelector('[data-kept-controls-host]')),previous=child._detachGlobal;
-      child._detachGlobal=function(...args){try{dispose();}finally{previous?.apply(this,args);}};
+      const dispose=controller.mount(host.querySelector('[data-kept-controls-host]')),missingHost=host.querySelector('[data-missing-controls-host]'),
+        disposeMissing=missing&&missingHost?missing.mount(missingHost):()=>{},previous=child._detachGlobal;
+      child._detachGlobal=function(...args){try{disposeMissing();dispose();}finally{previous?.apply(this,args);}};
       host.querySelector('[data-kept-back]')?.addEventListener('click',()=>{
         if(!current())return;const saved=controller.snapshot().receipt!==null&&!controller.snapshot().pending;
         closeChild();if(!saved)return;

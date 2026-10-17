@@ -1,0 +1,3 @@
+# Office feature progress
+
+17 October 2026 — Missing Source context/preparation caller implemented on the existing `codex/healthroster-v2-office-13102026` feature branch, preserving ac112. It enters the existing genuine Later review through a fresh Timesheet read, preserves uncertain original requests and handles int63 revisions losslessly. The finite source packet is `proposals/missing-source-office-current-consumer-20261017`; its recorded focused source tests and complete parent inverses are replayable there. Independent peer/integration, installed API/native/visual acceptance and release remain pending. No deployment, authentication, feature activation or database call occurred in this work package.

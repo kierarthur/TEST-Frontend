@@ -31,6 +31,21 @@
   const CONTRACT = 'WEEKLY_SOURCE_OFFICE_PRESENTATION_V1';
   const PRESENTATION_KEY = 'weekly_source_presentation';
   const COMMAND_ENDPOINT = '/api/weekly-source/v1/commands';
+  // Native bigint CAS counters are decimal strings. Only exact safe legacy JSON integers are compatible.
+  const bundleRevision = value => {
+    if (Number.isSafeInteger(value) && value > 0) value = String(value);
+    return typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value)
+      && (value.length < 19 || value <= '9223372036854775807') ? value : null;
+  };
+  const nextBundleRevision = value => { const v=bundleRevision(value);return v && v!=='9223372036854775807' ? String(BigInt(v)+1n) : null; };
+  const isLaterChangeDecisionResult = (response,p) => {
+    const reviewed=bundleRevision(p?.bundle_revision),returned=bundleRevision(response?.bundle_revision);
+    return reviewed!==null && returned!==null && response?.ok===true && typeof response.idempotent_replay==='boolean'
+      && response.decision===p.decision && response.decision_bundle_id===p.decision_bundle_id
+      && (p.decision==='KEEP_CURRENTLY_APPROVED_HOURS' ? response.retained===true && response.published===false && returned===reviewed
+        : p.decision==='APPROVE_UPDATED_HOURS' && response.retained===false && typeof response.published==='boolean'
+          && bundleRevision(response.reviewed_bundle_revision)===reviewed && returned===nextBundleRevision(reviewed));
+  };
 
   const APPROVED_HOURS_ACTIONS = Object.freeze([
     'APPROVE_PROTECTED_HOURS',
@@ -719,6 +734,7 @@
     const endpoint = trim(value.endpoint);
     if (!endpoint) return null;
     if (!isObject(value.command_payload)) return null;
+    if (bundleRevision(value.command_payload.bundle_revision)===null) return null;
     const actions = Array.isArray(value.actions) ? value.actions.filter(isObject) : [];
     const normalisedActions = [];
     for (const entry of actions) {
@@ -740,7 +756,8 @@
       owner: trim(value.owner),
       schema_version: trim(value.schema_version),
       actions: normalisedActions,
-      command_payload: value.command_payload
+      command_payload: bundleRevision(value.command_payload.bundle_revision)===null ? null
+        : {...value.command_payload,bundle_revision:bundleRevision(value.command_payload.bundle_revision)}
     };
   };
 
@@ -789,9 +806,7 @@
       // N3.4: absent unless true.  Never render a proposal without it.
       request_digest_verified: value.request_digest_verified === true,
       decision_bundle_id: strOrNull(value.decision_bundle_id),
-      bundle_revision: value.bundle_revision === null || value.bundle_revision === undefined
-        ? null
-        : trim(value.bundle_revision),
+      bundle_revision: bundleRevision(value.bundle_revision),
       decision_id: strOrNull(value.decision_id),
       bundle_kind: strOrNull(value.bundle_kind),
       member_count: intOrNull(value.member_count),
@@ -1593,7 +1608,7 @@
         || raw.members[0].is_requested_root !== true || raw.members[0].root_timesheet_id !== root
         || typeof raw.decision_bundle_id !== 'string' || !uuid.test(raw.decision_bundle_id)
         || typeof raw.final_revision_id !== 'string' || !uuid.test(raw.final_revision_id)
-        || !Number.isSafeInteger(raw.bundle_revision) || raw.bundle_revision < 1
+        || bundleRevision(raw.bundle_revision) === null
         || !proposal.decision || proposal.members.length !== 1) return false;
     const decision = raw.decision;
     const exactKeys = (value, keys) => isObject(value) && Object.keys(value).length === keys.length
@@ -1608,7 +1623,7 @@
     const payload = decision.command_payload;
     if (payload.schema_version !== schema || payload.root_timesheet_id !== root
         || payload.decision_bundle_id !== raw.decision_bundle_id
-        || payload.bundle_revision !== raw.bundle_revision
+        || bundleRevision(payload.bundle_revision) !== bundleRevision(raw.bundle_revision)
         || payload.final_revision_id !== raw.final_revision_id
         || !Array.isArray(decision.actions) || decision.actions.length !== 2) return false;
     const tokens = new Set();
@@ -1918,6 +1933,9 @@
     if (!DECISION_ACTION_TOKENS.has(action) || !decision.actions.some((entry) => entry.action === action)) {
       throw new Error('That decision is no longer available. Refresh the Timesheet and try again.');
     }
+    if (!decision.command_payload || bundleRevision(decision.command_payload.bundle_revision)===null) {
+      throw new Error('The current Source revision is unavailable. Refresh the Timesheet before deciding.');
+    }
     const actor = trim(req.actor_user_id);
     if (!actor) throw new Error('This change could not be safely prepared. Please try again.');
     const idempotencyKey = trim(req.idempotency_key);
@@ -1925,7 +1943,7 @@
       throw new Error('This change could not be safely prepared. Please try again.');
     }
     const body = { action: 'LATER_CHANGE_DECISION', payload: {
-      ...decision.command_payload, decision: action, idempotency_key: idempotencyKey
+      ...decision.command_payload, bundle_revision: bundleRevision(decision.command_payload.bundle_revision), decision: action, idempotency_key: idempotencyKey
     } };
     return deepFreeze({ endpoint: decision.endpoint, body });
   };
@@ -2439,7 +2457,7 @@
     renderServerSchedule,
     renderLifecycleError,
     renderLaterChangeDecision,
-    buildLaterChangeDecisionCommand,
+    bundleRevision, nextBundleRevision, isLaterChangeDecisionResult, buildLaterChangeDecisionCommand,
     withdrawalRefusalText,
     renderWithdrawalState,
     renderInvoiceMovementHistory,

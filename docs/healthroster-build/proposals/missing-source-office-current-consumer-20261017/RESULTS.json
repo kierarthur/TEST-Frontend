@@ -1,0 +1,57 @@
+{
+  "version": "OFFICE_MISSING_FOCUSED_SOURCE_RESULTS_V1",
+  "startedAt": "2026-10-17T14:17:12.634Z",
+  "completedAt": "2026-10-17T14:17:17.473Z",
+  "command": [
+    "node",
+    "--test",
+    "tests/unit/missing-source-review.test.mjs",
+    "tests/unit/missing-source-parent.test.mjs",
+    "tests/unit/missing-source-source-guards.test.mjs",
+    "tests/unit/missing-source-native-request-contract.test.mjs",
+    "tests/unit/kept-as-paid-controls.test.mjs",
+    "tests/unit/kept-as-paid-parent.test.mjs",
+    "tests/unit/paid-match-controls.test.mjs",
+    "tests/unit/paid-match-parent.test.mjs",
+    "tests/unit/weekly-source-presentation-v1.test.cjs"
+  ],
+  "exitCode": 0,
+  "tests": 104,
+  "failures": 0,
+  "grammar": [
+    {
+      "path": "js/main.js",
+      "status": "PASS_NODE_CHECK"
+    },
+    {
+      "path": "js/weekly-source-presentation-v1.js",
+      "status": "PASS_NODE_CHECK"
+    },
+    {
+      "path": "js/weekly-source/kept-as-paid-controls.js",
+      "status": "PASS_NODE_CHECK"
+    },
+    {
+      "path": "js/weekly-source/workspace-actions.js",
+      "status": "PASS_NODE_CHECK"
+    },
+    {
+      "path": "js/weekly-source/missing-source-review.js",
+      "status": "PASS_NODE_CHECK"
+    }
+  ],
+  "completeParentFiles": 9,
+  "literalHunks": 26,
+  "explicitWholeRawGitCheckoutVariants": 36,
+  "realApiCalls": 0,
+  "nativeCalls": 0,
+  "bankingSemanticBodiesRead": 0,
+  "qualification": "SOURCE_VM_REQUEST_DOM_BOUNDARY_ONLY",
+  "notProved": [
+    "real login/API/native permissions and races",
+    "full application visual journey",
+    "installed source financial joins",
+    "Money3e728 numeric-emission integration",
+    "hosted runtime/Office publication and activation"
+  ]
+}

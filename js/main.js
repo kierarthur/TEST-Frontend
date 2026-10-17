@@ -179433,16 +179433,8 @@ function bindWeeklySourceLaterChangeDecisions() {
       if (chosen && !record.busy && !record.settled && control.textContent !== 'Try again') control.textContent = 'Try again';
     }
   };
-  const accepted = (response, record) => {
-    const p = record.command.body.payload;
-    return response?.ok === true && typeof response.idempotent_replay === 'boolean'
-      && response.decision === p.decision && response.decision_bundle_id === p.decision_bundle_id
-      && ((p.decision === 'KEEP_CURRENTLY_APPROVED_HOURS' && response.retained === true
-          && response.published === false && response.bundle_revision === p.bundle_revision)
-        || (response.retained === false && typeof response.published === 'boolean'
-          && response.reviewed_bundle_revision === p.bundle_revision
-          && response.bundle_revision === p.bundle_revision + 1));
-  };
+  const accepted = (response, record) => window.CloudTMSWeeklySourcePresentationV1
+    ?.isLaterChangeDecisionResult?.(response,record.command.body.payload)===true;
   const definiteRefusal = (body) => body?.ok === false && body.published === false
     && ((body.retryable === false && ['WEEKLY_SOURCE_ROOT_INTEGRITY_FAILURE',
       'WEEKLY_SOURCE_DECISION_BUNDLE_NOT_FOUND', 'WEEKLY_SOURCE_DECISION_BUNDLE_NOT_PROPOSED']

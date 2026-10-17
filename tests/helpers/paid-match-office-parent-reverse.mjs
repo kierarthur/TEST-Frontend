@@ -1,9 +1,11 @@
+import {reverseMissingSourceParent} from './missing-source-office-parent-reverse.mjs';
 import fs from'node:fs';import assert from'node:assert/strict';import{createHash}from'node:crypto';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 const bytes=fs.readFileSync('docs/healthroster-build/proposals/paid-overlap-office-20261017/PARENT_EDITS.json');
 assert.equal(hash(bytes.toString().replaceAll('\r\n','\n')),'11a176b385062e4ead5684e7cb2c70d923d9da440e29eaefc093cf45ecfd3818');
 export const paidMatchParents=JSON.parse(bytes);
 export function reversePaidMatchParent(file,value){
+ value=reverseMissingSourceParent(file,value);
  const edit=paidMatchParents.edits.find(e=>e.target===file);if(!edit)return value;
  const raw=hash(value)===edit.outputSha256;
  if(!raw){const lf=value.replaceAll('\r\n','\n');assert(value===lf||value===lf.replaceAll('\n','\r\n'),'Only exact complete LF/CRLF checkout forms are permitted');value=lf;assert.equal(hash(value),edit.outputCanonicalSha256);}

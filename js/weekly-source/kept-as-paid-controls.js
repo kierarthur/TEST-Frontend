@@ -38,17 +38,17 @@
   let valid;try{valid=discovery(rows);}catch{return '<p role="status">Current Keep as paid information is unavailable. Refresh this work.</p>';}
   return `<section class="ws-kept-work" aria-label="Keep as paid"><h3>Keep as paid</h3>${valid.map(row=>`<div class="ws-notice"><strong>${escape(row.candidate)} · ${escape(row.work_date.split('-').reverse().join('/'))} · ${escape(row.start)}–${escape(row.end)}</strong>${row.context?`${row.context.latest_acknowledgement?`<p>${escape(acknowledgement(row.context))}</p><p>${row.context.decision_applies?'This acknowledgement applies to the current Source facts.':'This is a historical acknowledgement; it does not apply to the current Source facts.'}</p>`:''}<button type="button" class="btn btn-outline" data-kept-work-event="${row.work_event_id}" data-kept-surface="${surface}">Review Keep as paid</button>`:`<p>${escape(row.unavailable_reason.message)}</p>`}</div>`).join('')}</section>`;
  }
- function create({actorId,workEventId,parentKey,expectedScope,selectedCredit,request,isCurrent,storage=root.localStorage}){
+ function create({actorId,workEventId,parentKey,expectedScope,selectedCredit,request,isCurrent,isOtherPending=()=>false,onActivity=()=>{},storage=root.localStorage}){
   const dto=root.CloudTMSKeptAsPaidContractV1;
   if(!dto||!uuid(actorId)||!uuid(workEventId)||typeof parentKey!=='string'||!parentKey||typeof request!=='function'||typeof isCurrent!=='function'||(selectedCredit!==undefined&&!uuid(selectedCredit)))throw TypeError('KEEP_CONTEXT_REQUIRED');
-  const state={context:null,receipt:null,pending:null,busy:false,stale:true,error:'',message:'',journalBlocked:false,selectedCredit:selectedCredit??null};let changed=()=>{};
+  const state={context:null,receipt:null,pending:null,busy:false,stale:true,error:'',message:'',journalBlocked:false,selectedCredit:selectedCredit??null};let changed=()=>{};const notify=()=>{changed();onActivity();};
   const current=()=>{if(!isCurrent())throw Error('Return to the original actor, shift and parent before continuing.');};
   async function exclusive(fn){
    const locks=root.navigator?.locks;
    if(typeof locks?.request!=='function')throw Error('KEEP_EXCLUSIVE_BROWSER_LOCK_REQUIRED');
    return locks.request(journalKey(actorId),{mode:'exclusive',ifAvailable:true},async lock=>{
     if(!lock)throw Error('KEEP_ANOTHER_WINDOW_ACTIVE');
-    current();return await fn();
+    current();if(isOtherPending())throw Error('KEEP_OTHER_SOURCE_REQUEST_PENDING');return await fn();
    });
   }
   function record(){
@@ -81,14 +81,14 @@
   async function load(){
    current();if(state.journalBlocked||state.busy||inFlight.has(actorId))throw Error('The original Keep as paid request is still being checked.');recover();
    if(state.pending)throw Error('Retry the original Keep as paid request before refreshing.');
-   state.busy=true;state.error='';changed();
+   state.busy=true;state.error='';notify();
    try{
     const payload={schema_version:'WEEKLY_SOURCE_KEEP_AS_PAID_CONTEXT_REQUEST_V1',work_event_id:workEventId,...(selectedCredit!==undefined?{credit_invoice_line_id:selectedCredit}:{})};
     const context=dto.decodeKeptPayContext(await call('KEEP_AS_PAID_CONTEXT',payload),payload);current();
     for(const [key,value]of Object.entries(expectedScope||{}))if(context[key]!==value)throw Error('KEEP_SCOPE_CHANGED');
     state.context=copy(context);state.stale=false;
    }catch(error){state.stale=true;state.error='Current Keep as paid information could not be confirmed. Refresh before deciding.';throw error;}
-   finally{state.busy=false;changed();}return snapshot();
+   finally{state.busy=false;notify();}return snapshot();
   }
   function removeSaved(saved){
    const actual=record();if(!actual||JSON.stringify(actual)!==JSON.stringify(saved))throw Error('KEEP_JOURNAL_CHANGED');
@@ -122,7 +122,7 @@
     if(record()!==null)throw Error('KEEP_JOURNAL_CHANGED');
     const bytes=JSON.stringify(saved);storage.setItem(journalKey(actorId),bytes);if(storage.getItem(journalKey(actorId))!==bytes)throw Error('KEEP_JOURNAL_NOT_SAVED');state.pending=payload;
    }
-   const saved=recover(),payload=copy(state.pending);state.busy=true;inFlight.add(actorId);state.receipt=null;state.error='';state.message='';changed();let accepted=false;
+   const saved=recover(),payload=copy(state.pending);state.busy=true;inFlight.add(actorId);state.receipt=null;state.error='';state.message='';notify();let accepted=false;
    try{
     const receipt=dto.decodeKeptPayAcknowledgement(await call('KEEP_AS_PAID',payload),payload,actorId);current();removeSaved(saved);
     state.receipt=copy(receipt);state.stale=true;state.message='Keep as paid was recorded. Checking the current acknowledgement…';accepted=true;
@@ -131,8 +131,8 @@
      removeSaved(saved);state.stale=true;state.error='This request was not saved. Refresh the current Source facts before deciding again.';
     }else state.error='The save result is uncertain. Retry the original Keep as paid request.';
     throw error;
-   }finally{state.busy=false;inFlight.delete(actorId);changed();publish();}
-   if(accepted&&isCurrent()){try{await load();state.message='Keep as paid was recorded.';}catch{}changed();}return snapshot();
+   }finally{state.busy=false;inFlight.delete(actorId);notify();publish();}
+   if(accepted&&isCurrent()){try{await load();state.message='Keep as paid was recorded.';}catch{}notify();}return snapshot();
   }
   async function safe(fn){try{return await exclusive(fn);}catch(error){
    if(error?.message==='KEEP_EXCLUSIVE_BROWSER_LOCK_REQUIRED')state.error='This browser cannot safely save Keep as paid. Open Office in a current supported browser.';
@@ -140,10 +140,10 @@
    else if(!state.error)state.error='This request could not be prepared safely. Refresh, or retry the original saved request.';
    // Recovery displayed after a failure is read-only; the next command still
    // must reacquire the lock and re-read before it can allocate or send bytes.
-   try{recover();}catch{state.journalBlocked=true;}changed();throw error;}}
+   try{recover();}catch{state.journalBlocked=true;}notify();throw error;}}
   const snapshot=()=>copy(state);
   function html(){
-   const c=state.context,busy=state.busy||inFlight.has(actorId),pending=!!state.pending;
+   const c=state.context,busy=state.busy||inFlight.has(actorId)||isOtherPending(),pending=!!state.pending;
    const ack=acknowledgement(c),fact=v=>v===null?'Not known':v?'Yes':'No';
    const credits=c?.reason==='CREDITED'&&c.credit_lines.length>1?`<label class="ws-kept-credit">Credited Source line<select data-kept-credit${busy||pending||state.stale||state.journalBlocked?' disabled':''}><option value="">Choose the exact credit line</option>${c.credit_lines.map(line=>`<option value="${line.invoice_line_id}"${state.selectedCredit===line.invoice_line_id?' selected':''}>Credit line ${line.invoice_line_id}</option>`).join('')}</select></label><p>Select the exact credited Source line to check its current facts before deciding.</p>`:'';
    return `<section class="ws-kept-controls" aria-label="Keep as paid"><h3>Keep as paid</h3><p>This records your decision for the current Source facts. It does not change pay or invoice amounts.</p>${ack?`<p>${escape(ack)}</p><p>${c.decision_applies?'This acknowledgement applies to the current Source facts.':'This is a historical acknowledgement; it does not apply to the current Source facts.'}</p>`:''}${c?`<dl><dt>Present in Source</dt><dd>${fact(c.source_present)}</dd><dt>Invoiced</dt><dd>${fact(c.invoiced)}</dd><dt>Paid</dt><dd>${fact(c.paid)}</dd><dt>Payment evidence</dt><dd>${escape({UNKNOWN:'Not known',NOT_SETTLED:'Not settled',SETTLED_ORIGINAL:'Original payment settled',SETTLED_SOURCE_SEGMENT:'Source payment segment settled'}[c.paid_evidence_state])}</dd><dt>Pay hold</dt><dd>${fact(c.holds_pay)}</dd><dt>Invoice hold</dt><dd>${fact(c.holds_invoice)}</dd></dl>${credits}${c.disabled_reason?`<p role="status">${escape(c.disabled_reason.message)}</p>`:''}`:''}${state.error?`<p role="alert">${escape(state.error)}</p>`:''}${state.message?`<p role="status">${escape(state.message)}</p>`:''}<div class="ws-toolbar"><button type="button" class="btn btn-outline" data-kept-refresh${busy||pending||state.journalBlocked?' disabled':''}>Refresh current facts</button>${pending?`<button type="button" class="btn" data-kept-retry${busy||state.journalBlocked?' disabled':''}>${busy?'Checking original request…':'Retry original Keep as paid request'}</button>`:`<button type="button" class="btn" data-kept-save${busy||state.stale||state.journalBlocked||!c||!c.decision_available||c.decision_needed!==true||c.disabled_reason!==null?' disabled':''}>Keep as paid</button>`}</div></section>`;
@@ -152,7 +152,7 @@
    const render=()=>{host.innerHTML=html();for(const [selector,fn]of [['[data-kept-refresh]',load],['[data-kept-save]',()=>submit(false)],['[data-kept-retry]',()=>submit(true)]])host.querySelector(selector)?.addEventListener('click',()=>{safe(fn).catch(()=>{});});host.querySelector('[data-kept-credit]')?.addEventListener('change',event=>{safe(()=>chooseCredit(event.target.value)).catch(()=>{});});};
    changed=render;listeners.add(render);render();return()=>{listeners.delete(render);changed=()=>{};host.replaceChildren();};
   }
-  return Object.freeze({load:()=>safe(load),save:()=>safe(()=>submit(false)),retry:()=>safe(()=>submit(true)),chooseCredit:credit=>safe(()=>chooseCredit(credit)),snapshot,html,mount});
+  return Object.freeze({load:()=>safe(load),save:()=>safe(()=>submit(false)),retry:()=>safe(()=>submit(true)),chooseCredit:credit=>safe(()=>chooseCredit(credit)),snapshot,html,mount,repaint:()=>changed()});
  }
  const api=Object.freeze({create,discovery,renderRows,acknowledgement,london,journalKey,uniqueJson});
  if(typeof module==='object'&&module.exports)module.exports=api;root.CloudTMSKeptAsPaidV1=api;

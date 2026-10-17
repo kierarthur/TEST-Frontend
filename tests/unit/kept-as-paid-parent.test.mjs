@@ -1,3 +1,4 @@
+import {reverseMissingSourceParent} from '../helpers/missing-source-office-parent-reverse.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import {execFileSync} from 'node:child_process';import {createHash} from 'node:crypto';
 import {reverseKeepParent,keepParents} from '../helpers/kept-office-parent-reverse.mjs';
 const id=n=>'10000000-0000-0000-0000-'+String(n).padStart(12,'0'),clone=x=>JSON.parse(JSON.stringify(x)),hash=x=>createHash('sha256').update(x).digest('hex');
@@ -42,14 +43,14 @@ test('unknown event, stale native parent, wrong surface and unrelated modal neve
 });
 test('four complete parents reverse to exact original saved bytes and canonical genuine6d Git owners',()=>{
  assert.equal(keepParents.edits.length,4);
- for(const entry of keepParents.edits){const value=fs.readFileSync(entry.target,'utf8'),before=reverseKeepParent(entry.target,value);assert.equal(hash(before),entry.inputSha256);
+ for(const entry of keepParents.edits){const value=reverseMissingSourceParent(entry.target,fs.readFileSync(entry.target,'utf8')),before=reverseKeepParent(entry.target,value);assert.equal(hash(before),entry.inputSha256);
   const original=execFileSync('git',['show',keepParents.base+':'+entry.target],{maxBuffer:32*1024*1024}).toString();assert.equal(before.replaceAll('\r\n','\n'),original.replaceAll('\r\n','\n'));
   for(const altered of [value+'\n// unrelated drift',value.replace(entry.hunks[0].after,''),value+entry.hunks[0].after])assert.throws(()=>reverseKeepParent(entry.target,altered));}
- assert.equal(hash(fs.readFileSync('js/main.js')),keepParents.mainUnchangedSha256);
+ assert.equal(hash(reverseMissingSourceParent('js/main.js',fs.readFileSync('js/main.js','utf8'))),keepParents.mainUnchangedSha256);
 });
 test('all directly loaded Keep assets are pinned once and shared parents publish their exact cache successor',()=>{
- const index=fs.readFileSync('index.html','utf8');for(const file of ['js/weekly-source/kept-as-paid-contract.js','js/weekly-source/kept-as-paid-controls.js','css/kept-as-paid.css'])assert.equal(index.split('./'+file+'?v='+hash(fs.readFileSync(file))).length,2);
- for(const file of ['js/weekly-source/workspace-actions.js','js/weekly-source/import-workspace.js','js/weekly-source-presentation-v1.js'])assert(index.includes('&kept-as-paid='+hash(fs.readFileSync(file))));
+ const index=reverseMissingSourceParent('index.html',fs.readFileSync('index.html','utf8'));for(const file of ['js/weekly-source/kept-as-paid-contract.js','js/weekly-source/kept-as-paid-controls.js','css/kept-as-paid.css'])assert.equal(index.split('./'+file+'?v='+hash(reverseMissingSourceParent(file,fs.readFileSync(file,'utf8')))).length,2);
+ for(const file of ['js/weekly-source/workspace-actions.js','js/weekly-source/import-workspace.js','js/weekly-source-presentation-v1.js'])assert(index.includes('&kept-as-paid='+hash(reverseMissingSourceParent(file,fs.readFileSync(file,'utf8')))));
 });
 test('actual Source capture binds open generation, selected scope, filters and tab while permitting its child',()=>{
  const root={module:{exports:{}},__modalStack:[],document:{addEventListener(){}}};vm.runInNewContext(fs.readFileSync('js/weekly-source/import-workspace.js','utf8'),root);

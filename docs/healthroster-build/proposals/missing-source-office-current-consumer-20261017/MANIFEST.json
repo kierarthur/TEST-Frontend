@@ -1,0 +1,178 @@
+{
+  "version": "OFFICE_MISSING_CURRENT_CONSUMER_FREEZE_V1",
+  "officeParent": "ac112422e529aefbcba0fc0147d2b28123751823",
+  "branch": "codex/healthroster-v2-office-13102026",
+  "files": [
+    {
+      "path": "docs/healthroster-build/PROGRESS.md",
+      "savedBytes": 714,
+      "savedSha256": "db695f355cb0488ba158fcaafb5a9b53f914eccae206094e4f89f179511aae1f",
+      "gitBytes": 714,
+      "gitSha256": "db695f355cb0488ba158fcaafb5a9b53f914eccae206094e4f89f179511aae1f"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/PARENT_EDITS.json",
+      "savedBytes": 254408,
+      "savedSha256": "99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04",
+      "gitBytes": 254408,
+      "gitSha256": "99f6ae3977dac3238c2977362067b7e5445b144ccc145932e0f2fa63691f8a04"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/README.md",
+      "savedBytes": 4453,
+      "savedSha256": "2a4c277257021b18112ddcbd38d3d1adfe06657689e4393b1c4039d93994b675",
+      "gitBytes": 4453,
+      "gitSha256": "2a4c277257021b18112ddcbd38d3d1adfe06657689e4393b1c4039d93994b675"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/RESULTS.json",
+      "savedBytes": 1698,
+      "savedSha256": "53b564aec6778cdf5972bf41b007330901055c17237551efcf9f2fd63e3cd485",
+      "gitBytes": 1698,
+      "gitSha256": "53b564aec6778cdf5972bf41b007330901055c17237551efcf9f2fd63e3cd485"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/SELECTION.json",
+      "savedBytes": 1418,
+      "savedSha256": "468b69a5a0368ce0b9591c2fde71897613821ebfc5f78995897fe74ae888cfd5",
+      "gitBytes": 1418,
+      "gitSha256": "468b69a5a0368ce0b9591c2fde71897613821ebfc5f78995897fe74ae888cfd5"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/SOURCE_PINS.json",
+      "savedBytes": 4202,
+      "savedSha256": "ef2d19856d9e933215f6cc5c0af89596be9a78766837663d405f582cc449ec51",
+      "gitBytes": 4202,
+      "gitSha256": "ef2d19856d9e933215f6cc5c0af89596be9a78766837663d405f582cc449ec51"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/TEST_OUTPUT.txt",
+      "savedBytes": 10878,
+      "savedSha256": "67337e854cbcfa36b2c9ca8ea94b9787f9038552bc61e03d0637b20215171838",
+      "gitBytes": 10878,
+      "gitSha256": "67337e854cbcfa36b2c9ca8ea94b9787f9038552bc61e03d0637b20215171838"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/reference/health-missing-accept.mjs",
+      "savedBytes": 2377,
+      "savedSha256": "47860ad7622ec1181501835517c5753f6cf6dd6fd8c73e206d90f9e9e746625d",
+      "gitBytes": 2377,
+      "gitSha256": "47860ad7622ec1181501835517c5753f6cf6dd6fd8c73e206d90f9e9e746625d"
+    },
+    {
+      "path": "docs/healthroster-build/proposals/missing-source-office-current-consumer-20261017/verify.mjs",
+      "savedBytes": 2751,
+      "savedSha256": "6f44328aea736eb96e5274b514cb52ff487bc0537bb82cc9519f17f3c7571f80",
+      "gitBytes": 2751,
+      "gitSha256": "6f44328aea736eb96e5274b514cb52ff487bc0537bb82cc9519f17f3c7571f80"
+    },
+    {
+      "path": "index.html",
+      "savedBytes": 100746,
+      "savedSha256": "d7c8d02dbcd247a41f534492846e3cd3f817fab3374eec207d38fcd62cd1f52b",
+      "gitBytes": 100746,
+      "gitSha256": "d7c8d02dbcd247a41f534492846e3cd3f817fab3374eec207d38fcd62cd1f52b"
+    },
+    {
+      "path": "js/main.js",
+      "savedBytes": 17840565,
+      "savedSha256": "6973f6aa2dbec92730ebe9d077d9760055ff1e223f71c0b277c0ed33da77ccd0",
+      "gitBytes": 17840565,
+      "gitSha256": "6973f6aa2dbec92730ebe9d077d9760055ff1e223f71c0b277c0ed33da77ccd0"
+    },
+    {
+      "path": "js/weekly-source-presentation-v1.js",
+      "savedBytes": 138305,
+      "savedSha256": "df296eb0e983dddc244fdce318d8c12cc3c7960f72c18083622212ac10c65364",
+      "gitBytes": 135811,
+      "gitSha256": "5a1be0334989ef55e08dedfcb3f402c8f151641915009eb847891d70268b7ca6"
+    },
+    {
+      "path": "js/weekly-source/kept-as-paid-controls.js",
+      "savedBytes": 17350,
+      "savedSha256": "34546f3f0430774488660de36bdb23fb38790d94e1db6a531bfe22d218024b34",
+      "gitBytes": 17350,
+      "gitSha256": "34546f3f0430774488660de36bdb23fb38790d94e1db6a531bfe22d218024b34"
+    },
+    {
+      "path": "js/weekly-source/missing-source-review.js",
+      "savedBytes": 13158,
+      "savedSha256": "2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2",
+      "gitBytes": 13158,
+      "gitSha256": "2cdc90b3c10ee0d203039e71e7cadb1a9e875ee7767f328bd80e8ef0948fdcb2"
+    },
+    {
+      "path": "js/weekly-source/workspace-actions.js",
+      "savedBytes": 127955,
+      "savedSha256": "4e6c303e86897476d76727e4ae495e4d2859bedbecfbcbda7cffe8b066c9face",
+      "gitBytes": 127955,
+      "gitSha256": "4e6c303e86897476d76727e4ae495e4d2859bedbecfbcbda7cffe8b066c9face"
+    },
+    {
+      "path": "tests/helpers/missing-source-office-parent-reverse.mjs",
+      "savedBytes": 1134,
+      "savedSha256": "fefd8a6a0b9d5bce18abd80931f2550117896e944ba4edb290960f374cce278f",
+      "gitBytes": 1134,
+      "gitSha256": "fefd8a6a0b9d5bce18abd80931f2550117896e944ba4edb290960f374cce278f"
+    },
+    {
+      "path": "tests/helpers/paid-match-office-parent-reverse.mjs",
+      "savedBytes": 1473,
+      "savedSha256": "42aa685106234b0abadbaf7dc2d3a010e18324b744f8ab476744bc49fd0defec",
+      "gitBytes": 1473,
+      "gitSha256": "42aa685106234b0abadbaf7dc2d3a010e18324b744f8ab476744bc49fd0defec"
+    },
+    {
+      "path": "tests/unit/kept-as-paid-parent.test.mjs",
+      "savedBytes": 10364,
+      "savedSha256": "3141f863712a5c8fbd89867097a12b454f28f61d3bb707027801e42098ecb4d5",
+      "gitBytes": 10364,
+      "gitSha256": "3141f863712a5c8fbd89867097a12b454f28f61d3bb707027801e42098ecb4d5"
+    },
+    {
+      "path": "tests/unit/missing-source-native-request-contract.test.mjs",
+      "savedBytes": 3117,
+      "savedSha256": "c45899f81597e233012a0cfd58339d5565726e48363652346ba586790f9d45b9",
+      "gitBytes": 3117,
+      "gitSha256": "c45899f81597e233012a0cfd58339d5565726e48363652346ba586790f9d45b9"
+    },
+    {
+      "path": "tests/unit/missing-source-parent.test.mjs",
+      "savedBytes": 8269,
+      "savedSha256": "2d5c0fb5e3c64dee9a89b59e0e57da3f62aa156a7371d7a35c5311ba3978afd9",
+      "gitBytes": 8269,
+      "gitSha256": "2d5c0fb5e3c64dee9a89b59e0e57da3f62aa156a7371d7a35c5311ba3978afd9"
+    },
+    {
+      "path": "tests/unit/missing-source-review.test.mjs",
+      "savedBytes": 12655,
+      "savedSha256": "ec44aefd34327c412e3effaff80aad66782aa80715489d6e0360fc1c3d26911d",
+      "gitBytes": 12655,
+      "gitSha256": "ec44aefd34327c412e3effaff80aad66782aa80715489d6e0360fc1c3d26911d"
+    },
+    {
+      "path": "tests/unit/missing-source-source-guards.test.mjs",
+      "savedBytes": 2589,
+      "savedSha256": "65e4c4b479b5e861e8f0d6bf8972c07bd26bbc413e4aca0d86caeea76ee4d5ef",
+      "gitBytes": 2589,
+      "gitSha256": "65e4c4b479b5e861e8f0d6bf8972c07bd26bbc413e4aca0d86caeea76ee4d5ef"
+    },
+    {
+      "path": "tests/unit/paid-match-parent.test.mjs",
+      "savedBytes": 10096,
+      "savedSha256": "12e830a20395867095ede52de295b0a0a68b05e3c09a24544d78dbe880af0c14",
+      "gitBytes": 10096,
+      "gitSha256": "12e830a20395867095ede52de295b0a0a68b05e3c09a24544d78dbe880af0c14"
+    },
+    {
+      "path": "tests/unit/weekly-source-presentation-v1.test.cjs",
+      "savedBytes": 36563,
+      "savedSha256": "b83233300c3c49bdef62395e4f5794bdcdcfcac7ba962640d0b1980f04887ff7",
+      "gitBytes": 35849,
+      "gitSha256": "6f05dca164f93bf252d53488494e31d7eb0d083b90d5cd728d92853b64eed180"
+    }
+  ],
+  "manifestExcludesItself": true,
+  "productTargets": 6,
+  "sourceOnly": true
+}
