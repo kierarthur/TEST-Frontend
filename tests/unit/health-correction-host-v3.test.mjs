@@ -1,5 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import path from 'node:path';import vm from 'node:vm';import {createHash} from 'node:crypto';import {execFileSync} from 'node:child_process';
 import * as dto from '../../js/contract-correction-v3.mjs';
+const entryMountBytes=fs.readFileSync('docs/healthroster-build/v6-owner-delivery-20261016/CORRECTION_ENTRY_CLASSIC_HOST_MOUNT_20261017.json');
+const entryHash=value=>createHash('sha256').update(value).digest('hex');
+assert.equal(entryHash(entryMountBytes),'b5202e43f1f456324fe44d640c6d745378fbdedf63d65b39fede8d7eed232fbc');
+const entryMount=JSON.parse(entryMountBytes);
+function reverseEntryHost(file,value){
+ const edit=entryMount.hunks.find(row=>row.target===file);assert(edit);
+ assert.equal(entryHash(value),edit.outputSha256);
+ assert.equal(value.split(edit.after).length,2);value=value.replace(edit.after,()=>edit.before);
+ assert.equal(entryHash(value),edit.inputSha256);return value;
+}
 globalThis.CloudTMSCorrectionContractV3=dto;
 await import('../../js/timesheet-correction-host-v3.js');
 await import('../../js/daily-rate-correction-http-adapter.js');
@@ -80,9 +90,16 @@ test('HTTP adapter uses exact GET ABI and refuses duplicate JSON, oversized and 
 });
 test('whole main/index reverse exactly to 045c; Manual New Enquiry source stays unchanged',()=>{
  const receipt=JSON.parse(fs.readFileSync('docs/healthroster-build/v6-owner-delivery-20261016/b051-host/PARENT_EDITS.json'));
- for(const entry of receipt.edits){let value=fs.readFileSync(entry.file,'utf8');for(const edit of [...entry.edits].reverse()){assert.equal(value.split(edit.after).length,2);value=value.replace(edit.after,edit.before);}assert.equal(Buffer.compare(Buffer.from(value),execFileSync('git',['show',receipt.base+':'+entry.file],{maxBuffer:64*1024*1024})),0);}
+ for(const entry of receipt.edits){let value=reverseEntryHost(entry.file,fs.readFileSync(entry.file,'utf8'));for(const edit of [...entry.edits].reverse()){assert.equal(value.split(edit.after).length,2);value=value.replace(edit.after,edit.before);}assert.equal(Buffer.compare(Buffer.from(value),execFileSync('git',['show',receipt.base+':'+entry.file],{maxBuffer:64*1024*1024})),0);}
  for(const file of ['js/weekly-source/contact-manual-enquiry-controls.mjs','js/weekly-source/workspace-actions.js','js/weekly-source/import-workspace.js','js/weekly-source/combined-review.js','css/weekly-source.css'])assert.equal(Buffer.compare(fs.readFileSync(file),execFileSync('git',['show',receipt.base+':'+file])),0);
  const main=fs.readFileSync('js/main.js','utf8');assert.match(main,/requestOverlayClose\(top, 'parent-close'\)/);assert.match(main,/requestOverlayClose\(window\.__modalStack\?\.at\(-1\), 'direct-close'\)/);assert.match(main,/activeOverlay\(top\)/);
+});
+test('entry history composition rejects missing, duplicated and unrelated current source edits',()=>{
+ for(const edit of entryMount.hunks){
+  const actual=fs.readFileSync(edit.target,'utf8');
+  for(const value of [actual.replace(edit.after,''),actual+edit.after,actual+'\n// drift'])
+   assert.throws(()=>reverseEntryHost(edit.target,value));
+ }
 });
 test('generated closed DTO and byte-pinned new loaders match actual sole sources',()=>{
  const source=fs.readFileSync('js/contract-correction-v3.mjs','utf8'),hash=x=>createHash('sha256').update(x).digest('hex');

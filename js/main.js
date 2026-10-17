@@ -368179,12 +368179,13 @@ async function openTimesheetContractMoveReview({timesheetId, triggerElement}) {
   if (typeof module?.open !== 'function' || typeof module?.createTimesheetOverlayAdapter !== 'function') {
     throw new Error('CONTRACT_MOVE_COMPONENT_DEPENDENCY_REQUIRED');
   }
-  // The reviewed pack requires an actual native Move capability. Current Office
-  // has no declared projection for it. Presence of CM17, Admin, a Contract or a
-  // private SQL event capability cannot substitute for that missing authority.
-  // Preserve this closed seam until the exact public producer ABI is published.
-  const publishedNativeMoveCapability = false;
-  if (!publishedNativeMoveCapability) throw new Error('CONTRACT_MOVE_CAPABILITY_PROJECTION_REQUIRED');
+  const entryReader = window.CloudTMSCorrectionEntryV1;
+  if (typeof entryReader?.readCorrectionEntryForHost !== 'function') throw new Error('CORRECTION_ENTRY_UNAVAILABLE');
+  const entry = await entryReader.readCorrectionEntryForHost({binding,timesheetId,authFetch,api:API});
+  if (entry.current_timesheet_id === null) throw new Error('CURRENT_ALLOCATION_PENDING');
+  if (entry.current_timesheet_id !== timesheetId) throw new Error('CORRECTION_CURRENT_PARENT_REQUIRED');
+  // This advisory contract cannot enable CM17 or create a native capability.
+  throw new Error(entry.disabled_reason);
   const tabKey = binding.frame.currentTabKey, body = document.getElementById('modalBody');
   const scrollTop = body?.scrollTop || 0;
   let owned;
